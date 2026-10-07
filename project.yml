@@ -10,7 +10,7 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.3.1"
+    MARKETING_VERSION: "0.3.2"
     # `just testflight` overrides this with a timestamp; uploads need a fresh build number.
     CURRENT_PROJECT_VERSION: "1"
 packages:
