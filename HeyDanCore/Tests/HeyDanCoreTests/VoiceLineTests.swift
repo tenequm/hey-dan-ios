@@ -71,7 +71,10 @@ struct CallGrantTests {
         #expect(grant.protocolVersion == version)
         #expect(grant.names == nil)
         #expect(grant.callId == "id9")
-        #expect(CallFailure.unsupportedProtocol(version).message.contains("Update the app"))
+    }
+
+    @Test func anUnsupportedProtocolAsksForAnUpdate() {
+        #expect(CallFailure.unsupportedProtocol(5).message.contains("Update the app"))
     }
 
     @Test func aProtocolThatIsNoNumberIsMalformed() {
@@ -158,8 +161,12 @@ struct VoiceProtocolTests {
     }
 
     @Test func onlyProtocols4And6HaveNames() {
-        #expect(VoiceProtocol.requestedVersion == 6)
         #expect([3, 4, 5, 6, 7].compactMap { VoiceProtocol.Names(version: $0)?.version } == [4, 6])
+    }
+
+    @Test func onlyProtocol6NamesItsProtocolAttribute() throws {
+        #expect(try #require(VoiceProtocol.Names(version: 4)).protocolAttribute == nil)
+        #expect(try #require(VoiceProtocol.Names(version: 6)).protocolAttribute == "nanoclaw.voice-mode.protocol")
     }
 
     @Test func namesFollowTheHostsProtocol() throws {

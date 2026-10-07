@@ -76,7 +76,7 @@ final class CallController: NSObject {
     /// The call's live transcript: cleared when a call starts, kept readable (all final) after it ends.
     private(set) var transcript = Transcript()
     /// Auto mode's spoken-command settings: nil unless this call's worker speaks the commands vocabulary this
-    /// app knows (`commandsAttribute` = "2" or "3").
+    /// app knows (`Names.commandsAttribute` in `VoiceProtocol.commandsVersions`).
     private(set) var commands: CommandSettings?
     /// The spoken commands hints quote: the ones this call's worker announced, else the built-in ones.
     private(set) var commandWords = CommandWords.builtIn
@@ -94,6 +94,12 @@ final class CallController: NSObject {
         }
     }
 
+    /// A host's grant on a protocol this app speaks, with that protocol's names: held as one so neither is set alone.
+    private struct AcceptedGrant {
+        let grant: CallGrant
+        let names: VoiceProtocol.Names
+    }
+
     /// Everything one call owns, created when it starts and dropped in one assignment when it ends,
     /// so a late callback from an earlier call can never touch the current one.
     private struct ActiveCall {
@@ -102,10 +108,11 @@ final class CallController: NSObject {
         let line: VoiceLine
         let claimedAt = ContinuousClock.now
         var callId: String?
-        /// Asked for before CallKit when the precheck said Tailscale is off: setup uses it instead of asking again.
-        var grant: CallGrant?
-        /// The worker's names on the protocol the host said it speaks; set with the grant, before the room exists.
-        var names: VoiceProtocol.Names?
+        /// Set before the room exists: before CallKit when the precheck said Tailscale is off, and setup then uses it
+        /// instead of asking again.
+        var grant: AcceptedGrant?
+        /// The worker's names on the protocol the host said it speaks.
+        var names: VoiceProtocol.Names? { grant?.names }
         /// Stream events received per topic, for the end-of-call summary.
         var streamCounts: [String: Int] = [:]
         var room: Room?
@@ -297,15 +304,14 @@ final class CallController: NSObject {
     private func grantEarly(_ id: UUID, _ line: VoiceLine) async -> Bool {
         let asked = ContinuousClock.now
         do {
-            let (grant, names) = try await requestGrant(line, over: Self.quickHTTP)
+            let accepted = try await requestGrant(line, over: Self.quickHTTP)
             guard call?.id == id else {
-                endOnHost(line, callId: grant.callId)
+                endOnHost(line, callId: accepted.grant.callId)
                 return false
             }
-            call?.callId = grant.callId
-            call?.grant = grant
-            call?.names = names
-            trace(.net, "token ok despite the precheck ms=\(CallLog.ms(since: asked))", id)
+            call?.callId = accepted.grant.callId
+            call?.grant = accepted
+            trace(.net, "token ok despite the precheck protocol=\(accepted.names.version) ms=\(CallLog.ms(since: asked))", id)
             return true
         } catch {
             trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
@@ -432,21 +438,21 @@ final class CallController: NSObject {
         guard let line = call?.line else { return }
         call?.connectTask = Task {
             do {
-                let grant: CallGrant
-                let names: VoiceProtocol.Names
-                if let early = call?.grant, let earlyNames = call?.names {
-                    (grant, names) = (early, earlyNames)
+                let accepted: AcceptedGrant
+                if let early = call?.grant {
+                    accepted = early
                 } else {
                     let asked = ContinuousClock.now
-                    do { (grant, names) = try await requestGrant(line, over: Self.http) } catch {
+                    do { accepted = try await requestGrant(line, over: Self.http) } catch {
                         trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
                         throw error
                     }
-                    guard call?.id == id else { return endOnHost(line, callId: grant.callId) }
-                    call?.callId = grant.callId
-                    call?.names = names
-                    trace(.net, "token ok protocol=\(names.version) ms=\(CallLog.ms(since: asked))", id)
+                    guard call?.id == id else { return endOnHost(line, callId: accepted.grant.callId) }
+                    call?.callId = accepted.grant.callId
+                    call?.grant = accepted
+                    trace(.net, "token ok protocol=\(accepted.names.version) ms=\(CallLog.ms(since: asked))", id)
                 }
+                let (grant, names) = (accepted.grant, accepted.names)
                 if let agent = grant.agent, !agent.isEmpty { setAgentName(agent, for: id) }
                 let room = Room(delegate: self, roomOptions: RoomOptions(defaultAudioPublishOptions: Self.micPublishOptions))
                 call?.room = room
@@ -494,7 +500,7 @@ final class CallController: NSObject {
 
     /// The host's grant and the names of the protocol it speaks. A grant on a protocol this app does not speak is never
     /// joined: its call ends on the host right away.
-    private func requestGrant(_ line: VoiceLine, over http: URLSession) async throws(CallFailure) -> (CallGrant, VoiceProtocol.Names) {
+    private func requestGrant(_ line: VoiceLine, over http: URLSession) async throws(CallFailure) -> AcceptedGrant {
         let data: Data
         let response: URLResponse
         do {
@@ -506,11 +512,10 @@ final class CallController: NSObject {
         CallLog.log(.net, "token status=\(status) bytes=\(data.count)", level: status == 200 ? .info : .error)
         let grant = try CallGrant(status: status, body: data)
         guard let names = grant.names else {
-            CallLog.log(.net, "token protocol=\(grant.protocolVersion) unsupported", level: .error)
             endOnHost(line, callId: grant.callId, reason: .updating)
             throw .unsupportedProtocol(grant.protocolVersion)
         }
-        return (grant, names)
+        return AcceptedGrant(grant: grant, names: names)
     }
 
     private func setAgentName(_ name: String, for id: UUID) {
@@ -1465,12 +1470,12 @@ extension CallController: RoomDelegate {
     private static func attributeSummary(_ current: [String: String], changed: [String: String], names: VoiceProtocol.Names) -> String {
         let keys = [
             VoiceProtocol.agentStateAttribute, names.thinkingAttribute, names.updatingAttribute, names.commandsAttribute,
-            names.reviewAttribute,
-        ]
+            names.reviewAttribute, names.protocolAttribute,
+        ].compactMap(\.self)
         func name(_ key: String) -> Substring { key.split(separator: ".").last ?? "" }
         let values = keys.map { "\(name($0))=\(current[$0] ?? "-")" }.joined(separator: " ")
-        let names = keys.filter { changed[$0] != nil }.map(name).joined(separator: ",")
-        return "\(values) changed=[\(names)]"
+        let changedKeys = keys.filter { changed[$0] != nil }.map(name).joined(separator: ",")
+        return "\(values) changed=[\(changedKeys)]"
     }
 
     nonisolated func room(_ room: Room, participant _: LocalParticipant, remoteDidSubscribeTrack _: LocalTrackPublication) {

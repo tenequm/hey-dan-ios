@@ -20,39 +20,57 @@ public extension VoiceProtocol {
     struct Names: Sendable, Equatable {
         public let version: Int
         private let prefix: String
+        /// The protocol 6 namespace; a protocol 5 host already used it but named no protocol in its grant.
+        private static let voiceModePrefix = "nanoclaw.voice-mode"
+
+        /// "1" while the host's agent works on the caller's turn.
+        public let thinkingAttribute: String
+        /// "1" when the worker cannot serve the host's protocol.
+        public let updatingAttribute: String
+        /// The protocol the worker speaks; nil on 4, which set none.
+        public let protocolAttribute: String?
+        /// `TurnMessage`s: what became of each caller turn, words the worker dropped, speech it did not hear.
+        public let turnTopic: String
+        /// One `ReplyInfo` right before each line the worker speaks, and again after one it could not.
+        public let replyTopic: String
+        /// One `ReviewState` whenever the worker's turn state (auto mode's wake state included) changes.
+        public let reviewTopic: String
+        public let streamTopics: [String]
+        /// One of `commandsVersions` when the worker understands spoken commands and the settings RPC.
+        public let commandsAttribute: String
+        /// The spoken commands the worker understands (`CommandWords`), set with `commandsAttribute`.
+        public let commandWordsAttribute: String
+        /// On a caller caption, both or neither: the command its text ends in (`send`, `discard`), and the words before it.
+        public let captionCommandAttribute: String
+        public let captionWordsAttribute: String
+        /// "1" when the worker runs review mode (Manual); the app offers it only then.
+        public let reviewAttribute: String
+        /// Takes a `SettingsRequest` from the caller only, answers a `ReviewReply`.
+        public let settingsMethod: String
 
         /// Nil for a protocol this app does not speak.
         public init?(version: Int) {
             switch version {
             case 4: prefix = "nanoclaw.voice"
-            case 6: prefix = "nanoclaw.voice-mode"
+            case 6: prefix = Self.voiceModePrefix
             default: return nil
             }
             self.version = version
+            thinkingAttribute = "\(prefix).thinking"
+            updatingAttribute = "\(prefix).updating"
+            protocolAttribute = version == 4 ? nil : "\(prefix).protocol"
+            turnTopic = "\(prefix).turn"
+            replyTopic = "\(prefix).reply"
+            reviewTopic = "\(prefix).review"
+            streamTopics = [VoiceProtocol.transcriptionTopic, turnTopic, replyTopic, reviewTopic]
+            commandsAttribute = "\(prefix).commands"
+            commandWordsAttribute = "\(prefix).command-words"
+            captionCommandAttribute = "\(prefix).command"
+            captionWordsAttribute = "\(prefix).words"
+            reviewAttribute = "\(prefix).review"
+            settingsMethod = "\(prefix).settings"
         }
 
-        /// "1" while the host's agent works on the caller's turn.
-        public var thinkingAttribute: String { "\(prefix).thinking" }
-        /// "1" when the worker cannot serve the host's protocol.
-        public var updatingAttribute: String { "\(prefix).updating" }
-        /// `TurnMessage`s: what became of each caller turn, words the worker dropped, speech it did not hear.
-        public var turnTopic: String { "\(prefix).turn" }
-        /// One `ReplyInfo` right before each line the worker speaks, and again after one it could not.
-        public var replyTopic: String { "\(prefix).reply" }
-        /// One `ReviewState` whenever the worker's turn state (auto mode's wake state included) changes.
-        public var reviewTopic: String { "\(prefix).review" }
-        public var streamTopics: [String] { [VoiceProtocol.transcriptionTopic, turnTopic, replyTopic, reviewTopic] }
-        /// One of `commandsVersions` when the worker understands spoken commands and the settings RPC.
-        public var commandsAttribute: String { "\(prefix).commands" }
-        /// The spoken commands the worker understands (`CommandWords`), set with `commandsAttribute`.
-        public var commandWordsAttribute: String { "\(prefix).command-words" }
-        /// On a caller caption, both or neither: the command its text ends in (`send`, `discard`), and the words before it.
-        public var captionCommandAttribute: String { "\(prefix).command" }
-        public var captionWordsAttribute: String { "\(prefix).words" }
-        /// "1" when the worker runs review mode (Manual); the app offers it only then.
-        public var reviewAttribute: String { "\(prefix).review" }
-        /// Takes a `SettingsRequest` from the caller only, answers a `ReviewReply`.
-        public var settingsMethod: String { "\(prefix).settings" }
         /// The worker's RPC method for a review operation. A `mode` request naming no mode only makes the worker send
         /// its `ReviewState` again.
         public func method(_ op: Review.Op) -> String { "\(prefix).\(op.rawValue)" }
@@ -71,7 +89,7 @@ public extension VoiceProtocol {
         }
     }
 
-    /// A `commandsAttribute` value this app knows; any other value (or none) is a vocabulary it does not, so it offers
+    /// A `Names.commandsAttribute` value this app knows; any other value (or none) is a vocabulary it does not, so it offers
     /// no commands. "2" and "3" are the same words (the ones the worker announces); "3" was bumped so an already-open
     /// older browser page stops quoting "send it". This is the vocabulary's version, not the protocol's.
     static let commandsVersions: Set<String> = ["2", "3"]

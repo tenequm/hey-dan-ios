@@ -68,8 +68,11 @@ public struct CallGrant: Decodable, Sendable, Equatable {
     public let token: String
     public let callId: String
     public let agent: String?
-    /// 4 when the host names none: hosts before protocol 6 did not.
-    public let protocolVersion: Int
+    /// The protocol the host speaks; hosts before protocol 6 named none.
+    private let `protocol`: Int?
+
+    /// 4 when the host names none.
+    public var protocolVersion: Int { `protocol` ?? 4 }
 
     /// The worker's names on the host's protocol; nil for one this app does not speak, a call it must not join.
     public var names: VoiceProtocol.Names? { VoiceProtocol.Names(version: protocolVersion) }
@@ -77,20 +80,6 @@ public struct CallGrant: Decodable, Sendable, Equatable {
     /// Decodes the host's answer, or says why it refused the call.
     public init(status: Int, body: Data) throws(CallFailure) {
         self = try hostAnswer(status: status, body: body)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case url, token, callId, agent
-        case protocolVersion = "protocol"
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        url = try container.decode(String.self, forKey: .url)
-        token = try container.decode(String.self, forKey: .token)
-        callId = try container.decode(String.self, forKey: .callId)
-        agent = try container.decodeIfPresent(String.self, forKey: .agent)
-        protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 4
     }
 }
 
