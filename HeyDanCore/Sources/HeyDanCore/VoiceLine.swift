@@ -143,6 +143,9 @@ public enum CallFailure: Error, Equatable, Sendable {
             // nanoclaw refuses a start on an older protocol: "Reload the page or update your client to protocol 6."
             case 409 where body.contains("update your client"), 426:
                 "This voice line needs a newer Hey Dan. Update the app, then call again."
+            // A /voice line whose chat is gone: {"error":"no-chat",...}; retrying cannot help.
+            case 409 where body.contains("\"no-chat\""):
+                "This voice line has no chat to talk in. Run /voice in a chat with the agent, then call again."
             case 409: "This call attempt is no longer active. Try again."
             case 502: "Could not open the call room. Try again."
             case 503: "The voice line is offline right now."

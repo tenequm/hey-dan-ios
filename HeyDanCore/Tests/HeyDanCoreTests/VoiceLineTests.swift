@@ -100,6 +100,11 @@ struct CallGrantTests {
             "This voice line needs a newer Hey Dan. Update the app, then call again."
         ),
         (409, "Unknown protocol", "This call attempt is no longer active. Try again."),
+        (
+            409,
+            #"{"error":"no-chat","message":"This voice line has no chat to talk in. Run /voice in a chat with the agent."}"#,
+            "This voice line has no chat to talk in. Run /voice in a chat with the agent, then call again."
+        ),
         (426, "", "This voice line needs a newer Hey Dan. Update the app, then call again."),
         (
             426, "The voice service is updating. Reload the page or update your client to protocol 6.",
