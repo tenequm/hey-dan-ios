@@ -1,0 +1,6 @@
+// Signing identity for every target. Override both in Local.xcconfig (gitignored; copy Local.xcconfig.example):
+// with an empty team, Simulator and unsigned builds still work.
+HEYDAN_BUNDLE_ID = com.example.HeyDan
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

@@ -1,0 +1,17 @@
+.DS_Store
+.build/
+build/
+xcuserdata/
+HeyDan/Info.plist
+HeyDanActivity/Info.plist
+# The project is generated from project.yml; only its resolved package versions are kept.
+HeyDan.xcodeproj/*
+!HeyDan.xcodeproj/project.xcworkspace/
+HeyDan.xcodeproj/project.xcworkspace/*
+!HeyDan.xcodeproj/project.xcworkspace/xcshareddata/
+HeyDan.xcodeproj/project.xcworkspace/xcshareddata/*
+!HeyDan.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+# Owner-specific config (copy the .example files): signing identity, server, release account.
+Local.xcconfig
+.env.local
+local.just

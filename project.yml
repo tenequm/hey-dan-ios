@@ -1,0 +1,124 @@
+name: HeyDan
+options:
+  deploymentTarget:
+    iOS: "27.0"
+# HEYDAN_BUNDLE_ID and DEVELOPMENT_TEAM: Config.xcconfig, overridden by the gitignored Local.xcconfig.
+configFiles:
+  Debug: Config.xcconfig
+  Release: Config.xcconfig
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.3.1"
+    # `just testflight` overrides this with a timestamp; uploads need a fresh build number.
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift
+    from: 2.17.0
+  HeyDanCore:
+    path: HeyDanCore
+targets:
+  HeyDan:
+    type: application
+    platform: iOS
+    sources:
+      - path: HeyDan
+        excludes: [Fonts]
+      # A folder reference keeps each font's OFL.txt beside it in the bundle.
+      - path: HeyDan/Fonts
+        type: folder
+        buildPhase: resources
+      - path: HeyDanActivity/CallActivityAttributes.swift
+    dependencies:
+      - package: LiveKit
+      - package: HeyDanCore
+      - target: HeyDanActivity
+    # The Simulator has no FaceTime app, and callservicesd ends every CallKit call it cannot open
+    # `facetime://?showInCallUI=1` for ("no UI to host the call"). Simulator builds (Debug and Release) answer for that
+    # scheme themselves, so CallKit keeps the call; no device build ever has it. Signing runs after this phase.
+    # The Info.plist is the script's input and output, so it runs after ProcessInfoPlistFile, which rewrites the plist
+    # without the claim on an incremental build, and again whenever that happened (Xcode wants a second output next
+    # to one the script edits in place: the stamp).
+    postBuildScripts:
+      - name: Host the Simulator's in-call UI
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/simulator-in-call-ui.stamp]
+        showEnvVars: false
+        script: |
+          touch "$DERIVED_FILE_DIR/simulator-in-call-ui.stamp"
+          [ "$PLATFORM_NAME" = iphonesimulator ] || exit 0
+          plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"simulator-in-call-ui","CFBundleURLSchemes":["facetime"]}]' \
+              "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+    info:
+      path: HeyDan/Info.plist
+      properties:
+        CFBundleDisplayName: Hey Dan
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSMicrophoneUsageDescription: Hey Dan sends your voice to your NanoClaw agent during a call.
+        # App Store processing requires it (ITMS-90683): LiveKit's WebRTC links the camera capture APIs.
+        NSCameraUsageDescription: Hey Dan never uses the camera. The voice-call library it is built on includes video support.
+        UIBackgroundModes: [audio, voip]
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+        NSSupportsLiveActivities: true
+        UIAppFonts:
+          - Fonts/HankenGrotesk/HankenGrotesk[wght].ttf
+          - Fonts/IBMPlexMono/IBMPlexMono-Regular.ttf
+          - Fonts/IBMPlexMono/IBMPlexMono-Medium.ttf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID)
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  # The call's Live Activity: lock screen and Dynamic Island.
+  HeyDanActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: HeyDanActivity
+      - path: HeyDan/Theme.swift
+      - path: HeyDan/Fonts/IBMPlexMono
+        type: folder
+        buildPhase: resources
+    info:
+      path: HeyDanActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Hey Dan
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        UIAppFonts:
+          - IBMPlexMono/IBMPlexMono-Regular.ttf
+          - IBMPlexMono/IBMPlexMono-Medium.ttf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Activity
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) ACTIVITY_EXTENSION
+  # Simulator checks of what used to need the phone (`just sim-checks`); never part of the app's build.
+  HeyDanChecks:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources: [HeyDanChecks]
+    dependencies:
+      - target: HeyDan
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Checks
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: HeyDan
+schemes:
+  HeyDanChecks:
+    build:
+      targets:
+        HeyDanChecks: [test]
+    test:
+      config: Debug
+      targets: [HeyDanChecks]

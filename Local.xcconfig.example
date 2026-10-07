@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig (gitignored). Your Apple Developer Team ID and an app bundle ID you own;
+// the Live Activity and the Checks bundle append .Activity and .Checks to it.
+HEYDAN_BUNDLE_ID = com.yourname.HeyDan
+DEVELOPMENT_TEAM = ABCDE12345
