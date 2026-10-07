@@ -76,7 +76,7 @@ final class CallController: NSObject {
     /// The call's live transcript: cleared when a call starts, kept readable (all final) after it ends.
     private(set) var transcript = Transcript()
     /// Auto mode's spoken-command settings: nil unless this call's worker speaks the commands vocabulary this
-    /// app knows (`nanoclaw.voice.commands` = "2").
+    /// app knows (`nanoclaw.voice.commands` = "2" or "3").
     private(set) var commands: CommandSettings?
     /// The spoken commands hints quote: the ones this call's worker announced, else the built-in ones.
     private(set) var commandWords = CommandWords.builtIn
@@ -962,7 +962,7 @@ extension CallController {
     /// Commands appear once the worker says it speaks this app's vocabulary, and the caller's picks go to it once
     /// per call right then: the worker holds its first cue until they come.
     private func refreshCommands(_ attributes: [String: String], for call: ActiveCall) {
-        guard attributes[VoiceProtocol.commandsAttribute] == VoiceProtocol.commandsVersion else {
+        guard let version = attributes[VoiceProtocol.commandsAttribute], VoiceProtocol.commandsVersions.contains(version) else {
             if commands != nil { commands = nil }
             return
         }

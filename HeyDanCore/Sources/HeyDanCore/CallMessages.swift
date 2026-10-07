@@ -17,10 +17,11 @@ public extension VoiceProtocol {
     static let reviewTopic = "nanoclaw.voice.review"
     static let streamTopics = [transcriptionTopic, turnTopic, replyTopic, reviewTopic]
 
-    /// `commandsVersion` when the worker understands spoken commands and the settings RPC; any other value
-    /// (or none) is a vocabulary this app does not know, so it offers no commands.
+    /// One of `commandsVersions` when the worker understands spoken commands and the settings RPC; any other value
+    /// (or none) is a vocabulary this app does not know, so it offers no commands. "3" only marks a worker that also
+    /// drops "send it", which this app never offered, so both read the same here.
     static let commandsAttribute = "nanoclaw.voice.commands"
-    static let commandsVersion = "2"
+    static let commandsVersions: Set<String> = ["2", "3"]
     /// The spoken commands the worker understands (`CommandWords`), set with `commandsAttribute`.
     static let commandWordsAttribute = "nanoclaw.voice.command-words"
     /// On a caller caption, both or neither: the command its text ends in (`send`, `discard`), and the words before it.
