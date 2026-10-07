@@ -18,8 +18,8 @@ public extension VoiceProtocol {
     static let streamTopics = [transcriptionTopic, turnTopic, replyTopic, reviewTopic]
 
     /// One of `commandsVersions` when the worker understands spoken commands and the settings RPC; any other value
-    /// (or none) is a vocabulary this app does not know, so it offers no commands. "3" only marks a worker that also
-    /// drops "send it", which this app never offered, so both read the same here.
+    /// (or none) is a vocabulary this app does not know, so it offers no commands. "2" and "3" are the same words (the
+    /// ones the worker announces); "3" was bumped so an already-open older browser page stops quoting "send it".
     static let commandsAttribute = "nanoclaw.voice.commands"
     static let commandsVersions: Set<String> = ["2", "3"]
     /// The spoken commands the worker understands (`CommandWords`), set with `commandsAttribute`.
