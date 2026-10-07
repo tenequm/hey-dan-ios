@@ -24,7 +24,8 @@ sim_build := env("HEYDAN_DERIVED_DATA", "build")
 # The test line's call link on stdout, for `link=$(just _test-link)` only: the link travels by env, never printed.
 # Test calls belong on a test line, never your main agent's: a test turn keeps that agent busy on your own calls.
 # TEST_CALL_LINK is the link itself; otherwise it is read from the server's nanoclaw .env over ssh
-# (NANOCLAW_SSH, NANOCLAW_DIR): VOICE_PUBLIC_URL and the TEST_CALL_LINE-th (1-based) VOICE_LINK_TOKEN.
+# (NANOCLAW_SSH, NANOCLAW_DIR): VOICE_PUBLIC_URL and the TEST_CALL_LINE-th (1-based) VOICE_LINK_TOKEN, or their
+# protocol 6 names VOICE_MODE_PUBLIC_URL and VOICE_MODE_LINK_TOKEN.
 [private]
 _test-link:
     #!/usr/bin/env bash
@@ -35,7 +36,7 @@ _test-link:
         exit 1
     fi
     ssh "$NANOCLAW_SSH" bash -s -- "${NANOCLAW_DIR:-~/nanoclaw}" "${TEST_CALL_LINE:-1}" <<'SH'
-    cd "${1/#\~/$HOME}" && awk -F= -v n="$2" '/^VOICE_PUBLIC_URL=/{u=$2} /^VOICE_LINK_TOKEN=/{split($2,a,","); t=a[n]} END{if (u != "" && t != "") printf "%s/voice?t=%s", u, t}' .env
+    cd "${1/#\~/$HOME}" && awk -F= -v n="$2" '/^VOICE_(MODE_)?PUBLIC_URL=/{u=$2} /^VOICE_(MODE_)?LINK_TOKEN=/{split($2,a,","); t=a[n]} END{if (u != "" && t != "") printf "%s/voice?t=%s", u, t}' .env
     SH
 
 # Build, install and launch in the Simulator with the test line's call link; calls go through CallKit as on the phone.
@@ -202,7 +203,7 @@ server-logs cid:
     ssh "$NANOCLAW_SSH" bash -s -- "{{cid}}" "${NANOCLAW_DIR:-~/nanoclaw}" <<'SH'
     cid=$1
     dir=${2/#\~/$HOME}
-    journalctl --user -u nanoclaw-voice-worker -u livekit --since -6h -o short-iso --no-pager | grep -F "$cid"
+    journalctl --user -u nanoclaw-voice-worker -u nanoclaw-voice-mode-worker -u livekit --since -6h -o short-iso --no-pager | grep -F "$cid"
     grep -hF "$cid" "$dir/logs/nanoclaw.log" "$dir/logs/nanoclaw.error.log" | tail -50
     SH
 
