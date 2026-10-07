@@ -96,6 +96,12 @@ struct CallGrantTests {
             409, "The voice service is updating. Reload the page or update your client to protocol 6.",
             "This voice line needs a newer Hey Dan. Update the app, then call again."
         ),
+        (409, "Unknown protocol", "This call attempt is no longer active. Try again."),
+        (426, "", "This voice line needs a newer Hey Dan. Update the app, then call again."),
+        (
+            426, "The voice service is updating. Reload the page or update your client to protocol 6.",
+            "This voice line needs a newer Hey Dan. Update the app, then call again."
+        ),
         (502, "", "Could not open the call room. Try again."),
         (503, "", "The voice line is offline right now."),
         (500, "boom", "Could not start the call (HTTP 500)."),

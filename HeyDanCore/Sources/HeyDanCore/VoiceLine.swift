@@ -151,7 +151,9 @@ public enum CallFailure: Error, Equatable, Sendable {
             case 403: "This call link is not valid."
             case 429 where !body.isEmpty: body
             case 429: "This line has reached its hourly call limit. Try again later."
-            case 409 where body.contains("protocol"): "This voice line needs a newer Hey Dan. Update the app, then call again."
+            // nanoclaw refuses a start on an older protocol: "Reload the page or update your client to protocol 6."
+            case 409 where body.contains("update your client"), 426:
+                "This voice line needs a newer Hey Dan. Update the app, then call again."
             case 409: "This call attempt is no longer active. Try again."
             case 502: "Could not open the call room. Try again."
             case 503: "The voice line is offline right now."
