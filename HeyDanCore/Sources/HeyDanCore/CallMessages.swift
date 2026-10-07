@@ -75,6 +75,12 @@ public extension VoiceProtocol {
         /// its `ReviewState` again.
         public func method(_ op: Review.Op) -> String { "\(prefix).\(op.rawValue)" }
 
+        /// A protocol 5 host names no protocol in its grant, so it reads as 4, but its worker sets
+        /// `nanoclaw.voice-mode.*` attributes: a call this app cannot serve.
+        public func isProtocol5Worker(_ attributes: [String: String]) -> Bool {
+            version == 4 && attributes.keys.contains { $0.hasPrefix("\(Self.voiceModePrefix).") }
+        }
+
         /// Nil until the worker's session has said what it is doing.
         public func activity(_ attributes: [String: String]) -> AgentActivity? {
             let state = attributes[VoiceProtocol.agentStateAttribute]

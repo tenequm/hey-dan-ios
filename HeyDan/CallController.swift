@@ -551,6 +551,10 @@ final class CallController: NSObject {
         if room.connectionState == .reconnecting { return phase = .reconnecting }
         guard let agent = room.remoteParticipants.values.first(where: \.isAgent) else { return }
         let attributes = agent.attributes
+        if names.isProtocol5Worker(attributes) {
+            trace(.room, "worker speaks protocol 5", level: .error)
+            return finish(call.id, .failure(.unsupportedProtocol(5)), endedBy: .failed, hostReason: .updating)
+        }
         if names.isUpdating(attributes) {
             trace(.room, "worker is updating", level: .error)
             return finish(call.id, .failure(.updating), endedBy: .failed, hostReason: .updating)

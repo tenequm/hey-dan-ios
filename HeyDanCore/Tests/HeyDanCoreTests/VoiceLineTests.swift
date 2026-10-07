@@ -169,6 +169,15 @@ struct VoiceProtocolTests {
         #expect(try #require(VoiceProtocol.Names(version: 6)).protocolAttribute == "nanoclaw.voice-mode.protocol")
     }
 
+    @Test func aProtocol4CallSpotsAProtocol5Worker() throws {
+        let v4 = try #require(VoiceProtocol.Names(version: 4)), v6 = try #require(VoiceProtocol.Names(version: 6))
+        let protocol5 = ["lk.agent.state": "listening", "nanoclaw.voice-mode.commands": "3"]
+        #expect(v4.isProtocol5Worker(protocol5))
+        #expect(!v4.isProtocol5Worker(["lk.agent.state": "listening", "nanoclaw.voice.commands": "3"]))
+        #expect(!v4.isProtocol5Worker([:]))
+        #expect(!v6.isProtocol5Worker(protocol5))
+    }
+
     @Test func namesFollowTheHostsProtocol() throws {
         let v4 = try #require(VoiceProtocol.Names(version: 4)), v6 = try #require(VoiceProtocol.Names(version: 6))
         func all(_ n: VoiceProtocol.Names) -> [String] {
