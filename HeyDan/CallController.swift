@@ -76,7 +76,7 @@ final class CallController: NSObject {
     /// The call's live transcript: cleared when a call starts, kept readable (all final) after it ends.
     private(set) var transcript = Transcript()
     /// Auto mode's spoken-command settings: nil unless this call's worker speaks the commands vocabulary this
-    /// app knows (`nanoclaw.voice.commands` = "2" or "3").
+    /// app knows (`commandsAttribute` = "2" or "3").
     private(set) var commands: CommandSettings?
     /// The spoken commands hints quote: the ones this call's worker announced, else the built-in ones.
     private(set) var commandWords = CommandWords.builtIn
@@ -104,6 +104,8 @@ final class CallController: NSObject {
         var callId: String?
         /// Asked for before CallKit when the precheck said Tailscale is off: setup uses it instead of asking again.
         var grant: CallGrant?
+        /// The worker's names on the protocol the host said it speaks; set with the grant, before the room exists.
+        var names: VoiceProtocol.Names?
         /// Stream events received per topic, for the end-of-call summary.
         var streamCounts: [String: Int] = [:]
         var room: Room?
@@ -295,13 +297,14 @@ final class CallController: NSObject {
     private func grantEarly(_ id: UUID, _ line: VoiceLine) async -> Bool {
         let asked = ContinuousClock.now
         do {
-            let grant = try await requestGrant(line, over: Self.quickHTTP)
+            let (grant, names) = try await requestGrant(line, over: Self.quickHTTP)
             guard call?.id == id else {
                 endOnHost(line, callId: grant.callId)
                 return false
             }
             call?.callId = grant.callId
             call?.grant = grant
+            call?.names = names
             trace(.net, "token ok despite the precheck ms=\(CallLog.ms(since: asked))", id)
             return true
         } catch {
@@ -430,22 +433,24 @@ final class CallController: NSObject {
         call?.connectTask = Task {
             do {
                 let grant: CallGrant
-                if let early = call?.grant {
-                    grant = early
+                let names: VoiceProtocol.Names
+                if let early = call?.grant, let earlyNames = call?.names {
+                    (grant, names) = (early, earlyNames)
                 } else {
                     let asked = ContinuousClock.now
-                    do { grant = try await requestGrant(line, over: Self.http) } catch {
+                    do { (grant, names) = try await requestGrant(line, over: Self.http) } catch {
                         trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
                         throw error
                     }
                     guard call?.id == id else { return endOnHost(line, callId: grant.callId) }
                     call?.callId = grant.callId
-                    trace(.net, "token ok ms=\(CallLog.ms(since: asked))", id)
+                    call?.names = names
+                    trace(.net, "token ok protocol=\(names.version) ms=\(CallLog.ms(since: asked))", id)
                 }
                 if let agent = grant.agent, !agent.isEmpty { setAgentName(agent, for: id) }
                 let room = Room(delegate: self, roomOptions: RoomOptions(defaultAudioPublishOptions: Self.micPublishOptions))
                 call?.room = room
-                await listen(to: room, for: id)
+                await listen(to: room, names: names, for: id)
                 guard call?.id == id else { return }
                 let connecting = ContinuousClock.now
                 trace(.room, "connect start", id)
@@ -487,7 +492,9 @@ final class CallController: NSObject {
         }
     }
 
-    private func requestGrant(_ line: VoiceLine, over http: URLSession) async throws(CallFailure) -> CallGrant {
+    /// The host's grant and the names of the protocol it speaks. A grant on a protocol this app does not speak is never
+    /// joined: its call ends on the host right away.
+    private func requestGrant(_ line: VoiceLine, over http: URLSession) async throws(CallFailure) -> (CallGrant, VoiceProtocol.Names) {
         let data: Data
         let response: URLResponse
         do {
@@ -497,7 +504,13 @@ final class CallController: NSObject {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         CallLog.log(.net, "token status=\(status) bytes=\(data.count)", level: status == 200 ? .info : .error)
-        return try CallGrant(status: status, body: data)
+        let grant = try CallGrant(status: status, body: data)
+        guard let names = grant.names else {
+            CallLog.log(.net, "token protocol=\(grant.protocolVersion) unsupported", level: .error)
+            endOnHost(line, callId: grant.callId, reason: .updating)
+            throw .unsupportedProtocol(grant.protocolVersion)
+        }
+        return (grant, names)
     }
 
     private func setAgentName(_ name: String, for id: UUID) {
@@ -529,17 +542,17 @@ final class CallController: NSObject {
 
     /// Re-reads the room: every delegate callback lands here, so their order does not matter.
     private func refresh() {
-        guard let call, let room = call.room else { return }
+        guard let call, let room = call.room, let names = call.names else { return }
         if room.connectionState == .reconnecting { return phase = .reconnecting }
         guard let agent = room.remoteParticipants.values.first(where: \.isAgent) else { return }
         let attributes = agent.attributes
-        if VoiceProtocol.isUpdating(attributes) {
+        if names.isUpdating(attributes) {
             trace(.room, "worker is updating", level: .error)
             return finish(call.id, .failure(.updating), endedBy: .failed, hostReason: .updating)
         }
-        refreshCommandWords(attributes, for: call.id)
-        refreshCommands(attributes, for: call)
-        guard let activity = VoiceProtocol.activity(attributes) else { return }
+        refreshCommandWords(attributes, names: names, for: call.id)
+        refreshCommands(attributes, names: names, for: call)
+        guard let activity = names.activity(attributes) else { return }
         if !call.reportedConnected {
             // Live only once the caller can be heard: in the room, microphone published.
             guard call.micPublished, room.connectionState == .connected else { return }
@@ -552,7 +565,7 @@ final class CallController: NSObject {
             provider?.reportOutgoingCall(with: call.id, connectedAt: nil)
         }
         phase = .live(activity)
-        refreshReview(attributes, for: call.id)
+        refreshReview(attributes, names: names, for: call.id)
     }
 
     /// Before `room.connect` returned this is the SDK cleaning up a connect that failed; `connect` reports that.
@@ -588,8 +601,9 @@ final class CallController: NSObject {
         ended.interimTimer?.cancel()
         if let callId = ended.callId { endOnHost(ended.line, callId: callId, reason: hostReason) }
         if let room = ended.room {
+            let topics = ended.names?.streamTopics ?? []
             Task {
-                for topic in VoiceProtocol.streamTopics { await room.unregisterTextStreamHandler(for: topic) }
+                for topic in topics { await room.unregisterTextStreamHandler(for: topic) }
                 await room.disconnect()
             }
         }
@@ -821,8 +835,8 @@ extension CallController {
 extension CallController {
     /// The worker's captions and topics for this call's room; registered before it connects, so nothing early is
     /// missed, and dropped with the room. A stream from a room that is no longer the call's changes nothing.
-    private func listen(to room: Room, for id: UUID) async {
-        for topic in VoiceProtocol.streamTopics {
+    private func listen(to room: Room, names: VoiceProtocol.Names, for id: UUID) async {
+        for topic in names.streamTopics {
             do {
                 try await room.registerTextStreamHandler(for: topic) { [weak self] reader, sender in
                     let text = try await reader.readAll()
@@ -843,7 +857,7 @@ extension CallController {
 
     /// Stream handlers finish in any order, so each event waits in `streams` until it is next in sending order.
     private func received(_ text: String, info: TextStreamInfo, sender: String, room: Room, id: UUID) {
-        guard call?.id == id, room === call?.room else { return }
+        guard call?.id == id, room === call?.room, let names = call?.names else { return }
         call?.streamCounts[info.topic, default: 0] += 1
         let json = Data(text.utf8)
         let event: StreamEvent
@@ -856,17 +870,17 @@ extension CallController {
             let fromCaller = (mic != nil && attributes[VoiceProtocol.transcribedTrackAttribute] == mic)
                 || sender == room.localParticipant.identity?.stringValue
             let isFinal = attributes[VoiceProtocol.transcriptionFinalAttribute] == "true"
-            let command = fromCaller ? SpokenCommand(captionAttributes: attributes) : nil
+            let command = fromCaller ? SpokenCommand(captionAttributes: attributes, names: names) : nil
             event = .caption(segment: segment, text: text, isFinal: isFinal, fromCaller: fromCaller, command: command)
-        case VoiceProtocol.turnTopic:
+        case names.turnTopic:
             guard let message = TurnMessage(json: json) else { return trace(.stream, "undecodable \(info.topic)", id, level: .error) }
             event = .turn(message)
-        case VoiceProtocol.replyTopic:
+        case names.replyTopic:
             guard let reply = try? JSONDecoder().decode(ReplyInfo.self, from: json) else {
                 return trace(.stream, "undecodable \(info.topic)", id, level: .error)
             }
             event = .reply(reply)
-        case VoiceProtocol.reviewTopic:
+        case names.reviewTopic:
             guard let state = try? JSONDecoder().decode(ReviewState.self, from: json) else {
                 return trace(.stream, "undecodable \(info.topic)", id, level: .error)
             }
@@ -950,8 +964,8 @@ extension CallController {
 
     /// Once the worker announces its command words they are the call's, for the rest of it, and it marks the captions
     /// that hold one. Until then (an older worker never does) the built-in words stand in.
-    private func refreshCommandWords(_ attributes: [String: String], for id: UUID) {
-        guard let announced = CommandWords(attribute: attributes[VoiceProtocol.commandWordsAttribute]) else { return }
+    private func refreshCommandWords(_ attributes: [String: String], names: VoiceProtocol.Names, for id: UUID) {
+        guard let announced = CommandWords(attribute: attributes[names.commandWordsAttribute]) else { return }
         if !transcript.marksCommands {
             trace(.room, "command words announced send=\(announced.send.count) discard=\(announced.discard.count)", id, level: .info)
         }
@@ -961,8 +975,8 @@ extension CallController {
 
     /// Commands appear once the worker says it speaks this app's vocabulary, and the caller's picks go to it once
     /// per call right then: the worker holds its first cue until they come.
-    private func refreshCommands(_ attributes: [String: String], for call: ActiveCall) {
-        guard let version = attributes[VoiceProtocol.commandsAttribute], VoiceProtocol.commandsVersions.contains(version) else {
+    private func refreshCommands(_ attributes: [String: String], names: VoiceProtocol.Names, for call: ActiveCall) {
+        guard let version = attributes[names.commandsAttribute], VoiceProtocol.commandsVersions.contains(version) else {
             if commands != nil { commands = nil }
             return
         }
@@ -1023,11 +1037,11 @@ extension CallController {
 
     /// The worker's answer to one settings request; nil when it did not answer or the call is over.
     private func settingsRPC(_ picks: SettingsPicks, for id: UUID) async -> ReviewReply? {
-        guard let gen = nextRPCGen(for: id) else { return nil }
+        guard let method = call?.names?.settingsMethod, let gen = nextRPCGen(for: id) else { return nil }
         call?.settingsSends += 1
         let ackTimeout = VoiceProtocol.settingsAckTimeout(send: call?.settingsSends ?? 0)
         return await workerRPC(
-            VoiceProtocol.settingsMethod, payload: SettingsRequest(gen: gen, picks: picks).payload, ackTimeout: ackTimeout, for: id
+            method, payload: SettingsRequest(gen: gen, picks: picks).payload, ackTimeout: ackTimeout, for: id
         )
     }
 
@@ -1166,14 +1180,14 @@ extension CallController {
 
     /// Manual is on offer once the worker says it runs it, and a call picked in Manual asks for it then, once.
     /// Without the attribute after its grace the worker has none: the call runs hands-free.
-    private func refreshReview(_ attributes: [String: String], for id: UUID) {
-        guard attributes[VoiceProtocol.reviewAttribute] == "1" else {
+    private func refreshReview(_ attributes: [String: String], names: VoiceProtocol.Names, for id: UUID) {
+        guard attributes[names.reviewAttribute] == "1" else {
             guard call?.reviewGrace == nil else { return }
             trace(.call, "review attribute absent, grace started", id, level: .info)
             call?.reviewGrace = Task { [weak self] in
                 try? await Task.sleep(for: VoiceProtocol.agentAttributeGrace)
                 guard let self, call?.id == id else { return }
-                guard call?.room?.remoteParticipants.values.first(where: \.isAgent)?.attributes[VoiceProtocol.reviewAttribute] != "1" else {
+                guard call?.room?.remoteParticipants.values.first(where: \.isAgent)?.attributes[names.reviewAttribute] != "1" else {
                     return trace(.call, "review grace ran out, worker offers it meanwhile", id, level: .info)
                 }
                 trace(.call, "review grace ran out: not offered, the call runs hands-free", id)
@@ -1228,10 +1242,10 @@ extension CallController {
     private func reviewRPC(
         _ op: Review.Op, draft: Int? = nil, mode: TurnMode? = nil, afterTurn: Int? = nil, for id: UUID
     ) async -> ReviewReply? {
-        guard let gen = nextRPCGen(for: id) else { return nil }
+        guard let names = call?.names, let gen = nextRPCGen(for: id) else { return nil }
         let request = ReviewRequest(gen: gen, draft: draft, mode: mode, afterTurn: afterTurn)
         trace(.rpc, "review \(op.rawValue) ask gen=\(gen) draft=\(draft.map(String.init) ?? "-") mode=\(mode?.rawValue ?? "-")", id, level: .info)
-        let reply = await workerRPC(op.method, payload: request.payload, for: id)
+        let reply = await workerRPC(names.method(op), payload: request.payload, for: id)
         if let reply, reply.gen != gen {
             trace(.rpc, "review \(op.rawValue) reply dropped: gen=\(reply.gen) answers another request than gen=\(gen)", id, level: .error)
             return nil
@@ -1436,20 +1450,22 @@ extension CallController: RoomDelegate {
     }
 
     nonisolated func room(_ room: Room, participant: Participant, didUpdateAttributes changed: [String: String]) {
-        let summary = participant.isAgent ? Self.attributeSummary(participant.attributes, changed: changed) : nil
+        let agentAttributes = participant.isAgent ? participant.attributes : nil
         Task { @MainActor in
             guard room === call?.room else { return }
-            if let summary { trace(.room, "agent \(summary)", level: .info) }
+            if let agentAttributes, let names = call?.names {
+                trace(.room, "agent \(Self.attributeSummary(agentAttributes, changed: changed, names: names))", level: .info)
+            }
             refresh()
         }
     }
 
     /// The worker's protocol attributes as they stand now (`-`: not set) and which of them this update changed:
     /// states and versions only, nothing the caller said.
-    nonisolated private static func attributeSummary(_ current: [String: String], changed: [String: String]) -> String {
+    private static func attributeSummary(_ current: [String: String], changed: [String: String], names: VoiceProtocol.Names) -> String {
         let keys = [
-            VoiceProtocol.agentStateAttribute, VoiceProtocol.thinkingAttribute, VoiceProtocol.updatingAttribute,
-            VoiceProtocol.commandsAttribute, VoiceProtocol.reviewAttribute,
+            VoiceProtocol.agentStateAttribute, names.thinkingAttribute, names.updatingAttribute, names.commandsAttribute,
+            names.reviewAttribute,
         ]
         func name(_ key: String) -> Substring { key.split(separator: ".").last ?? "" }
         let values = keys.map { "\(name($0))=\(current[$0] ?? "-")" }.joined(separator: " ")

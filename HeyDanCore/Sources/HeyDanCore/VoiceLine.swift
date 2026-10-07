@@ -26,9 +26,10 @@ public struct VoiceLine: Sendable, Equatable {
 
     public var callLink: String { endpoint(nil).absoluteString }
 
-    /// Admits the call, opens its room and dispatches the worker; answers a `CallGrant`.
+    /// Admits the call, opens its room and dispatches the worker; answers a `CallGrant`. Asks for
+    /// `VoiceProtocol.requestedVersion`, which a protocol 4 host ignores.
     public var tokenRequest: URLRequest {
-        var request = URLRequest(url: endpoint("livekit/token"))
+        var request = URLRequest(url: endpoint("livekit/token", version: VoiceProtocol.requestedVersion))
         request.httpMethod = "POST"
         return request
     }
@@ -52,24 +53,44 @@ public struct VoiceLine: Sendable, Equatable {
         let reason: String?
     }
 
-    func endpoint(_ route: String?) -> URL {
+    func endpoint(_ route: String?, version: Int? = nil) -> URL {
         let path = route.map { "voice/\($0)" } ?? "voice"
         var components = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "t", value: token)]
+        components.queryItems = [URLQueryItem(name: "t", value: token)] + (version.map { [URLQueryItem(name: "v", value: String($0))] } ?? [])
         return components.url!
     }
 }
 
-/// The host's answer to `tokenRequest`: where to join, the caller's room token, and the call's id for hangup.
+/// The host's answer to `tokenRequest`: where to join, the caller's room token, the call's id for hangup, and the
+/// protocol the host speaks.
 public struct CallGrant: Decodable, Sendable, Equatable {
     public let url: String
     public let token: String
     public let callId: String
     public let agent: String?
+    /// 4 when the host names none: hosts before protocol 6 did not.
+    public let protocolVersion: Int
+
+    /// The worker's names on the host's protocol; nil for one this app does not speak, a call it must not join.
+    public var names: VoiceProtocol.Names? { VoiceProtocol.Names(version: protocolVersion) }
 
     /// Decodes the host's answer, or says why it refused the call.
     public init(status: Int, body: Data) throws(CallFailure) {
         self = try hostAnswer(status: status, body: body)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case url, token, callId, agent
+        case protocolVersion = "protocol"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        url = try container.decode(String.self, forKey: .url)
+        token = try container.decode(String.self, forKey: .token)
+        callId = try container.decode(String.self, forKey: .callId)
+        agent = try container.decodeIfPresent(String.self, forKey: .agent)
+        protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 4
     }
 }
 
@@ -102,6 +123,8 @@ public enum CallFailure: Error, Equatable, Sendable {
     case noAgent
     case updating
     case roomConnect
+    /// The host speaks a protocol this app does not (the grant's version).
+    case unsupportedProtocol(Int)
 
     /// The case for logs, without the host's or the system's wording.
     public var logName: String {
@@ -128,6 +151,7 @@ public enum CallFailure: Error, Equatable, Sendable {
             case 403: "This call link is not valid."
             case 429 where !body.isEmpty: body
             case 429: "This line has reached its hourly call limit. Try again later."
+            case 409 where body.contains("protocol"): "This voice line needs a newer Hey Dan. Update the app, then call again."
             case 409: "This call attempt is no longer active. Try again."
             case 502: "Could not open the call room. Try again."
             case 503: "The voice line is offline right now."
@@ -138,6 +162,8 @@ public enum CallFailure: Error, Equatable, Sendable {
         case .noAgent: "The voice service did not answer the call."
         case .updating: "The voice service is updating. Try again in a minute."
         case .roomConnect: "Could not connect to the call. Check that Tailscale is connected, then try again."
+        case let .unsupportedProtocol(version):
+            "This voice line speaks protocol \(version), which this version of Hey Dan does not. Update the app, then call again."
         }
     }
 
@@ -154,11 +180,10 @@ public enum CallFailure: Error, Equatable, Sendable {
     }
 }
 
-/// The worker's attributes and room metadata, as nanoclaw's `src/channels/voice-livekit-protocol.ts` (v4)
-/// defines them and its browser call page (`.claude/skills/add-voice-mode/ui/src/lib/livekit-call.ts`) reads them.
+/// The worker's attributes and room metadata, as nanoclaw's `src/channels/voice-mode-protocol.ts` (protocol 6; 4 was
+/// `voice-livekit-protocol.ts`) defines them and its browser call page
+/// (`.claude/skills/add-voice-mode/ui/src/lib/livekit-call.ts`) reads them. Names that differ per protocol are `Names`.
 public enum VoiceProtocol {
-    public static let thinkingAttribute = "nanoclaw.voice.thinking"
-    public static let updatingAttribute = "nanoclaw.voice.updating"
     public static let agentStateAttribute = "lk.agent.state"
     /// Without a worker in the room after this long it is down or mid-update.
     public static let agentJoinTimeout: Duration = .seconds(25)
@@ -169,19 +194,6 @@ public enum VoiceProtocol {
 
     public enum AgentActivity: Sendable, Equatable {
         case listening, thinking, speaking
-    }
-
-    /// Nil until the worker's session has said what it is doing.
-    public static func activity(_ attributes: [String: String]) -> AgentActivity? {
-        let state = attributes[agentStateAttribute]
-        if state == "speaking" { return .speaking }
-        if attributes[thinkingAttribute] == "1" || state == "thinking" { return .thinking }
-        if state == "listening" || state == "idle" { return .listening }
-        return nil
-    }
-
-    public static func isUpdating(_ attributes: [String: String]) -> Bool {
-        attributes[updatingAttribute] == "1"
     }
 
     /// The host names why it ended a call in the room metadata right before it deletes the room.

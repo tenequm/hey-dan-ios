@@ -8,7 +8,7 @@ struct VoiceLineTests {
         #expect(line.host == "voice.example.com")
         #expect(line.token == "abc123")
         #expect(line.callLink == "https://voice.example.com/voice?t=abc123")
-        #expect(line.tokenRequest.url?.absoluteString == "https://voice.example.com/voice/livekit/token?t=abc123")
+        #expect(line.tokenRequest.url?.absoluteString == "https://voice.example.com/voice/livekit/token?t=abc123&v=6")
         #expect(line.tokenRequest.httpMethod == "POST")
     }
 
@@ -27,7 +27,7 @@ struct VoiceLineTests {
 
     @Test func keepsAPortAndRoundTrips() throws {
         let line = try #require(VoiceLine(callLink: "https://voice.local:8443/voice/?t=x"))
-        #expect(line.tokenRequest.url?.absoluteString == "https://voice.local:8443/voice/livekit/token?t=x")
+        #expect(line.tokenRequest.url?.absoluteString == "https://voice.local:8443/voice/livekit/token?t=x&v=6")
         #expect(line.callLink == "https://voice.local:8443/voice?t=x")
         #expect(VoiceLine(callLink: line.callLink) == line)
     }
@@ -52,6 +52,34 @@ struct CallGrantTests {
         #expect(grant.agent == "Dan")
     }
 
+    @Test func aHostNamingNoProtocolSpeaks4() throws {
+        let grant = try CallGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id1","agent":"Dan"}"#.utf8))
+        #expect(grant.protocolVersion == 4)
+        #expect(grant.names == VoiceProtocol.Names(version: 4))
+    }
+
+    @Test func aProtocol6HostSaysSo() throws {
+        let body = Data(#"{"url":"wss://h","token":"jwt","callId":"id1","agent":"Dan","silenceMs":2500,"protocol":6}"#.utf8)
+        let grant = try CallGrant(status: 200, body: body)
+        #expect(grant.protocolVersion == 6)
+        #expect(grant.names?.turnTopic == "nanoclaw.voice-mode.turn")
+    }
+
+    @Test(arguments: [5, 7, 0])
+    func anUnknownProtocolHasNoNamesButKeepsItsCall(version: Int) throws {
+        let grant = try CallGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id9","protocol":\#(version)}"#.utf8))
+        #expect(grant.protocolVersion == version)
+        #expect(grant.names == nil)
+        #expect(grant.callId == "id9")
+        #expect(CallFailure.unsupportedProtocol(version).message.contains("Update the app"))
+    }
+
+    @Test func aProtocolThatIsNoNumberIsMalformed() {
+        #expect(throws: CallFailure.malformedGrant) {
+            try CallGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id1","protocol":"6"}"#.utf8))
+        }
+    }
+
     @Test func refusalKeepsTheHostsWords() {
         #expect(throws: CallFailure.refused(status: 429, body: "Daily minutes used")) {
             try CallGrant(status: 429, body: Data(" Daily minutes used\n".utf8))
@@ -64,6 +92,10 @@ struct CallGrantTests {
         (429, "Daily minutes used", "Daily minutes used"),
         (429, "", "This line has reached its hourly call limit. Try again later."),
         (409, "", "This call attempt is no longer active. Try again."),
+        (
+            409, "The voice service is updating. Reload the page or update your client to protocol 6.",
+            "This voice line needs a newer Hey Dan. Update the app, then call again."
+        ),
         (502, "", "Could not open the call room. Try again."),
         (503, "", "The voice line is offline right now."),
         (500, "boom", "Could not start the call (HTTP 500)."),
@@ -94,19 +126,55 @@ struct CallGrantTests {
 }
 
 struct VoiceProtocolTests {
-    @Test func speakingWinsOverThinking() {
-        #expect(VoiceProtocol.activity(["lk.agent.state": "speaking", "nanoclaw.voice.thinking": "1"]) == .speaking)
-        #expect(VoiceProtocol.activity(["lk.agent.state": "listening", "nanoclaw.voice.thinking": "1"]) == .thinking)
-        #expect(VoiceProtocol.activity(["lk.agent.state": "thinking"]) == .thinking)
-        #expect(VoiceProtocol.activity(["lk.agent.state": "idle"]) == .listening)
-        #expect(VoiceProtocol.activity(["lk.agent.state": "initializing"]) == nil)
-        #expect(VoiceProtocol.activity([:]) == nil)
+    @Test func speakingWinsOverThinking() throws {
+        let names = try #require(VoiceProtocol.Names(version: 4))
+        #expect(names.activity(["lk.agent.state": "speaking", "nanoclaw.voice.thinking": "1"]) == .speaking)
+        #expect(names.activity(["lk.agent.state": "listening", "nanoclaw.voice.thinking": "1"]) == .thinking)
+        #expect(names.activity(["lk.agent.state": "thinking"]) == .thinking)
+        #expect(names.activity(["lk.agent.state": "idle"]) == .listening)
+        #expect(names.activity(["lk.agent.state": "initializing"]) == nil)
+        #expect(names.activity([:]) == nil)
     }
 
-    @Test func updatingOnlyOnOne() {
-        #expect(VoiceProtocol.isUpdating(["nanoclaw.voice.updating": "1"]))
-        #expect(!VoiceProtocol.isUpdating(["nanoclaw.voice.updating": ""]))
-        #expect(!VoiceProtocol.isUpdating([:]))
+    @Test func thinkingIsReadInTheHostsNamespace() throws {
+        let v6 = try #require(VoiceProtocol.Names(version: 6))
+        #expect(v6.activity(["lk.agent.state": "listening", "nanoclaw.voice-mode.thinking": "1"]) == .thinking)
+        #expect(v6.activity(["lk.agent.state": "listening", "nanoclaw.voice.thinking": "1"]) == .listening)
+    }
+
+    @Test func updatingOnlyOnOne() throws {
+        let v4 = try #require(VoiceProtocol.Names(version: 4)), v6 = try #require(VoiceProtocol.Names(version: 6))
+        #expect(v4.isUpdating(["nanoclaw.voice.updating": "1"]))
+        #expect(!v4.isUpdating(["nanoclaw.voice.updating": ""]))
+        #expect(!v4.isUpdating([:]))
+        #expect(v6.isUpdating(["nanoclaw.voice-mode.updating": "1"]))
+        #expect(!v6.isUpdating(["nanoclaw.voice.updating": "1"]))
+    }
+
+    @Test func onlyProtocols4And6HaveNames() {
+        #expect(VoiceProtocol.requestedVersion == 6)
+        #expect([3, 4, 5, 6, 7].compactMap { VoiceProtocol.Names(version: $0)?.version } == [4, 6])
+    }
+
+    @Test func namesFollowTheHostsProtocol() throws {
+        let v4 = try #require(VoiceProtocol.Names(version: 4)), v6 = try #require(VoiceProtocol.Names(version: 6))
+        func all(_ n: VoiceProtocol.Names) -> [String] {
+            [
+                n.thinkingAttribute, n.updatingAttribute, n.commandsAttribute, n.commandWordsAttribute, n.captionCommandAttribute,
+                n.captionWordsAttribute, n.reviewAttribute, n.settingsMethod,
+            ] + n.streamTopics
+        }
+        #expect(all(v4) == [
+            "nanoclaw.voice.thinking", "nanoclaw.voice.updating", "nanoclaw.voice.commands", "nanoclaw.voice.command-words",
+            "nanoclaw.voice.command", "nanoclaw.voice.words", "nanoclaw.voice.review", "nanoclaw.voice.settings",
+            "lk.transcription", "nanoclaw.voice.turn", "nanoclaw.voice.reply", "nanoclaw.voice.review",
+        ])
+        #expect(all(v6) == [
+            "nanoclaw.voice-mode.thinking", "nanoclaw.voice-mode.updating", "nanoclaw.voice-mode.commands",
+            "nanoclaw.voice-mode.command-words", "nanoclaw.voice-mode.command", "nanoclaw.voice-mode.words",
+            "nanoclaw.voice-mode.review", "nanoclaw.voice-mode.settings",
+            "lk.transcription", "nanoclaw.voice-mode.turn", "nanoclaw.voice-mode.reply", "nanoclaw.voice-mode.review",
+        ])
     }
 
     @Test func readsTheEndReason() {

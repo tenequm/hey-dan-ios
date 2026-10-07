@@ -4,12 +4,17 @@ Native iPhone voice client for [NanoClaw](https://github.com/tenequm/nanoclaw) v
 Action Button, talk to the agent; the call keeps going with the screen locked.
 
 - **CallKit** owns the call: lock-screen controls, AirPods mute and hangup, interruptions, routing.
-- **NanoClaw** admits it: `POST /voice/livekit/token?t=<token>` returns the LiveKit URL, room token
-  and call id; `POST /voice/livekit/end` hangs up. The contract lives in `HeyDanCore` and mirrors
-  nanoclaw's `src/channels/voice-livekit-protocol.ts` (protocol v4) and its browser call page,
+- **NanoClaw** admits it: `POST /voice/livekit/token?t=<token>&v=6` returns the LiveKit URL, room token,
+  call id and the host's `protocol`; `POST /voice/livekit/end` hangs up. The contract lives in `HeyDanCore` and
+  mirrors nanoclaw's `src/channels/voice-mode-protocol.ts` and its browser call page,
   `.claude/skills/add-voice-mode/ui/src/lib/livekit-call.ts` (join timeout, end reasons, DTX off).
+- **Protocols 6 and 4**: the app asks for protocol 6 on every call. A protocol 6 host says `protocol: 6` and its
+  worker uses `nanoclaw.voice-mode.*` names; an older host ignores `v`, names no protocol and is protocol 4, whose
+  worker uses `nanoclaw.voice.*` (`voice-livekit-protocol.ts`). The app picks the names per call from the grant
+  (`VoiceProtocol.Names`); a grant naming any other protocol is never joined: the app ends that call on the host
+  and asks the caller to update. Below, `<ns>` is the call's namespace.
 - **LiveKit Swift** carries the audio. The app shows connecting, listening, thinking
-  (`nanoclaw.voice.thinking`), speaking (`lk.agent.state`), and why a call ended.
+  (`<ns>.thinking`), speaking (`lk.agent.state`), and why a call ended.
 - **Voice lines**: several call links, kept in one Keychain item (`voice-lines`; the older single
   `call-link` item moves into it on first launch). Each line is named for the agent its host says answers
   it (`GET /voice/info`, or the grant on its first call). Settings picks the line the Action Button calls.
@@ -25,10 +30,10 @@ Action Button, talk to the agent; the call keeps going with the screen locked.
 - **Transcript and spoken commands**, drawn like the browser page's screen and control rail: the worker's
   captions (`lk.transcription` text streams) and its turn, reply and review topics fold into a live
   transcript the way the browser page folds them, and auto mode's wake switch, pause sending and typing
-  sound go to the worker over its `nanoclaw.voice.settings` RPC (once per call, after setup) when it
-  advertises commands vocabulary "2".
-- **Manual mode** (the page's review mode), when the worker sets `nanoclaw.voice.review` = "1": talk, done,
-  read the draft, then send or discard it, over the worker's `nanoclaw.voice.{mode,talk,done,send,discard}`
+  sound go to the worker over its `<ns>.settings` RPC (once per call, after setup) when it
+  advertises commands vocabulary "2" or "3".
+- **Manual mode** (the page's review mode), when the worker sets `<ns>.review` = "1": talk, done,
+  read the draft, then send or discard it, over the worker's `<ns>.{mode,talk,done,send,discard}`
   RPCs; the hands-free | Manual pick is kept for the next call.
 - **Live Activity** (the `HeyDanActivity` widget extension): the call's agent, state and clock on the lock
   screen and in the Dynamic Island, with an end key.

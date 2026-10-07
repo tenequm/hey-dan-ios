@@ -7,9 +7,6 @@ import Foundation
 public struct Review: Sendable, Equatable {
     public enum Op: String, Sendable {
         case mode, talk, done, send, discard
-
-        /// The worker's RPC method for it.
-        public var method: String { "nanoclaw.voice.\(rawValue)" }
     }
 
     /// The operation waiting for the worker's answer; `to` for a mode switch.

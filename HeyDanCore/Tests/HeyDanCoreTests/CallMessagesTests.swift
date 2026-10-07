@@ -228,14 +228,22 @@ struct CommandWordsTests {
         #expect(sendOnly.explainer == #"say "over" to send now."#)
     }
 
-    @Test func readsACaptionsMark() {
-        let marked = [VoiceProtocol.captionCommandAttribute: "send", VoiceProtocol.captionWordsAttribute: "Book a table"]
-        #expect(SpokenCommand(captionAttributes: marked) == SpokenCommand(.send, words: "Book a table"))
-        let alone = [VoiceProtocol.captionCommandAttribute: "discard", VoiceProtocol.captionWordsAttribute: ""]
-        #expect(SpokenCommand(captionAttributes: alone) == SpokenCommand(.discard, words: ""))
-        #expect(SpokenCommand(captionAttributes: [VoiceProtocol.captionCommandAttribute: "send"]) == nil)
-        #expect(SpokenCommand(captionAttributes: [VoiceProtocol.captionWordsAttribute: "Book"]) == nil)
-        #expect(SpokenCommand(captionAttributes: [VoiceProtocol.captionCommandAttribute: "rewind", VoiceProtocol.captionWordsAttribute: ""]) == nil)
-        #expect(SpokenCommand(captionAttributes: [:]) == nil)
+    @Test(arguments: [4, 6])
+    func readsACaptionsMark(version: Int) throws {
+        let names = try #require(VoiceProtocol.Names(version: version))
+        let command = names.captionCommandAttribute, words = names.captionWordsAttribute
+        let marked = [command: "send", words: "Book a table"]
+        #expect(SpokenCommand(captionAttributes: marked, names: names) == SpokenCommand(.send, words: "Book a table"))
+        #expect(SpokenCommand(captionAttributes: [command: "discard", words: ""], names: names) == SpokenCommand(.discard, words: ""))
+        #expect(SpokenCommand(captionAttributes: [command: "send"], names: names) == nil)
+        #expect(SpokenCommand(captionAttributes: [words: "Book"], names: names) == nil)
+        #expect(SpokenCommand(captionAttributes: [command: "rewind", words: ""], names: names) == nil)
+        #expect(SpokenCommand(captionAttributes: [:], names: names) == nil)
+    }
+
+    @Test func aCaptionMarkOfTheOtherProtocolIsNoMark() throws {
+        let v4 = try #require(VoiceProtocol.Names(version: 4)), v6 = try #require(VoiceProtocol.Names(version: 6))
+        let markedOn4 = [v4.captionCommandAttribute: "send", v4.captionWordsAttribute: "Book"]
+        #expect(SpokenCommand(captionAttributes: markedOn4, names: v6) == nil)
     }
 }

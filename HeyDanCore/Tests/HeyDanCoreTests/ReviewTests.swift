@@ -29,10 +29,16 @@ struct ReviewMessageTests {
         #expect(ReviewRequest(gen: 4, draft: 7).payload == #"{"draft":7,"gen":4}"#)
     }
 
-    @Test func methodsAreTheWorkers() {
-        #expect([Review.Op.mode, .talk, .done, .send, .discard].map(\.method)
+    @Test func methodsAreTheWorkers() throws {
+        let ops: [Review.Op] = [.mode, .talk, .done, .send, .discard]
+        let v4 = try #require(VoiceProtocol.Names(version: 4))
+        #expect(ops.map(v4.method)
             == ["nanoclaw.voice.mode", "nanoclaw.voice.talk", "nanoclaw.voice.done", "nanoclaw.voice.send", "nanoclaw.voice.discard"])
-        #expect(Review.Op.mode.method == VoiceProtocol.modeMethod)
+        let v6 = try #require(VoiceProtocol.Names(version: 6))
+        #expect(ops.map(v6.method) == [
+            "nanoclaw.voice-mode.mode", "nanoclaw.voice-mode.talk", "nanoclaw.voice-mode.done", "nanoclaw.voice-mode.send",
+            "nanoclaw.voice-mode.discard",
+        ])
     }
 
     @Test func repliesCarryTheirFields() {
