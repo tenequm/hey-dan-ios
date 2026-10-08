@@ -1,5 +1,11 @@
 # Hey Dan
 
+<p align="center">
+  <img src="docs/screenshots/ready.png" width="280" alt="Hey Dan ready to call: hands-free mode, voice commands and the call button">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/on-call.png" width="280" alt="Hey Dan on a call, waiting for the wake phrase Hey Dan">
+</p>
+
 Native iPhone voice client for [NanoClaw](https://github.com/tenequm/nanoclaw) voice lines. Press the
 Action Button, talk to the agent; the call keeps going with the screen locked.
 
