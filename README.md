@@ -134,6 +134,8 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   Before `VoicePickerSaves`, capture the server's raw saved tuple and set `HEYDAN_TTS_RESTORE` to its ready
   JSON PATCH body; the check refuses to mutate without it and restores it in teardown. Keep an independent
   server restore/compare cleanup in the calling script too. The sample checks expect ElevenLabs available.
+  `SampleDismissThenCall` plays a sample for two seconds, taps Back to stop it, closes the picker,
+  discards changes if prompted, taps Call once, and requires Call again after 45 seconds.
 - DEBUG Simulator voice hooks: `HEYDAN_PREVIEW_TTS=saved|unsaved|eleven-unavailable|catalog-fail|search-empty|no-route|forbidden`
   supplies HTTP fixtures; `HEYDAN_PREVIEW_VOICE=pending|active|ended|refused` supplies live voice state
   (use `HEYDAN_PREVIEW_PHASE=waiting` and open Voice). `HEYDAN_VOICE_STEPS="20:gemini/Alnilam,35:elevenlabs/bIHbv24MWmeRgasZH58o"`

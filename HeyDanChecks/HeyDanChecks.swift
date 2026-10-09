@@ -309,6 +309,7 @@ final class HeyDanChecks: XCTestCase {
         shot("sample-call-ended")
     }
 
+    /// Popping the catalog stops its sample before Close dismisses the picker and one Call tap starts the call.
     func testSampleDismissThenCall() async throws {
         launchReal(["HEYDAN_HANGUP_AFTER": "40"])
         openVoice()
@@ -318,8 +319,9 @@ final class HeyDanChecks: XCTestCase {
         samples.firstMatch.tap()
         try await Task.sleep(for: .seconds(2))
         shot("sample-dismiss-playing")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         guard element(ID.pickerClose).waitForExistence(timeout: 5) else {
-            XCTFail("picker.close must be available while sampling")
+            XCTFail("picker.close must be available after returning to the summary")
             return
         }
         element(ID.pickerClose).tap()
