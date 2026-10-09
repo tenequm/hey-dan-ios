@@ -50,27 +50,26 @@ final class VoiceSettingsModel {
     }
     private static var writes: [LineKey: (id: UUID, task: Task<Void, Never>)] = [:]
     private static var results: [LineKey: String] = [:]
+    private static let defaultSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 12
+        config.timeoutIntervalForResource = 20
+        config.urlCache = nil
+        #if DEBUG && targetEnvironment(simulator)
+        if PickerFixture.scenario != nil { config.protocolClasses = [PickerFixtureProtocol.self] }
+        #endif
+        return URLSession(configuration: config)
+    }()
 
     init(line: VoiceLine, session: URLSession? = nil) {
         self.line = line
-        if let session {
-            self.session = session
-        } else {
-            let config = URLSessionConfiguration.ephemeral
-            config.timeoutIntervalForRequest = 12
-            config.timeoutIntervalForResource = 20
-            config.urlCache = nil
-            #if DEBUG && targetEnvironment(simulator)
-            if PickerFixture.scenario != nil { config.protocolClasses = [PickerFixtureProtocol.self] }
-            #endif
-            self.session = URLSession(configuration: config)
-        }
+        self.session = session ?? Self.defaultSession
         saveResult = Self.results[LineKey(line)]
     }
 
     var provider: TTSProvider? { view?.providers.first { $0.id == draft?.provider } }
     var hasChanges: Bool { draft != applied }
-    var canSave: Bool { !invalidated && view != nil && draft != nil && provider?.available == true && !saving }
+    var canSave: Bool { !invalidated && view != nil && draft != nil && hasChanges && provider?.available == true && !saving }
     var languages: [String] { Array(Set(voices.compactMap(\.language))).sorted() }
     var selectedVoice: CatalogVoice? {
         guard let draft, let id = draft.voice else { return nil }
@@ -105,6 +104,7 @@ final class VoiceSettingsModel {
 
     func selectProvider(_ id: String) {
         guard !saving, !invalidated, id != draft?.provider else { return }
+        guard view?.providers.first(where: { $0.id == id })?.available == true else { return }
         draft = TTSChoice(provider: id)
         query = ""
         language = ""
@@ -205,7 +205,9 @@ final class VoiceSettingsModel {
                         let matches = reset ? loaded.saved.isEmpty : loaded.saved == SavedTTSChoice(
                             provider: draft.provider, model: draft.model, voice: draft.voice
                         )
-                        saveResult = matches ? "Saved for next calls (confirmed after retry)" : "Save not confirmed. Saved state refreshed; check it before retrying."
+                        saveResult = matches
+                            ? (reset ? "Saved voice reset to server default (confirmed after retry)" : "Saved for next calls (confirmed after retry)")
+                            : "Save not confirmed. Saved state refreshed; check it before retrying."
                         if matches {
                             saveFailure = nil
                             applied = self.draft
@@ -294,7 +296,7 @@ final class VoiceSettingsModel {
 
 @MainActor @Observable
 private final class SamplePlayback {
-    let player = AVPlayer()
+    @ObservationIgnored lazy var player = AVPlayer()
     var playing: String?
     var failure: String?
     var item: AVPlayerItem?
@@ -514,69 +516,70 @@ struct VoicePickerSheet: View {
     }
 
     private var summary: some View {
-        Form {
-            Section {
-                Text("\(agentName)'s voice").font(.headline).accessibilityIdentifier(AXID.pickerTitle)
-                if let view = model.view {
-                    LabeledContent("Saved for next calls", value: view.saved.isEmpty ? "Server default - \(model.name(view.effective))" : model.name(view.effective))
-                        .accessibilityIdentifier(AXID.pickerSaved)
-                }
-                if callID != nil, callID == call.liveCallID, let state = call.liveVoice {
-                    LabeledContent("This call", value: model.name(state.active)).accessibilityIdentifier(AXID.pickerLive)
-                    if let pending = state.pending {
-                        LabeledContent("Next spoken line", value: model.name(pending)).accessibilityIdentifier(AXID.pickerNext)
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Text("\(agentName)'s voice").font(.headline).accessibilityIdentifier(AXID.pickerTitle)
+                    if let view = model.view {
+                        LabeledContent("Saved for next calls", value: view.saved.isEmpty ? "Server default - \(model.name(view.effective))" : model.name(view.effective))
+                            .accessibilityIdentifier(AXID.pickerSaved)
                     }
-                    Text("The current spoken line finishes unchanged. These are configured voices; the worker may use a fallback.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            }
-            if model.loading { ProgressView("Loading voice settings") }
-            if let failure = model.loadFailure {
-                Text(failure.message).foregroundStyle(.red)
-                Button("Retry") { Task { await model.load() } }.accessibilityIdentifier(AXID.pickerRetry)
-            }
-            if let view = model.view, let draft = model.draft {
-                Section(model.hasChanges ? "Draft voice" : "Voice") {
-                    Picker("Provider", selection: Binding(get: { draft.provider }, set: model.selectProvider)) {
-                        ForEach(view.providers, id: \.id) { provider in
-                            LabeledContent(provider.name, value: provider.available ? "" : "Not configured on server")
-                                .tag(provider.id).disabled(!provider.available)
+                    if callID != nil, callID == call.liveCallID, let state = call.liveVoice {
+                        LabeledContent("This call", value: model.name(state.active)).accessibilityIdentifier(AXID.pickerLive)
+                        if let pending = state.pending {
+                            LabeledContent("Next spoken line", value: model.name(pending)).accessibilityIdentifier(AXID.pickerNext)
                         }
+                        Text("The current spoken line finishes unchanged. These are configured voices; the worker may use a fallback.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.menu).accessibilityIdentifier(AXID.pickerProvider)
-                    fieldFailure("provider")
-                    Picker("Model", selection: Binding(get: { model.draft?.model }, set: model.setModel)) {
-                        LabeledContent("Provider default", value: model.provider?.default.model ?? "Unknown")
-                            .tag(String?.none)
-                        ForEach(model.provider?.models ?? [], id: \.self) { Text($0).tag(Optional($0)) }
-                        if let id = draft.model, !(model.provider?.models.contains(id) ?? false) { Text(id).tag(Optional(id)) }
-                    }
-                    .pickerStyle(.menu).accessibilityIdentifier(AXID.pickerModel)
-                    fieldFailure("model")
-                    Button {
-                        detent = .large
-                        path.append("catalog")
-                    } label: {
-                        LabeledContent("Voice", value: model.selectedVoice?.name ?? "Provider default voice")
-                    }
-                    .accessibilityIdentifier(AXID.pickerVoice)
-                    fieldFailure("voice")
                 }
-                .disabled(model.saving || model.invalidated)
-                if callID != nil && !liveAvailable {
-                    Text(callID == call.liveCallID ? "This worker does not report voice settings. Live switching is unavailable." : "This call has ended. You can still save for next calls.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                if model.loading { ProgressView("Loading voice settings") }
+                if let failure = model.loadFailure {
+                    Text(failure.message).foregroundStyle(.red)
+                    Button("Retry") { Task { await model.load() } }.accessibilityIdentifier(AXID.pickerRetry)
+                }
+                if let view = model.view, let draft = model.draft {
+                    Section(model.hasChanges ? "Draft voice" : "Voice") {
+                        Menu {
+                            ForEach(view.providers, id: \.id) { provider in
+                                Button { model.selectProvider(provider.id) } label: {
+                                    LabeledContent {
+                                        Text(provider.available ? "" : "Not configured on server")
+                                    } label: {
+                                        if provider.id == draft.provider { Label(provider.name, systemImage: "checkmark") }
+                                        else { Text(provider.name) }
+                                    }
+                                }
+                                .disabled(!provider.available)
+                            }
+                        } label: { LabeledContent("Provider", value: model.provider?.name ?? draft.provider) }
+                        .accessibilityIdentifier(AXID.pickerProvider)
+                        fieldFailure("provider")
+                        Picker("Model", selection: Binding(get: { model.draft?.model }, set: model.setModel)) {
+                            LabeledContent("Provider default", value: model.provider?.default.model ?? "Unknown")
+                                .tag(String?.none)
+                            ForEach(model.provider?.models ?? [], id: \.self) { Text($0).tag(Optional($0)) }
+                            if let id = draft.model, !(model.provider?.models.contains(id) ?? false) { Text(id).tag(Optional(id)) }
+                        }
+                        .pickerStyle(.menu).accessibilityIdentifier(AXID.pickerModel)
+                        fieldFailure("model")
+                        Button {
+                            detent = .large
+                            path.append("catalog")
+                        } label: {
+                            LabeledContent("Voice", value: model.selectedVoice?.name ?? "Provider default voice")
+                        }
+                        .accessibilityIdentifier(AXID.pickerVoice)
+                        fieldFailure("voice")
+                    }
+                    .disabled(model.saving || model.invalidated)
+                    if callID != nil && !liveAvailable {
+                        Text(callID == call.liveCallID ? "This worker does not report voice settings. Live switching is unavailable." : "This call has ended. You can still save for next calls.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
             }
-            if model.saveResult != nil || liveResult != nil {
-                Section("Result") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let result = model.saveResult { Text("Save: \(result)") }
-                        if let result = liveResult { Text("This call: \(result)") }
-                    }
-                    .accessibilityElement(children: .combine).accessibilityIdentifier(AXID.pickerResult)
-                }
-            }
+            .clipped()
         }
         .navigationTitle("\(agentName)'s voice")
         .navigationBarTitleDisplayMode(.inline)
@@ -600,10 +603,21 @@ struct VoicePickerSheet: View {
     }
 
     private var commits: some View {
-        GlassEffectContainer {
-            ViewThatFits(in: .horizontal) {
-                HStack { commitButtons }
-                VStack { commitButtons }
+        VStack(alignment: .leading, spacing: 8) {
+            if model.saveResult != nil || liveResult != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let result = model.saveResult { Text("Save: \(result)") }
+                    if let result = liveResult { Text("This call: \(result)") }
+                }
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine).accessibilityIdentifier(AXID.pickerResult)
+            }
+            GlassEffectContainer {
+                ViewThatFits(in: .horizontal) {
+                    HStack { commitButtons }
+                    VStack { commitButtons }
+                }
             }
         }
         .padding()
@@ -629,7 +643,13 @@ struct VoicePickerSheet: View {
         List {
             Section("Current selection") {
                 if let voice = model.selectedVoice { catalogRow(voice) }
-                Button("Provider default voice") { model.setVoice(nil); path.removeLast() }
+                Button { model.setVoice(nil); path.removeLast() } label: {
+                    HStack {
+                        Text("Provider default voice")
+                        Spacer()
+                        if model.draft?.voice == nil { Image(systemName: "checkmark").accessibilityLabel("Selected") }
+                    }
+                }
             }
             Section {
                 ForEach(model.voices.filter { $0.id.lowercased() != model.selectedVoice?.id.lowercased() }, id: \.id) { catalogRow($0) }

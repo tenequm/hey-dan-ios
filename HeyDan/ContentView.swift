@@ -1530,7 +1530,7 @@ private struct SettingsView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 15))
-                    .foregroundStyle(Theme.muted)
+                    .foregroundStyle(Theme.muted.opacity(naming == entry.id ? 0.4 : 1))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
