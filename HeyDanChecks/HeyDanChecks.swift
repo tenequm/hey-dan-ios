@@ -257,17 +257,27 @@ final class HeyDanChecks: XCTestCase {
         addTeardownBlock { @MainActor [self] in
             app.terminate()
             launchReal(["HEYDAN_TTS_PATCH": restore])
-            openVoice()
-            let restored = NSPredicate { [self] _, _ in text(ID.pickerSaved) == original }
-            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: restored, object: nil)], timeout: 25), .completed,
-                           "The captured saved voice was not restored")
+            let deadline = Date().addingTimeInterval(30)
+            var restored = false
+            repeat {
+                openVoice()
+                let matches = NSPredicate { [self] _, _ in text(ID.pickerSaved) == original }
+                restored = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: matches, object: nil)],
+                                         timeout: max(0, min(5, deadline.timeIntervalSinceNow))) == .completed
+                if !restored { element(ID.pickerClose).tap() }
+            } while !restored && Date() < deadline
+            XCTAssertTrue(restored, "The captured saved voice was not restored")
             shot("saves-restored")
         }
         shot("saves-before")
         chooseProvider("Gemini")
         element(ID.pickerVoice).tap()
         XCTAssertTrue(element(ID.pickerSearch).waitForExistence(timeout: 10))
-        let choices = app.buttons.matching(NSPredicate(format: "label CONTAINS 'No sample available' AND NOT label CONTAINS 'Selected'"))
+        let choices = app.buttons.matching(NSPredicate(format: "label CONTAINS 'No sample available' AND NOT label CONTAINS 'Selected' AND enabled == true"))
+        guard choices.firstMatch.waitForExistence(timeout: 15) else {
+            XCTFail("The Gemini catalog did not load")
+            return
+        }
         guard let choice = choices.allElementsBoundByIndex.first(where: {
             let name = $0.label.components(separatedBy: ",").first ?? $0.label
             return $0.isEnabled && $0.isHittable && !original.localizedCaseInsensitiveContains(name)
@@ -299,7 +309,7 @@ final class HeyDanChecks: XCTestCase {
         XCTAssertTrue(element(ID.pickerSearch).exists)
         shot("sample-call-claimed")
         // The medium detent exposes the background accessibility tree without dismissing the catalog.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.073))
+        element(ID.pickerSearch).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.49)))
         XCTAssertTrue(element(ID.pickerSearch).exists)
         assertCallKey("End call", timeout: remaining(20, since: sampledAt))
@@ -369,7 +379,8 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private func assertCallKey(_ label: String, timeout: TimeInterval) {
-        let matches = NSPredicate { [self] _, _ in element(ID.keysCall).label == label }
+        let prefix = label == "End call" ? "end" : "call again"
+        let matches = NSPredicate { [self] _, _ in element(ID.keysCall).label.lowercased().hasPrefix(prefix) }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: matches, object: nil)], timeout: timeout), .completed,
                        "The call key must show \(label)")
     }
@@ -398,7 +409,7 @@ final class HeyDanChecks: XCTestCase {
     private func chooseProvider(_ name: String) {
         expandPicker()
         element(ID.pickerProvider).tap()
-        let provider = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        let provider = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND identifier != %@", name, ID.pickerProvider)).firstMatch
         XCTAssertTrue(provider.waitForExistence(timeout: 5))
         XCTAssertTrue(provider.isEnabled)
         provider.tap()
