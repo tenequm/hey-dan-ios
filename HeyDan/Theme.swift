@@ -30,7 +30,6 @@ enum Theme {
     static let capDark = Color(hex: 0x3A3A3A)
     static let capDarkEdge = Color(hex: 0x141414)
     static let dotOff = Color(hex: 0x1D1D1D)
-    static let switchOff = Color(hex: 0x5A5853)
 
     static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .custom("Hanken Grotesk", size: size).weight(weight)
@@ -177,7 +176,7 @@ struct DotMatrix: View {
     }
 }
 
-/// Text swept by a lighter band, like the page's shimmering readout; plain text with Reduce Motion.
+/// Text with a lighter moving band, like the page's shimmering readout; plain text with Reduce Motion.
 struct ShimmerText: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
@@ -189,11 +188,11 @@ struct ShimmerText: View {
         if reduceMotion {
             Text(text).foregroundStyle(base)
         } else {
-            sweep
+            movingBand
         }
     }
 
-    private var sweep: some View {
+    private var movingBand: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
             let start = -1 + 2 * t
@@ -244,56 +243,6 @@ struct Breathing: ViewModifier {
             content
                 .opacity(paused ? 1 : dimmest + (brightest - dimmest) * wave)
                 .scaleEffect(smallest + (1 - smallest) * wave)
-        }
-    }
-}
-
-/// The page's on/off switch: a key-cap face with a label that wraps, and a track whose knob slides.
-struct KeySwitchStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        KeySwitch(configuration: configuration)
-    }
-
-    private struct KeySwitch: View {
-        @Environment(\.isEnabled) private var isEnabled
-        let configuration: Configuration
-
-        var body: some View {
-            let on = configuration.isOn
-            Button { configuration.isOn.toggle() } label: {
-                HStack(spacing: 6) {
-                    configuration.label
-                        .font(Theme.sans(13))
-                        .lineHeight(.multiple(factor: 1.25))
-                        .foregroundStyle(Theme.text)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Capsule()
-                        .fill((on ? Theme.orange : Theme.switchOff).shadow(.inner(color: .black.opacity(0.25), radius: 1, y: 1)))
-                        .frame(width: 34, height: 20)
-                        .overlay(alignment: on ? .trailing : .leading) {
-                            Circle()
-                                .fill(.white)
-                                .frame(width: 16, height: 16)
-                                .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
-                                .padding(2)
-                        }
-                        .animation(.easeOut(duration: 0.15), value: on)
-                }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 8)
-                .frame(maxWidth: .infinity, minHeight: 44, maxHeight: .infinity)
-                .background {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Theme.cap)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.capEdge).offset(y: 2))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .opacity(isEnabled ? 1 : 0.55)
-            .accessibilityValue(on ? "on" : "off")
-            .accessibilityAddTraits(.isToggle)
         }
     }
 }
