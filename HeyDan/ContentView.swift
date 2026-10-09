@@ -378,17 +378,17 @@ struct ContentView: View {
                 Image(systemName: "chevron.down").font(.caption2)
             }
             .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(modeDisabled ? Theme.muted : Theme.text)
         }
         .buttonStyle(.glass)
         .frame(minWidth: 44, minHeight: 44)
         .disabled(modeDisabled)
-        .opacity(modeDisabled ? 0.5 : 1)
         .accessibilityIdentifier(AXID.controlsMode)
         .accessibilityLabel("Turn mode")
         .accessibilityValue(modeLabel)
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
 
-        Button("Voice") {
+        Button {
             guard let line = call.liveLine ?? call.line else { return }
             let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
             if showsOptions {
@@ -397,11 +397,13 @@ struct ContentView: View {
             } else {
                 voiceTarget = target
             }
+        } label: {
+            Text("Voice")
+                .foregroundStyle(call.liveLine == nil && call.line == nil ? Theme.muted : Theme.text)
         }
         .buttonStyle(.glass)
         .frame(minWidth: 44, minHeight: 44)
         .disabled(call.liveLine == nil && call.line == nil)
-        .opacity(call.liveLine == nil && call.line == nil ? 0.5 : 1)
         .accessibilityIdentifier(AXID.controlsVoice)
         .accessibilityLabel("Voice")
         .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
