@@ -4,10 +4,10 @@ import SwiftUI
 struct ContentView: View {
     @Environment(CallController.self) private var call
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var textSize
     @State private var showsSettings = false
     @State private var showsOptions = false
     @State private var voiceTarget: VoiceTarget?
+    @State private var pendingVoiceTarget: VoiceTarget?
     @State private var settingsBusy = false
     /// Right after "call" the same key reads "cancel": taps are ignored for a moment so a double tap cannot cancel.
     @State private var cancelArmed = false
@@ -45,7 +45,11 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .sheet(isPresented: $showsSettings) { SettingsView() }
-        .sheet(isPresented: $showsOptions) { optionsSheet }
+        .sheet(isPresented: $showsOptions, onDismiss: {
+            guard let target = pendingVoiceTarget else { return }
+            pendingVoiceTarget = nil
+            voiceTarget = target
+        }) { optionsSheet }
         .sheet(item: $voiceTarget) { target in
             VoicePickerSheet(line: target.line, agentName: target.agentName, callID: target.callID)
         }
@@ -331,13 +335,9 @@ struct ContentView: View {
     private var controls: some View {
         VStack(spacing: 4) {
             GlassEffectContainer(spacing: 8) {
-                if textSize.isAccessibilitySize {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { controlButtons }
                     VStack(spacing: 8) { controlButtons }
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) { controlButtons }
-                        VStack(spacing: 8) { controlButtons }
-                    }
                 }
             }
             .controlSize(.large)
@@ -373,7 +373,7 @@ struct ContentView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(pendingMode == nil ? (review.mode == .auto ? "Hands-free" : Review.modeName(review.mode)) : "Switching...")
+                Text(modeLabel)
                     .modifier(Breathing(active: pendingMode != nil && !reduceMotion, period: 1.4, dimmest: 0.55))
                 Image(systemName: "chevron.down").font(.caption2)
             }
@@ -382,18 +382,26 @@ struct ContentView: View {
         .buttonStyle(.glass)
         .frame(minWidth: 44, minHeight: 44)
         .disabled(modeDisabled)
+        .opacity(modeDisabled ? 0.5 : 1)
         .accessibilityIdentifier(AXID.controlsMode)
         .accessibilityLabel("Turn mode")
-        .accessibilityValue(pendingMode.map { "Switching to \(Review.modeName($0))" } ?? Review.modeName(review.mode))
+        .accessibilityValue(modeLabel)
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
 
         Button("Voice") {
             guard let line = call.liveLine ?? call.line else { return }
-            voiceTarget = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
+            let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
+            if showsOptions {
+                pendingVoiceTarget = target
+                showsOptions = false
+            } else {
+                voiceTarget = target
+            }
         }
         .buttonStyle(.glass)
         .frame(minWidth: 44, minHeight: 44)
         .disabled(call.liveLine == nil && call.line == nil)
+        .opacity(call.liveLine == nil && call.line == nil ? 0.5 : 1)
         .accessibilityIdentifier(AXID.controlsVoice)
         .accessibilityLabel("Voice")
         .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
@@ -407,6 +415,10 @@ struct ContentView: View {
     }
 
     private var pendingMode: TurnMode? { review.pending?.op == .mode ? review.pending?.to : nil }
+
+    private var modeLabel: String {
+        pendingMode == nil ? (review.mode == .auto ? "Hands-free" : Review.modeName(review.mode)) : "Switching..."
+    }
 
     private var modeDisabled: Bool {
         phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
@@ -473,7 +485,8 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { showsOptions = false }
+                    Button(role: .close) { showsOptions = false }
+                        .accessibilityLabel("Close")
                         .frame(minWidth: 44, minHeight: 44)
                 }
             }
