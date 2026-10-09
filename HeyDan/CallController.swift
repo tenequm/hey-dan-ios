@@ -153,6 +153,7 @@ final class CallController: NSObject {
         var workerWake: WakeState?
         /// The `gen` of the last RPC sent, and the newest settings request: only its outcome counts.
         var rpcGen = 0
+        var voice: LiveVoice?
         var settingsRequest = 0
         var settingsSent = false
         /// Settings RPCs sent on this call, resends included: only the first is cut short.
@@ -260,7 +261,10 @@ final class CallController: NSObject {
     /// there is no such line.
     @discardableResult
     func start(lineID: UUID? = nil) async -> UUID? {
-        guard !isCallActive else { return nil }
+        guard !isCallActive else {
+            trace(.call, "start refused: call active")
+            return nil
+        }
         let entry = if let lineID { lines.entry(lineID) } else { lines.selected }
         guard let entry else {
             // A shortcut can name a line deleted since: that is no phone without a line.
@@ -270,6 +274,8 @@ final class CallController: NSObject {
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
         call = ActiveCall(id: id, line: entry.line)
+        call?.voice = LiveVoice(callID: id)
+        liveVoice = nil
         showLine(entry)
         phase = .connecting
         transcript = Transcript()
@@ -277,6 +283,11 @@ final class CallController: NSObject {
         commandWords = .builtIn
         editReview { $0.startCall() }
         trace(.call, "claim line=\(Self.short(entry.id)) mode=\(reviewSession.pick.rawValue)")
+        #if DEBUG && targetEnvironment(simulator)
+        previewVoiceUpdate?.cancel()
+        previewVoiceUpdate = nil
+        VoiceDebug.callClaimed(id)
+        #endif
         #if DEBUG
         // Tests end every call, one the App Intent started too, this many seconds after it was claimed.
         if let seconds = ProcessInfo.processInfo.environment["HEYDAN_HANGUP_AFTER"].flatMap(Double.init) {
@@ -293,6 +304,9 @@ final class CallController: NSObject {
     }
 
     private func place(_ id: UUID, on line: VoiceLine) async {
+        await VoiceSample.stop()
+        trace(.audio, "sample stop drained", id)
+        guard call?.id == id else { return }
         // Before the microphone prompt and CallKit: with Tailscale off the token request would only fail at its timeout.
         let checking = ContinuousClock.now
         let tailnet = await Tailnet.check(host: line.host)
@@ -575,6 +589,7 @@ final class CallController: NSObject {
             trace(.room, "worker is updating", level: .error)
             return finish(call.id, .failure(.updating), endedBy: .failed, hostReason: .updating)
         }
+        refreshVoice(attributes, names: names, for: call.id)
         refreshCommandWords(attributes, names: names, for: call.id)
         refreshCommands(attributes, names: names, for: call)
         guard let activity = names.activity(attributes) else { return }
@@ -619,6 +634,10 @@ final class CallController: NSObject {
         for event in call?.streams.drain() ?? [] { apply(event, for: id) }
         guard let ended = call else { return }
         call = nil
+        liveVoice = nil
+        #if DEBUG && targetEnvironment(simulator)
+        VoiceDebug.callEnded(id)
+        #endif
         appMuteActions.removeAll()
         ended.connectTask?.cancel()
         ended.agentTimer?.cancel()
@@ -1087,7 +1106,7 @@ extension CallController {
     /// the worker's ack within `ackTimeout` (LiveKit's default unless given) the request fails.
     @discardableResult
     private func workerRPC(
-        _ method: String, payload: String, ackTimeout: TimeInterval = VoiceProtocol.rpcAckTimeout, for id: UUID
+        _ method: String, payload: String, ackTimeout: TimeInterval = VoiceProtocol.rpcAckTimeout, traceResult: Bool = true, for id: UUID
     ) async -> ReviewReply? {
         guard call?.id == id, let room = call?.room,
               let agent = room.remoteParticipants.values.first(where: \.isAgent)?.identity
@@ -1099,13 +1118,17 @@ extension CallController {
                 maxRoundTripLatency: ackTimeout
             )
             let reply = ReviewReply(payload: raw)
-            trace(
-                .rpc, "\(method) ok=\(reply?.ok ?? false) gen=\(reply?.gen ?? -1) error=\(reply?.error ?? "-") ms=\(CallLog.ms(since: asked))", id,
-                level: reply?.ok == true ? .default : .error
-            )
+            if traceResult {
+                trace(
+                    .rpc, "\(method) ok=\(reply?.ok ?? false) gen=\(reply?.gen ?? -1) error=\(reply?.error ?? "-") ms=\(CallLog.ms(since: asked))", id,
+                    level: reply?.ok == true ? .default : .error
+                )
+            }
             return call?.id == id ? reply : nil
         } catch {
-            trace(.rpc, "\(method) failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
+            if traceResult {
+                trace(.rpc, "\(method) failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
+            }
             return nil
         }
     }
@@ -1396,6 +1419,9 @@ extension CallController: CXProviderDelegate {
     }
 
     private func audioActivated(by activator: String) {
+        #if DEBUG && targetEnvironment(simulator)
+        VoiceDebug.sampleDrained = VoiceSample.isIdle
+        #endif
         trace(.callkit, "audio session activated by=\(activator)")
         call?.activationTimer?.cancel()
         setEngine(.default)
@@ -1453,10 +1479,17 @@ extension CallController: RoomDelegate {
         Task { @MainActor in if room === call?.room { trace(.room, "reconnect start mode=\(reconnectMode)") } }
     }
 
+    #endif
+
     nonisolated func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
-        Task { @MainActor in if room === call?.room { trace(.room, "reconnect done mode=\(reconnectMode)") } }
+        Task { @MainActor in
+            guard room === call?.room else { return }
+            trace(.room, "reconnect done mode=\(reconnectMode)")
+            refresh()
+        }
     }
 
+    #if DEBUG
     nonisolated func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         guard participant.isAgent, let track = publication.track as? RemoteAudioTrack else { return }
         let sid = publication.sid.stringValue
@@ -1490,10 +1523,16 @@ extension CallController: RoomDelegate {
     private static func attributeSummary(_ current: [String: String], changed: [String: String], names: VoiceProtocol.Names) -> String {
         let keys = [
             VoiceProtocol.agentStateAttribute, names.thinkingAttribute, names.updatingAttribute, names.commandsAttribute,
-            names.reviewAttribute, names.protocolAttribute,
+            names.reviewAttribute, names.protocolAttribute, names.voiceAttribute,
         ].compactMap(\.self)
         func name(_ key: String) -> Substring { key.split(separator: ".").last ?? "" }
-        let values = keys.map { "\(name($0))=\(current[$0] ?? "-")" }.joined(separator: " ")
+        let values = keys.map { key in
+            if key == names.voiceAttribute {
+                guard let voice = current[key].flatMap(CallVoiceState.init(attribute:)) else { return "voice=-" }
+                return "voice=gen:\(voice.gen ?? -1),active:\(voice.active.provider)/\(voice.active.model ?? "-")/\(voice.active.voice ?? "-"),pending:\(voice.pending?.provider ?? "-")/\(voice.pending?.model ?? "-")/\(voice.pending?.voice ?? "-")"
+            }
+            return "\(name(key))=\(current[key] ?? "-")"
+        }.joined(separator: " ")
         let changedKeys = keys.filter { changed[$0] != nil }.map(name).joined(separator: ",")
         return "\(values) changed=[\(changedKeys)]"
     }
@@ -1719,6 +1758,37 @@ extension CallController {
             return .queued(gen: 8)
         }
         #endif
-        return .unsupported
+        guard call?.id == id else { return .over }
+        guard liveVoice != nil, let method = call?.names?.settingsMethod else { return .unsupported }
+        guard call?.voice?.inFlight == false else { return .unconfirmed }
+        guard let gen = nextRPCGen(for: id), call?.voice?.begin(choice, gen: gen, for: id) == true else { return .unsupported }
+        let reply = await workerRPC(method, payload: VoiceRequest(gen: gen, tts: choice).payload, traceResult: false, for: id)
+        guard call?.id == id else { return .over }
+        if let reply, reply.gen == gen {
+            call?.voice?.apply(reply: reply, for: id)
+        } else {
+            call?.voice?.timeout(gen: gen, for: id)
+        }
+        refresh()
+        guard call?.id == id else { return .over }
+        let outcome = call?.voice?.outcome ?? .unconfirmed
+        let label: String
+        switch outcome {
+        case .queued: label = "queued"
+        case let .refused(reason):
+            let code = ["tts_invalid", "tts_unavailable", "closed", "stale"].contains(reason) ? reason : "refused"
+            label = "refused(\(code))"
+        case .unconfirmed, .unsupported, .over: label = "unconfirmed"
+        }
+        trace(.rpc, "voice gen=\(gen) outcome=\(label)", id)
+        return outcome
+    }
+
+    private func refreshVoice(_ attributes: [String: String], names: VoiceProtocol.Names, for id: UUID) {
+        guard call?.id == id else { return }
+        let attribute = names.voiceAttribute.flatMap { attributes[$0] }
+        call?.voice?.apply(attribute: attribute, for: id)
+        let state = call?.voice?.state
+        if liveVoice != state { liveVoice = state }
     }
 }
