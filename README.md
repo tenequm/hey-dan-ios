@@ -71,10 +71,9 @@ Owner-specific values stay out of git; copy the examples and fill them in:
 - `Local.xcconfig` (from `Local.xcconfig.example`): `HEYDAN_BUNDLE_ID` and `DEVELOPMENT_TEAM`, read by
   `Config.xcconfig` for every target and by the recipes. Without it the bundle ID is `com.example.HeyDan`
   and there is no team.
-- `.env.local` (from `.env.local.example`, loaded by `just`): the test line for Simulator calls
-  (`TEST_CALL_LINK`, or `NANOCLAW_SSH`/`NANOCLAW_DIR` to read it from the server), the server for
-  `just server-logs`, and `ASC_ENV_CMD`/`ASC_APP_ID` for `just testflight`. A recipe that needs an unset
-  value says which one.
+- `.env.local` (from `.env.local.example`, loaded by `just`): the test line's call link for Simulator calls
+  (`TEST_CALL_LINK`), the server for `just server-logs` (`NANOCLAW_SSH`/`NANOCLAW_DIR`), and
+  `ASC_ENV_CMD`/`ASC_APP_ID` for `just testflight`. A recipe that needs an unset value says which one.
 - `local.just` (optional): your own recipes or aliases, imported by the `justfile`.
 
 ## Setup

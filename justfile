@@ -23,21 +23,13 @@ sim_name := env("HEYDAN_SIM", "Hey Dan iPhone")
 sim_build := env("HEYDAN_DERIVED_DATA", "build")
 # The test line's call link on stdout, for `link=$(just _test-link)` only: the link travels by env, never printed.
 # Test calls belong on a test line, never your main agent's: a test turn keeps that agent busy on your own calls.
-# TEST_CALL_LINK is the link itself; otherwise it is read from the server's nanoclaw .env over ssh
-# (NANOCLAW_SSH, NANOCLAW_DIR): VOICE_PUBLIC_URL and the TEST_CALL_LINE-th (1-based) VOICE_LINK_TOKEN, or their
-# protocol 6 names VOICE_MODE_PUBLIC_URL and VOICE_MODE_LINK_TOKEN.
+# TEST_CALL_LINK in .env.local is the link itself.
 [private]
 _test-link:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "${TEST_CALL_LINK:-}" ]; then printf '%s' "$TEST_CALL_LINK"; exit 0; fi
-    if [ -z "${NANOCLAW_SSH:-}" ]; then
-        echo "no test line: set TEST_CALL_LINK, or NANOCLAW_SSH and NANOCLAW_DIR, in .env.local (see .env.local.example)" >&2
-        exit 1
-    fi
-    ssh "$NANOCLAW_SSH" bash -s -- "${NANOCLAW_DIR:-~/nanoclaw}" "${TEST_CALL_LINE:-1}" <<'SH'
-    cd "${1/#\~/$HOME}" && awk -F= -v n="$2" '/^VOICE_(MODE_)?PUBLIC_URL=/{u=$2} /^VOICE_(MODE_)?LINK_TOKEN=/{split($2,a,","); t=a[n]} END{if (u != "" && t != "") printf "%s/voice?t=%s", u, t}' .env
-    SH
+    [ -n "${TEST_CALL_LINK:-}" ] || { echo "no test line: set TEST_CALL_LINK in .env.local (see .env.local.example)" >&2; exit 1; }
+    printf '%s' "$TEST_CALL_LINK"
 
 # Build, install and launch in the Simulator with the test line's call link; calls go through CallKit as on the phone.
 sim: gen
@@ -51,7 +43,6 @@ sim: gen
     xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
     xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
     link=$(just _test-link)
-    [ -n "$link" ] || { echo "no call link for the test line (empty VOICE_PUBLIC_URL or token on the server?)" >&2; exit 1; }
     # Every HEYDAN_* variable set for the recipe reaches the app: the DEBUG hooks in HeyDanApp.swift read them.
     for name in $(compgen -e | grep '^HEYDAN_' || true); do export "SIMCTL_CHILD_$name=${!name}"; done
     SIMCTL_CHILD_HEYDAN_CALL_LINK="$link" xcrun simctl launch --terminate-running-process "$udid" {{bundle_id}}
@@ -220,7 +211,6 @@ sim-checks check="LiveActivityOnLockScreen": gen
     [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
     xcrun simctl bootstatus "$udid" -b >/dev/null
     link=$(just _test-link)
-    [ -n "$link" ] || { echo "no call link for the test line (empty VOICE_PUBLIC_URL or token on the server?)" >&2; exit 1; }
     results=$(mktemp -d)
     trap '[ -n "$results" ] && rm -rf -- "$results"' EXIT
     mkdir -p build/checks
