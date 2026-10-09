@@ -306,6 +306,7 @@ final class HeyDanChecks: XCTestCase {
             samples.count > 0 && samples.matching(NSPredicate(format: "enabled == true")).count == 0
         }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: disabled, object: nil)], timeout: remaining(2, since: sampledAt)), .completed)
+        acceptCallOpenAlert()
         XCTAssertTrue(element(ID.pickerSearch).exists)
         shot("sample-call-claimed")
         // The medium detent exposes the background accessibility tree without dismissing the catalog.
@@ -338,9 +339,18 @@ final class HeyDanChecks: XCTestCase {
         if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
         XCTAssertTrue(element(ID.keysCall).waitForExistence(timeout: 5))
         element(ID.keysCall).tap()
+        acceptCallOpenAlert()
         try await Task.sleep(for: .seconds(45))
         assertCallKey("Call again", timeout: 5)
         shot("sample-dismiss-call-ended")
+    }
+
+    private func acceptCallOpenAlert() {
+        let open = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Open"].firstMatch
+        if open.waitForExistence(timeout: 5) {
+            open.tap()
+            app.activate()
+        }
     }
 
     private enum ID {
