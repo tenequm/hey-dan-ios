@@ -1467,6 +1467,7 @@ private struct SettingsView: View {
     /// The line whose host is being asked who answers.
     @State private var naming: UUID?
     @State private var deleting: VoiceLines.Entry?
+    @State private var voiceLine: VoiceLines.Entry?
 
     private enum Note: Equatable {
         case invalid, notSaved, unreadable, asking
@@ -1503,8 +1504,7 @@ private struct SettingsView: View {
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .confirmationDialog(
-            "Delete the line to \(deleting?.name ?? "")?", isPresented: deletingBinding, titleVisibility: .visible,
-            presenting: deleting
+            "Delete the line to \(deleting?.name ?? "")?", item: $deleting, titleVisibility: .visible
         ) { entry in
             Button("Delete", role: .destructive) {
                 call.removeLine(entry.id)
@@ -1512,6 +1512,9 @@ private struct SettingsView: View {
             }
         } message: { _ in
             Text("Its call link leaves this phone. Shortcuts that call this line stop working.")
+        }
+        .sheet(item: $voiceLine) { entry in
+            VoicePickerSheet(line: entry.line, agentName: entry.name, callID: nil)
         }
     }
 
@@ -1567,10 +1570,19 @@ private struct SettingsView: View {
             .accessibilityLabel("\(entry.name), \(entry.line.host)")
             .accessibilityAddTraits(picked ? .isSelected : [])
             .accessibilityHint(picked ? "" : "Makes this the line the Action Button calls.")
-            iconButton("arrow.clockwise", label: "Ask \(entry.line.host) who answers") { ask(entry) }
-                .disabled(naming != nil)
-                .opacity(naming == entry.id ? 0.4 : 1)
-            iconButton("trash", label: "Delete the line to \(entry.name)") { deleting = entry }
+            Menu {
+                Button("Voice...", systemImage: "waveform") { voiceLine = entry }
+                Button("Ask who answers", systemImage: "arrow.clockwise") { ask(entry) }
+                    .disabled(naming != nil)
+                Button("Delete...", systemImage: "trash", role: .destructive) { deleting = entry }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.muted.opacity(naming == entry.id ? 0.4 : 1))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Actions for \(entry.name)")
         }
         .padding(.leading, 12)
         .padding(.trailing, 2)
@@ -1580,15 +1592,6 @@ private struct SettingsView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(picked ? Theme.orange.opacity(0.55) : Theme.border, lineWidth: 1)
         )
-    }
-
-    private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(label, systemImage: symbol, action: action)
-            .labelStyle(.iconOnly)
-            .font(.system(size: 15))
-            .foregroundStyle(Theme.muted)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
     }
 
     // MARK: Add
@@ -1651,10 +1654,6 @@ private struct SettingsView: View {
             .font(Theme.mono(11))
             .spacing(0.06, size: 11)
             .foregroundStyle(Theme.muted)
-    }
-
-    private var deletingBinding: Binding<Bool> {
-        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
     }
 
     private func add() {
