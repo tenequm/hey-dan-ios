@@ -167,7 +167,9 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
 
     public var message: String {
         switch self {
-        case let .invalid(field): "The selected \(field) is not valid. Choose another and try again."
+        case let .invalid(field) where ["provider", "model", "voice"].contains(field):
+            "The selected \(field) is not valid. Choose another and try again."
+        case .invalid: "The selected voice setting is not valid. Choose another and try again."
         case .providerUnavailable: "That voice provider is not configured on the server. Choose another provider."
         case .badRequest: "The voice line could not understand this request."
         case .upstream: "The voice provider could not load the catalog. Try again."
@@ -184,11 +186,24 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
         let error: String
         let field: String?
         let provider: String?
+
+        private enum CodingKeys: String, CodingKey { case error, field, provider }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            error = try container.decode(String.self, forKey: .error)
+            field = try? container.decode(String.self, forKey: .field)
+            provider = try? container.decode(String.self, forKey: .provider)
+        }
     }
 }
 
 public extension VoiceLine {
-    var ttsRequest: URLRequest { URLRequest(url: endpoint("tts")) }
+    var ttsRequest: URLRequest {
+        var components = URLComponents(url: endpoint("tts"), resolvingAgainstBaseURL: false)!
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return URLRequest(url: components.url!)
+    }
 
     func ttsPatchRequest(_ patch: TTSPatch) throws(TTSPatchError) -> URLRequest {
         let body = Data(rpcPayload(patch).utf8)
@@ -205,10 +220,20 @@ public extension VoiceLine {
         var query = components.queryItems ?? []
         query.append(URLQueryItem(name: "provider", value: provider))
         for (name, value) in [("q", q), ("language", language), ("cursor", cursor)] {
-            if let value { query.append(URLQueryItem(name: name, value: String(value.prefix(512)))) }
+            if let value {
+                var utf16Length = 0
+                let scalars = value.unicodeScalars.prefix { scalar in
+                    let length = scalar.value > 0xFFFF ? 2 : 1
+                    guard utf16Length + length <= 512 else { return false }
+                    utf16Length += length
+                    return true
+                }
+                query.append(URLQueryItem(name: name, value: String(String.UnicodeScalarView(scalars))))
+            }
         }
         query.append(URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))))
         components.queryItems = query
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return URLRequest(url: components.url!)
     }
 }
