@@ -29,6 +29,7 @@ public extension VoiceProtocol {
         public let updatingAttribute: String
         /// The protocol the worker speaks; nil on 4, which set none.
         public let protocolAttribute: String?
+        public let voiceAttribute: String?
         /// `TurnMessage`s: what became of each caller turn, words the worker dropped, speech it did not hear.
         public let turnTopic: String
         /// One `ReplyInfo` right before each line the worker speaks, and again after one it could not.
@@ -59,6 +60,7 @@ public extension VoiceProtocol {
             thinkingAttribute = "\(prefix).thinking"
             updatingAttribute = "\(prefix).updating"
             protocolAttribute = version == 4 ? nil : "\(prefix).protocol"
+            voiceAttribute = version == 4 ? nil : "\(prefix).voice"
             turnTopic = "\(prefix).turn"
             replyTopic = "\(prefix).reply"
             reviewTopic = "\(prefix).review"
@@ -536,7 +538,7 @@ public struct ReviewRequest: Encodable, Sendable, Equatable {
 }
 
 /// An RPC payload as the worker reads it: JSON with sorted keys.
-private func rpcPayload(_ request: some Encodable) -> String {
+internal func rpcPayload(_ request: some Encodable) -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
     return String(decoding: (try? encoder.encode(request)) ?? Data("{}".utf8), as: UTF8.self)
