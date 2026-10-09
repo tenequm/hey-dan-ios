@@ -86,6 +86,15 @@ final class CallController: NSObject {
     /// re-renders only the draft. Both follow `reviewSession`.
     private(set) var review = ReviewSession(pick: TurnModeStore.load()).review
     private(set) var draftWords = ""
+    private(set) var liveVoice: CallVoiceState?
+
+    #if DEBUG && targetEnvironment(simulator)
+    private enum PreviewVoice: String { case pending, active, ended, refused }
+    private var previewVoice: PreviewVoice?
+    private var previewVoiceUpdate: Task<Void, Never>?
+    private static let previewVoiceCallID = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
+    private static let previewVoiceAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_turbo_v2_5","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
+    #endif
 
     var isCallActive: Bool {
         switch phase {
@@ -201,6 +210,13 @@ final class CallController: NSObject {
         }
         #endif
         #if DEBUG && targetEnvironment(simulator)
+        if let scenario = env["HEYDAN_PREVIEW_VOICE"].flatMap(PreviewVoice.init(rawValue:)),
+           let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
+            previewVoice = scenario
+            liveVoice = scenario == .active
+                ? CallVoiceState(active: state.pending ?? state.active, gen: state.gen)
+                : state
+        }
         // `just sim` hands the call link in at launch: the Simulator's pasteboard does not take a CLI copy.
         if let link = env["HEYDAN_CALL_LINK"] { saveCallLink(link) }
         // Screenshots: fake lines named for the agents listed, never a real link; the first listed is picked.
@@ -1670,5 +1686,39 @@ private enum LineStore {
     private static func delete(_ account: String) {
         let status = SecItemDelete(query(account) as CFDictionary)
         CallLog.log(.store, "keychain delete \(account) status=\(status)", level: status == errSecSuccess ? .default : .error)
+    }
+}
+
+// MARK: - Live voice
+
+extension CallController {
+    var liveLine: VoiceLine? { call?.line }
+
+    var liveCallID: UUID? {
+        #if DEBUG && targetEnvironment(simulator)
+        if let previewVoice { return previewVoice == .ended ? nil : Self.previewVoiceCallID }
+        #endif
+        return call?.id
+    }
+
+    func requestVoice(_ choice: TTSChoice, for id: UUID) async -> VoiceRequestOutcome {
+        #if DEBUG && targetEnvironment(simulator)
+        if let previewVoice {
+            guard previewVoice != .ended, id == liveCallID else { return .over }
+            if previewVoice == .refused { return .refused(reason: "tts_invalid") }
+            previewVoiceUpdate?.cancel()
+            if let state = liveVoice {
+                liveVoice = CallVoiceState(active: state.active, pending: choice, gen: 8)
+            }
+            previewVoiceUpdate = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard let self, liveCallID == id else { return }
+                liveVoice = CallVoiceState(active: choice, gen: 8)
+                previewVoiceUpdate = nil
+            }
+            return .queued(gen: 8)
+        }
+        #endif
+        return .unsupported
     }
 }
