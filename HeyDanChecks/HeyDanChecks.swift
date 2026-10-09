@@ -294,18 +294,26 @@ final class HeyDanChecks: XCTestCase {
         shot("saves-changed")
     }
 
-    func testSampleThenCall() throws {
+    func testSampleThenCall() async throws {
         launchReal(["HEYDAN_START_ON_SAMPLE": "1", "HEYDAN_HANGUP_AFTER": "40"])
         openVoice()
         chooseElevenLabs()
         element(ID.pickerVoice).tap()
         XCTAssertTrue(samples.firstMatch.waitForExistence(timeout: 15))
         let sampledAt = Date()
-        samples.firstMatch.tap()
-        let disabled = NSPredicate { [self] _, _ in
-            samples.count > 0 && samples.matching(NSPredicate(format: "enabled == true")).count == 0
+        let firstSample = samples.firstMatch
+        firstSample.tap()
+        let disabledDeadline = Date().addingTimeInterval(2)
+        let enabledSamples = samples.matching(NSPredicate(format: "enabled == true"))
+        var allDisabled = false
+        while Date() < disabledDeadline {
+            if !firstSample.isEnabled && enabledSamples.count == 0 {
+                allDisabled = Date() <= disabledDeadline
+                break
+            }
+            try await Task.sleep(for: .seconds(min(0.1, max(0, disabledDeadline.timeIntervalSinceNow))))
         }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: disabled, object: nil)], timeout: remaining(2, since: sampledAt)), .completed)
+        XCTAssertTrue(allDisabled, "Every picker.sample.* button must be disabled within 2 s of the sample tap returning")
         acceptCallOpenAlert()
         XCTAssertTrue(element(ID.pickerSearch).exists)
         shot("sample-call-claimed")
