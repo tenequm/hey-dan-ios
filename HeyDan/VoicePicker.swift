@@ -67,8 +67,11 @@ final class VoiceSettingsModel {
         saveResult = Self.results[LineKey(line)]
     }
 
-    var provider: TTSProvider? { view?.providers.first { $0.id == draft?.provider } }
+    var provider: TTSProvider? { draft.flatMap { provider($0.provider) } }
+    func provider(_ id: String) -> TTSProvider? { view?.providers.first { $0.id == id } }
     var hasChanges: Bool { draft != applied }
+    /// A draft the sheet would lose on close; one being saved is not lost, its save goes on.
+    var hasUnsavedChanges: Bool { hasChanges && !saving }
     var canSave: Bool { !invalidated && view != nil && draft != nil && hasChanges && provider?.available == true && !saving }
     var languages: [String] { Array(Set(voices.compactMap(\.language))).sorted() }
     var selectedVoice: CatalogVoice? {
@@ -79,7 +82,7 @@ final class VoiceSettingsModel {
     }
 
     func name(_ choice: TTSChoice) -> String {
-        let provider = view?.providers.first { $0.id == choice.provider }
+        let provider = provider(choice.provider)
         let id = choice.voice ?? provider?.default.voice
         let name = id.map { knownVoice(provider: choice.provider, id: $0)?.name ?? $0 } ?? "Provider default voice"
         return "\(name) (\(provider?.name ?? choice.provider))"
@@ -104,7 +107,7 @@ final class VoiceSettingsModel {
 
     func selectProvider(_ id: String) {
         guard !saving, !invalidated, id != draft?.provider else { return }
-        guard view?.providers.first(where: { $0.id == id })?.available == true else { return }
+        guard provider(id)?.available == true else { return }
         draft = TTSChoice(provider: id)
         query = ""
         language = ""
@@ -144,7 +147,9 @@ final class VoiceSettingsModel {
         revision = UUID()
         resetCatalog()
         Self.results[LineKey(line)] = nil
-        saveResult = "This line was removed or its access changed. Reopen Voice from Settings."
+        saveResult = saving
+            ? "This line was removed or its access changed. A save already sent may still apply; reopen Voice from Settings to check."
+            : "This line was removed or its access changed. Reopen Voice from Settings."
     }
 
     private func requestCatalog(cursor: String?, debounce: Bool = false) async {
@@ -190,7 +195,7 @@ final class VoiceSettingsModel {
                 guard !invalidated else { return }
                 adopt(loaded, replaceDraft: true)
                 saveResult = reset ? "Saved voice reset to server default" : "Saved for next calls"
-                if !reset && !CallController.shared.isCallActive { saveSuccess += 1 }
+                if !reset { saveSuccess += 1 }
             } catch {
                 guard !invalidated else { return }
                 let failed = failure(error)
@@ -212,7 +217,7 @@ final class VoiceSettingsModel {
                             saveFailure = nil
                             applied = self.draft
                             if reset { adopt(loaded, replaceDraft: true) }
-                            if !reset && !CallController.shared.isCallActive { saveSuccess += 1 }
+                            if !reset { saveSuccess += 1 }
                         }
                     } catch {
                         guard !invalidated else { return }
@@ -256,11 +261,11 @@ final class VoiceSettingsModel {
             guard generation == catalogGeneration, key == catalogKey, !Task.isCancelled else { return }
             guard page.provider == provider else { throw TTSServiceFailure.malformed }
             if let cursor { usedCursors.insert(cursor) }
-            var seen = Set(voices.map { voiceKey(provider, $0.id) })
+            var seen = Set(voices.map { VoiceKey(provider: provider, id: $0.id) })
             for voice in page.voices {
-                let key = voiceKey(provider, voice.id)
-                knownVoices[key] = voice
-                if seen.insert(key).inserted { voices.append(voice) }
+                let entry = VoiceKey(provider: provider, id: voice.id)
+                knownVoices[entry] = voice
+                if seen.insert(entry).inserted { voices.append(voice) }
             }
             next = page.next.flatMap { usedCursors.contains($0) ? nil : $0 }
             catalogFailure = nil
@@ -272,12 +277,10 @@ final class VoiceSettingsModel {
     }
 
     private func knownVoice(provider: String, id: String) -> CatalogVoice? {
-        knownVoices[voiceKey(provider, id)] ?? knownVoices.first {
+        knownVoices[VoiceKey(provider: provider, id: id)] ?? knownVoices.first {
             $0.key.provider == provider && $0.value.id.caseInsensitiveCompare(id) == .orderedSame
         }?.value
     }
-
-    private func voiceKey(_ provider: String, _ id: String) -> VoiceKey { VoiceKey(provider: provider, id: id) }
 
     private func fetch<Value: Decodable>(_ input: URLRequest) async throws -> Value {
         var request = input
@@ -468,7 +471,7 @@ struct VoicePickerSheet: View {
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-        .dismissalConfirmationDialog("Discard voice changes?", shouldPresent: model.hasChanges) {
+        .dismissalConfirmationDialog("Discard voice changes?", shouldPresent: model.hasUnsavedChanges) {
             Button("Discard changes", role: .destructive) { dismiss() }
         }
         .confirmationDialog("Discard voice changes?", isPresented: $closing, titleVisibility: .visible) {
@@ -486,12 +489,6 @@ struct VoicePickerSheet: View {
         .onDisappear { model.cancelCatalog(); VoiceSample.release(sample) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { VoiceSample.release(sample) } }
         .onChange(of: call.isCallActive) { _, active in if active { VoiceSample.release(sample) } }
-        .onChange(of: line) { _, newLine in
-            if newLine != model.line {
-                model.invalidate()
-                VoiceSample.release(sample)
-            }
-        }
         .onChange(of: call.lines) { _, lines in
             if let storedLineID, lines.entry(storedLineID)?.line != model.line {
                 model.invalidate()
@@ -585,7 +582,7 @@ struct VoicePickerSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Close") { if model.hasChanges { closing = true } else { dismiss() } }
+                Button("Close") { if model.hasUnsavedChanges { closing = true } else { dismiss() } }
                     .accessibilityIdentifier(AXID.pickerClose)
             }
             ToolbarOverflowMenu {
@@ -652,7 +649,8 @@ struct VoicePickerSheet: View {
                 }
             }
             Section {
-                ForEach(model.voices.filter { $0.id.lowercased() != model.selectedVoice?.id.lowercased() }, id: \.id) { catalogRow($0) }
+                let selectedID = model.selectedVoice?.id.lowercased()
+                ForEach(model.voices.filter { $0.id.lowercased() != selectedID }, id: \.id) { catalogRow($0) }
                 if model.catalogLoading { ProgressView("Loading voices") }
                 if let failure = model.catalogFailure {
                     ContentUnavailableView {
@@ -745,8 +743,8 @@ struct VoicePickerSheet: View {
 
     private func updateLiveResult() {
         guard callID == call.liveCallID, let choice = queuedChoice, let state = call.liveVoice else { return }
-        let expectedModel = choice.model ?? model.view?.providers.first { $0.id == choice.provider }?.default.model
-        let expectedVoice = choice.voice ?? model.view?.providers.first { $0.id == choice.provider }?.default.voice
+        let expectedModel = choice.model ?? model.provider(choice.provider)?.default.model
+        let expectedVoice = choice.voice ?? model.provider(choice.provider)?.default.voice
         if state.pending == nil, state.active.provider == choice.provider,
            state.active.model == expectedModel || state.active.model == choice.model,
            state.active.voice == expectedVoice || state.active.voice == choice.voice {
