@@ -154,13 +154,7 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
     }
 
     public init(transportError error: any Error) {
-        let unreachable: [URLError.Code] = [
-            .timedOut, .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet,
-            .dnsLookupFailed, .secureConnectionFailed,
-        ]
-        if let error = error as? URLError, unreachable.contains(error.code) {
-            self = .unreachable
-        } else {
+        if case .unreachable = CallFailure(transportError: error) { self = .unreachable } else {
             self = .transport(error.localizedDescription)
         }
     }
@@ -200,9 +194,7 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
 
 public extension VoiceLine {
     var ttsRequest: URLRequest {
-        var components = URLComponents(url: endpoint("tts"), resolvingAgainstBaseURL: false)!
-        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        return URLRequest(url: components.url!)
+        URLRequest(url: Self.escapingPlus(URLComponents(url: endpoint("tts"), resolvingAgainstBaseURL: false)!))
     }
 
     func ttsPatchRequest(_ patch: TTSPatch) throws(TTSPatchError) -> URLRequest {
@@ -233,7 +225,13 @@ public extension VoiceLine {
         }
         query.append(URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))))
         components.queryItems = query
+        return URLRequest(url: Self.escapingPlus(components))
+    }
+
+    /// URLComponents leaves a literal `+` raw, and the host's URLSearchParams reads a raw `+` as a space.
+    private static func escapingPlus(_ components: URLComponents) -> URL {
+        var components = components
         components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        return URLRequest(url: components.url!)
+        return components.url!
     }
 }
