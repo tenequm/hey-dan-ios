@@ -9,6 +9,8 @@ final class HeyDanChecks: XCTestCase {
     nonisolated private static let appID = String(Bundle(for: HeyDanChecks.self).bundleIdentifier!.dropLast(".Checks".count))
     private let app = XCUIApplication(bundleIdentifier: HeyDanChecks.appID)
     private let env = ProcessInfo.processInfo.environment
+    /// Hooks that start calls or change the line's saved voice: a check passes them itself, never inherits them.
+    private static let scriptedEnv: Set = ["HEYDAN_AUTOCALL", "HEYDAN_START_ON_SAMPLE", "HEYDAN_TTS_PATCH", "HEYDAN_VOICE_STEPS"]
 
     /// A stand-in call's Live Activity in the Dynamic Island (expanded by the sample's alert), then on the Lock Screen,
     /// with the system's "Allow Live Activities from Hey Dan?" choice under it when it asks.
@@ -405,8 +407,7 @@ final class HeyDanChecks: XCTestCase {
 
     private func fixture(_ scenario: String, voice: String = "", phase: String = "waiting") {
         app.terminate()
-        launch(["HEYDAN_PREVIEW_TTS": scenario, "HEYDAN_PREVIEW_VOICE": voice, "HEYDAN_PREVIEW_PHASE": phase],
-               excluding: ["HEYDAN_AUTOCALL", "HEYDAN_START_ON_SAMPLE", "HEYDAN_TTS_PATCH", "HEYDAN_VOICE_STEPS"])
+        launch(["HEYDAN_PREVIEW_TTS": scenario, "HEYDAN_PREVIEW_VOICE": voice, "HEYDAN_PREVIEW_PHASE": phase])
     }
 
     private func openVoice(loaded: Bool = true) {
@@ -434,14 +435,13 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private func launchReal(_ extra: [String: String] = [:]) {
-        let excluded: Set = ["HEYDAN_AUTOCALL", "HEYDAN_START_ON_SAMPLE", "HEYDAN_TTS_PATCH", "HEYDAN_VOICE_STEPS"]
-        launch(extra, excluding: Set(env.keys.filter { $0.hasPrefix("HEYDAN_PREVIEW_") }).union(excluded))
+        launch(extra, excluding: Set(env.keys.filter { $0.hasPrefix("HEYDAN_PREVIEW_") }))
     }
 
     /// The call link never goes through here: `just sim-checks` seeds it into the Simulator's keychain, and a result
     /// bundle records every launch environment.
     private func launch(_ extra: [String: String] = [:], excluding: Set<String> = []) {
-        let withheld: Set = ["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK"]
+        let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK"])
         app.launchEnvironment = env.filter { $0.key.hasPrefix("HEYDAN_") && !withheld.contains($0.key) && !excluding.contains($0.key) }
             .merging(extra) { $1 }
         app.launch()
