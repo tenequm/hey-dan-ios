@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(CallController.self) private var call
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsSettings = false
     @State private var showsOptions = false
     @State private var voiceTarget: VoiceTarget?
@@ -365,7 +364,7 @@ struct ContentView: View {
                     LabeledContent {
                         Text(modeCaption(mode)).lineLimit(1)
                     } label: {
-                        Text(mode == .auto ? "Hands-free" : Review.modeName(mode))
+                        Text(modeTitle(mode))
                     }
                     .tag(mode)
                     .disabled(mode == .review && !review.available && review.mode != .review)
@@ -374,7 +373,7 @@ struct ContentView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(modeLabel)
-                    .modifier(Breathing(active: pendingMode != nil && !reduceMotion, period: 1.4, dimmest: 0.55))
+                    .modifier(Breathing(active: pendingMode != nil, period: 1.4, dimmest: 0.55))
                 Image(systemName: "chevron.down").font(.caption2)
             }
             .fixedSize(horizontal: true, vertical: false)
@@ -389,7 +388,7 @@ struct ContentView: View {
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
 
         Button {
-            guard let line = call.liveLine ?? call.line else { return }
+            guard let line = voiceLine else { return }
             let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
             if showsOptions {
                 pendingVoiceTarget = target
@@ -399,11 +398,11 @@ struct ContentView: View {
             }
         } label: {
             Text("Voice")
-                .foregroundStyle(call.liveLine == nil && call.line == nil ? Theme.muted : Theme.text)
+                .foregroundStyle(voiceLine == nil ? Theme.muted : Theme.text)
         }
         .buttonStyle(.glass)
         .frame(minWidth: 44, minHeight: 44)
-        .disabled(call.liveLine == nil && call.line == nil)
+        .disabled(voiceLine == nil)
         .accessibilityIdentifier(AXID.controlsVoice)
         .accessibilityLabel("Voice")
         .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
@@ -419,8 +418,15 @@ struct ContentView: View {
     private var pendingMode: TurnMode? { review.pending?.op == .mode ? review.pending?.to : nil }
 
     private var modeLabel: String {
-        pendingMode == nil ? (review.mode == .auto ? "Hands-free" : Review.modeName(review.mode)) : "Switching..."
+        pendingMode == nil ? modeTitle(review.mode) : "Switching..."
     }
+
+    /// The control row capitalizes hands-free, which `Review.modeName` writes lowercase.
+    private func modeTitle(_ mode: TurnMode) -> String { mode == .auto ? "Hands-free" : Review.modeName(mode) }
+
+    /// The line the screen is about, as the Call key and the agent name: after a call to another line ends, that
+    /// line stays shown until the pick changes.
+    private var voiceLine: VoiceLine? { call.liveLine ?? call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line }
 
     private var modeDisabled: Bool {
         phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
