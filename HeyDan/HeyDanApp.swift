@@ -22,9 +22,6 @@ struct HeyDanApp: App {
         SimulatorICE.gatherOnAnyAddress()
         #endif
         CallLog.log(.call, "launch")
-        #if DEBUG && targetEnvironment(simulator)
-        CallLog.log(.call, "a11y reduceMotion=\(UIAccessibility.isReduceMotionEnabled) contentSize=\(UIApplication.shared.preferredContentSizeCategory.rawValue)")
-        #endif
     }
 
     var body: some Scene {
@@ -50,9 +47,11 @@ extension HeyDanApp {
         let env = ProcessInfo.processInfo.environment
         #if targetEnvironment(simulator)
         let launched = ContinuousClock.now
+        // Read here, not in App.init: before a scene connects the content size category is still unspecified.
+        CallLog.log(.call, "a11y reduceMotion=\(UIAccessibility.isReduceMotionEnabled) contentSize=\(UIApplication.shared.preferredContentSizeCategory.rawValue)")
         if env["HEYDAN_START_ON_SAMPLE"] == "1" { VoiceDebug.installSampleStart() }
-        if let patch = env["HEYDAN_TTS_PATCH"] { await VoiceDebug.patch(patch) }
-        if let steps = env["HEYDAN_VOICE_STEPS"] { VoiceDebug.schedule(steps, launched: launched) }
+        if let patch = env["HEYDAN_TTS_PATCH"], !patch.isEmpty { await VoiceDebug.patch(patch) }
+        if let steps = env["HEYDAN_VOICE_STEPS"], !steps.isEmpty { VoiceDebug.schedule(steps, launched: launched) }
         #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
         guard env["HEYDAN_AUTOCALL"] == "1" else { return }
@@ -173,7 +172,12 @@ enum VoiceDebug {
                 })
             }
             Task {
+                let deadline = ContinuousClock.now + .seconds(2)
                 while !(sampleOwner != nil && refused > 0) && returned < 2 {
+                    guard ContinuousClock.now < deadline else {
+                        CallLog.log(.audio, "sample barrier released at deadline", level: .error)
+                        break
+                    }
                     await Task.yield()
                 }
                 released = true
@@ -195,12 +199,12 @@ enum VoiceDebug {
         voiceFeedTimer?.cancel()
         guard sampleOwner == id else { return }
         Task {
-            var accepted = 0
-            var refused = 0
+            var acceptedStarts = 0
+            var refusedStarts = 0
             for start in starts {
-                if await start.value == nil { refused += 1 } else { accepted += 1 }
+                if await start.value == nil { refusedStarts += 1 } else { acceptedStarts += 1 }
             }
-            CallController.shared.trace(.audio, "sample start accepted=\(accepted) refused=\(refused) drained=\(sampleDrained) late=\(VoiceSample.deactivationsAfterHandoff)", id)
+            CallController.shared.trace(.audio, "sample start accepted=\(acceptedStarts) refused=\(refusedStarts) drained=\(sampleDrained) late=\(VoiceSample.deactivationsAfterHandoff)", id)
             starts.removeAll()
         }
     }
@@ -218,7 +222,7 @@ enum VoiceDebug {
             return CallLog.log(.net, "tts patch status=0")
         }
         guard let input = try? JSONDecoder().decode(Input.self, from: Data(json.utf8)), input.reset == true || input.provider != nil else {
-            return CallLog.log(.net, "tts patch status=400")
+            return CallLog.log(.net, "tts patch status=0")
         }
         let patch: TTSPatch = input.reset == true ? .reset : .choice(TTSChoice(provider: input.provider ?? "", model: input.model, voice: input.voice))
         let request: URLRequest

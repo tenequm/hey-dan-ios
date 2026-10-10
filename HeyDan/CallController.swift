@@ -1106,7 +1106,7 @@ extension CallController {
     /// the worker's ack within `ackTimeout` (LiveKit's default unless given) the request fails.
     @discardableResult
     private func workerRPC(
-        _ method: String, payload: String, ackTimeout: TimeInterval = VoiceProtocol.rpcAckTimeout, traceResult: Bool = true, for id: UUID
+        _ method: String, payload: String, ackTimeout: TimeInterval = VoiceProtocol.rpcAckTimeout, traceReply: Bool = true, for id: UUID
     ) async -> ReviewReply? {
         guard call?.id == id, let room = call?.room,
               let agent = room.remoteParticipants.values.first(where: \.isAgent)?.identity
@@ -1118,7 +1118,7 @@ extension CallController {
                 maxRoundTripLatency: ackTimeout
             )
             let reply = ReviewReply(payload: raw)
-            if traceResult {
+            if traceReply {
                 trace(
                     .rpc, "\(method) ok=\(reply?.ok ?? false) gen=\(reply?.gen ?? -1) error=\(reply?.error ?? "-") ms=\(CallLog.ms(since: asked))", id,
                     level: reply?.ok == true ? .default : .error
@@ -1126,9 +1126,7 @@ extension CallController {
             }
             return call?.id == id ? reply : nil
         } catch {
-            if traceResult {
-                trace(.rpc, "\(method) failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
-            }
+            trace(.rpc, "\(method) failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
             return nil
         }
     }
@@ -1760,9 +1758,12 @@ extension CallController {
         #endif
         guard call?.id == id else { return .over }
         guard liveVoice != nil, let method = call?.names?.settingsMethod else { return .unsupported }
-        guard call?.voice?.inFlight == false else { return .unconfirmed }
+        guard call?.voice?.inFlight == false else {
+            trace(.rpc, "voice request skipped: one in flight", id)
+            return .unconfirmed
+        }
         guard let gen = nextRPCGen(for: id), call?.voice?.begin(choice, gen: gen, for: id) == true else { return .unsupported }
-        let reply = await workerRPC(method, payload: VoiceRequest(gen: gen, tts: choice).payload, traceResult: false, for: id)
+        let reply = await workerRPC(method, payload: VoiceRequest(gen: gen, tts: choice).payload, traceReply: false, for: id)
         guard call?.id == id else { return .over }
         if let reply, reply.gen == gen {
             call?.voice?.apply(reply: reply, for: id)
