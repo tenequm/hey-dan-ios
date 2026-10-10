@@ -4,6 +4,9 @@ import SwiftUI
 struct ContentView: View {
     @Environment(CallController.self) private var call
     @State private var showsSettings = false
+    @State private var showsOptions = false
+    @State private var voiceTarget: VoiceTarget?
+    @State private var pendingVoiceTarget: VoiceTarget?
     @State private var settingsBusy = false
     /// Right after "call" the same key reads "cancel": taps are ignored for a moment so a double tap cannot cancel.
     @State private var cancelArmed = false
@@ -13,18 +16,19 @@ struct ContentView: View {
     @ScaledMetric private var muteWidth: CGFloat = 124
     @State private var preview = Preview.fromEnvironment()
 
+    private struct VoiceTarget: Identifiable {
+        let id = UUID()
+        let line: VoiceLine
+        let agentName: String
+        let callID: UUID?
+    }
+
     var body: some View {
         VStack(spacing: 10) {
             header
             screen
-            rail
+            controls
             keys
-            Text("voice mode · answers by \(name)")
-                .font(Theme.mono(11))
-                .spacing(0.04, size: 11)
-                .foregroundStyle(Theme.muted)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 2)
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -40,6 +44,14 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .sheet(isPresented: $showsSettings) { SettingsView() }
+        .sheet(isPresented: $showsOptions, onDismiss: {
+            guard let target = pendingVoiceTarget else { return }
+            pendingVoiceTarget = nil
+            voiceTarget = target
+        }) { optionsSheet }
+        .sheet(item: $voiceTarget) { target in
+            VoicePickerSheet(line: target.line, agentName: target.agentName, callID: target.callID)
+        }
         .onAppear {
             if preview == nil, call.line == nil {
                 showsSettings = true
@@ -317,71 +329,185 @@ struct ContentView: View {
         return false
     }
 
-    // MARK: Rail
+    // MARK: Controls
 
-    /// Auto mode's spoken commands and the typing sound. Mid-call they show once the worker speaks the commands
-    /// vocabulary (and through the connect, still); outside a call they are the picks the next call starts with.
-    @ViewBuilder private var rail: some View {
-        modeRow
-        if let shown = shownSettings {
-            let enabled = shown.enabled && !settingsBusy
-            // The spoken commands are hands-free's; the typing sound is either mode's.
-            if review.mode == .auto, reviewKeys == nil { commandsBlock(shown, enabled: enabled) }
-            Toggle("typing sound", isOn: settingBinding(shown.typing) { change(typing: $0) })
-                .accessibilityHint("A quiet keyboard sound while the agent works on your turn.")
-                .toggleStyle(KeySwitchStyle())
-                .fixedSize(horizontal: false, vertical: true)
-                .disabled(!enabled)
-        }
-    }
-
-    private func commandsBlock(_ shown: (wake: Bool, pauseSends: Bool, typing: Bool, enabled: Bool), enabled: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("voice commands")
-                    .font(Theme.mono(11, medium: true))
-                    .spacing(0.06, size: 11)
-                    .foregroundStyle(Theme.text)
-                Text(commandWords.explainer)
-                    .font(Theme.sans(12))
-                    .lineHeight(.multiple(factor: 1.35))
-                    .foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            let send = CommandWords.join(commandWords.sendHints, quoted: false)
-            HStack(spacing: 6) {
-                Toggle("wait for \"\(wakePhrase)\"", isOn: settingBinding(shown.wake) { change(wake: $0) })
-                    .accessibilityHint("Nothing is sent until you say \(wakePhrase); then say \(send) to send.")
-                if shown.wake {
-                    Toggle("a pause also sends", isOn: settingBinding(shown.pauseSends) { change(pauseSends: $0) })
-                        .accessibilityHint("After the wake phrase a pause sends too, not only \(send).")
+    private var controls: some View {
+        VStack(spacing: 4) {
+            GlassEffectContainer(spacing: 8) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { controlButtons }
+                    VStack(spacing: 8) { controlButtons }
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .controlSize(.large)
+            .buttonSizing(.flexible)
+            .buttonBorderShape(.capsule)
+            .font(Theme.sans(14, .medium))
+            .tint(Theme.text)
+            if reviewKeys?.panel == nil, let note = review.note {
+                Text(asWritten(note, keep: keepWords))
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(8)
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border, lineWidth: 1))
-        .toggleStyle(KeySwitchStyle())
-        .disabled(!enabled)
     }
 
-    /// Hands-free or Manual, with a line on what the mode in force does; Manual only where the worker offers it.
-    private var modeRow: some View {
-        let pendingTo = review.pending?.op == .mode ? review.pending?.to : nil
-        let disabled = phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
-        let wake = commands?.wake ?? call.settingsPicks.wake
-        let pauseSends = commands?.pauseSends ?? call.settingsPicks.pauseSends
-        return ModeRow(
-            mode: review.mode,
-            pendingTo: pendingTo,
-            available: review.available,
-            disabled: disabled,
-            // Before the worker says, its commands are assumed, as the switches are.
-            caption: { mode in
-                Review.modeCaption(mode, commands: commands != nil || !isLive, words: commandWords, wake: wake, pauseSends: pauseSends)
-            },
-            note: reviewKeys?.panel == nil ? review.note.map { asWritten($0, keep: keepWords) } : nil
-        ) { mode in Task { await call.setTurnMode(mode) } }
+    @ViewBuilder private var controlButtons: some View {
+        Menu {
+            Picker("Turn mode", selection: Binding(
+                get: { review.mode },
+                set: { mode in Task { await call.setTurnMode(mode) } }
+            )) {
+                ForEach([TurnMode.auto, .review], id: \.self) { mode in
+                    LabeledContent {
+                        Text(modeCaption(mode)).lineLimit(1)
+                    } label: {
+                        Text(modeTitle(mode))
+                    }
+                    .tag(mode)
+                    .disabled(mode == .review && !review.available && review.mode != .review)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(modeLabel)
+                    .modifier(Breathing(active: pendingMode != nil, period: 1.4, dimmest: 0.55))
+                Image(systemName: "chevron.down").font(.caption2)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(modeDisabled ? Theme.muted : Theme.text)
+        }
+        .buttonStyle(.glass)
+        .frame(minWidth: 44, minHeight: 44)
+        .disabled(modeDisabled)
+        .accessibilityIdentifier(AXID.controlsMode)
+        .accessibilityLabel("Turn mode")
+        .accessibilityValue(modeLabel)
+        .accessibilityHint(modeCaption(pendingMode ?? review.mode))
+
+        Button {
+            guard let line = voiceLine else { return }
+            let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
+            if showsOptions {
+                pendingVoiceTarget = target
+                showsOptions = false
+            } else {
+                voiceTarget = target
+            }
+        } label: {
+            Text("Voice")
+                .foregroundStyle(voiceLine == nil ? Theme.muted : Theme.text)
+        }
+        .buttonStyle(.glass)
+        .frame(minWidth: 44, minHeight: 44)
+        .disabled(voiceLine == nil)
+        .accessibilityIdentifier(AXID.controlsVoice)
+        .accessibilityLabel("Voice")
+        .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
+
+        Button("Options") { showsOptions = true }
+            .buttonStyle(.glass)
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityIdentifier(AXID.controlsOptions)
+            .accessibilityLabel("Call options")
+            .accessibilityHint("Change voice commands and the typing sound.")
+    }
+
+    private var pendingMode: TurnMode? { review.pending?.op == .mode ? review.pending?.to : nil }
+
+    private var modeLabel: String {
+        pendingMode == nil ? modeTitle(review.mode) : "Switching..."
+    }
+
+    /// The control row capitalizes hands-free, which `Review.modeName` writes lowercase.
+    private func modeTitle(_ mode: TurnMode) -> String { mode == .auto ? "Hands-free" : Review.modeName(mode) }
+
+    /// The line the screen is about, as the Call key and the agent name: after a call to another line ends, that
+    /// line stays shown until the pick changes.
+    private var voiceLine: VoiceLine? { call.liveLine ?? call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line }
+
+    private var modeDisabled: Bool {
+        phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
+    }
+
+    private func modeCaption(_ mode: TurnMode) -> String {
+        Review.modeCaption(
+            mode, commands: commands != nil || !isLive, words: commandWords,
+            wake: commands?.wake ?? call.settingsPicks.wake,
+            pauseSends: commands?.pauseSends ?? call.settingsPicks.pauseSends
+        )
+    }
+
+    private var optionsSheet: some View {
+        NavigationStack {
+            Form {
+                if let shown = shownSettings {
+                    let enabled = shown.enabled && !settingsBusy
+                    if review.mode == .auto, reviewKeys == nil {
+                        Section("Voice commands") {
+                            Toggle("wait for \"\(wakePhrase)\"", isOn: settingBinding(shown.wake) { change(wake: $0) })
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier(AXID.optionsWake)
+                                .accessibilityHint("Nothing is sent until you say \(wakePhrase); then say \(CommandWords.join(commandWords.sendHints, quoted: false)) to send.")
+                            if shown.wake {
+                                Toggle("a pause also sends", isOn: settingBinding(shown.pauseSends) { change(pauseSends: $0) })
+                                    .frame(minHeight: 44)
+                                    .accessibilityIdentifier(AXID.optionsPauseSends)
+                                    .accessibilityHint("After the wake phrase a pause sends too, not only \(CommandWords.join(commandWords.sendHints, quoted: false)).")
+                            }
+                        }
+                        .disabled(!enabled)
+                    }
+                    Section {
+                        Toggle("typing sound", isOn: settingBinding(shown.typing) { change(typing: $0) })
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier(AXID.optionsTyping)
+                            .accessibilityHint("A quiet keyboard sound while the agent works on your turn.")
+                    }
+                    .disabled(!enabled)
+                } else {
+                    Section {
+                        Text("Options are unavailable until the voice service shares its settings.")
+                            .foregroundStyle(Theme.muted)
+                    }
+                }
+                if review.mode == .auto, reviewKeys == nil {
+                    Section("Spoken commands") {
+                        Text(commandWords.explainer)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if let note = review.note {
+                    Section {
+                        Text(asWritten(note, keep: keepWords)).foregroundStyle(Theme.muted)
+                    }
+                }
+            }
+            .font(Theme.sans(16))
+            .toggleStyle(.switch)
+            .tint(Theme.orange)
+            .navigationTitle("Call options")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(role: .close) { showsOptions = false }
+                        .accessibilityLabel("Close")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+            .controlSize(.large)
+            .buttonSizing(.flexible)
+            .buttonBorderShape(.capsule)
+            .buttonStyle(.glass)
+        }
+        .foregroundStyle(Theme.text)
+        .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
     }
 
     private var shownSettings: (wake: Bool, pauseSends: Bool, typing: Bool, enabled: Bool)? {
@@ -428,6 +554,7 @@ struct ContentView: View {
         VStack(spacing: 6) {
             Button(asWritten(rv.left.label, keep: [])) { run(rv.left.action) }
                 .buttonStyle(KeyCapStyle(finish: rv.left.action == .discard ? .light : .orange))
+                .accessibilityIdentifier(AXID.keysCall)
                 .disabled(rv.left.disabled || !leftArmed || ((rv.left.action == .call || rv.left.action == .cancel) && primaryDisabled))
             keyLabel(Text(review.ended && review.draft != nil ? "draft kept" : callLabel))
         }
@@ -468,6 +595,7 @@ struct ContentView: View {
                 if isCallActive { call.hangUp() } else { Task { await call.start(lineID: call.shownLineID) } }
             }
             .buttonStyle(KeyCapStyle(finish: .orange))
+            .accessibilityIdentifier(AXID.keysCall)
             .disabled((!isCallActive && !hasLine) || (isSettingUp && !cancelArmed))
             .accessibilityLabel(callKey.spoken)
             keyLabel(Text(callLabel))
@@ -647,80 +775,6 @@ private func clock(_ seconds: TimeInterval, pad: Bool = true) -> String {
 }
 
 // MARK: - Review mode
-
-/// The turn mode switch: two segments in a recessed track, the pick on a raised cap.
-private struct ModeRow: View {
-    let mode: TurnMode
-    let pendingTo: TurnMode?
-    let available: Bool
-    let disabled: Bool
-    let caption: (TurnMode) -> String
-    let note: String?
-    let pick: (TurnMode) -> Void
-
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 3) {
-                segment(.auto)
-                segment(.review)
-            }
-            .padding(3)
-            .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Theme.page.shadow(.inner(color: .black.opacity(0.6), radius: 2, y: 1)))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.border, lineWidth: 1))
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Turn mode")
-            Text(caption(pendingTo ?? mode).lowercased())
-                .font(Theme.sans(12))
-                .lineHeight(.multiple(factor: 1.35))
-                .foregroundStyle(Theme.muted)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityHidden(true)
-            if let note {
-                Text(note)
-                    .font(Theme.mono(11))
-                    .spacing(0.04, size: 11)
-                    .foregroundStyle(Theme.muted)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func segment(_ choice: TurnMode) -> some View {
-        let on = mode == choice
-        return Button {
-            pick(choice)
-        } label: {
-            // "Manual" keeps its capital, as the page writes it.
-            Text(Review.modeName(choice))
-                .font(Theme.mono(12, medium: on))
-                .spacing(0.06, size: 12)
-                .foregroundStyle(on ? Theme.text : Theme.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, minHeight: 36)
-                .modifier(Breathing(active: pendingTo == choice, period: 1.4, dimmest: 0.45))
-                .background {
-                    if on {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Theme.cap)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(Theme.capEdge).offset(y: 2))
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled || (choice == .review && !available && !on))
-        .opacity(disabled || (choice == .review && !available && !on) ? 0.5 : 1)
-        .accessibilityAddTraits(on ? [.isSelected] : [])
-        .accessibilityHint(caption(choice))
-    }
-}
 
 /// The review draft under the readout: dashed, never styled as sent, its header outside its own scroller.
 private struct DraftPanel: View {
@@ -1419,6 +1473,7 @@ private struct SettingsView: View {
     /// The line whose host is being asked who answers.
     @State private var naming: UUID?
     @State private var deleting: VoiceLines.Entry?
+    @State private var voiceLine: VoiceLines.Entry?
 
     private enum Note: Equatable {
         case invalid, notSaved, unreadable, asking
@@ -1455,8 +1510,7 @@ private struct SettingsView: View {
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .confirmationDialog(
-            "Delete the line to \(deleting?.name ?? "")?", isPresented: deletingBinding, titleVisibility: .visible,
-            presenting: deleting
+            "Delete the line to \(deleting?.name ?? "")?", item: $deleting, titleVisibility: .visible
         ) { entry in
             Button("Delete", role: .destructive) {
                 call.removeLine(entry.id)
@@ -1464,6 +1518,9 @@ private struct SettingsView: View {
             }
         } message: { _ in
             Text("Its call link leaves this phone. Shortcuts that call this line stop working.")
+        }
+        .sheet(item: $voiceLine) { entry in
+            VoicePickerSheet(line: entry.line, agentName: entry.name, callID: nil)
         }
     }
 
@@ -1519,10 +1576,19 @@ private struct SettingsView: View {
             .accessibilityLabel("\(entry.name), \(entry.line.host)")
             .accessibilityAddTraits(picked ? .isSelected : [])
             .accessibilityHint(picked ? "" : "Makes this the line the Action Button calls.")
-            iconButton("arrow.clockwise", label: "Ask \(entry.line.host) who answers") { ask(entry) }
-                .disabled(naming != nil)
-                .opacity(naming == entry.id ? 0.4 : 1)
-            iconButton("trash", label: "Delete the line to \(entry.name)") { deleting = entry }
+            Menu {
+                Button("Voice...", systemImage: "waveform") { voiceLine = entry }
+                Button("Ask who answers", systemImage: "arrow.clockwise") { ask(entry) }
+                    .disabled(naming != nil)
+                Button("Delete...", systemImage: "trash", role: .destructive) { deleting = entry }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.muted.opacity(naming == entry.id ? 0.4 : 1))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Actions for \(entry.name)")
         }
         .padding(.leading, 12)
         .padding(.trailing, 2)
@@ -1532,15 +1598,6 @@ private struct SettingsView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(picked ? Theme.orange.opacity(0.55) : Theme.border, lineWidth: 1)
         )
-    }
-
-    private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(label, systemImage: symbol, action: action)
-            .labelStyle(.iconOnly)
-            .font(.system(size: 15))
-            .foregroundStyle(Theme.muted)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
     }
 
     // MARK: Add
@@ -1603,10 +1660,6 @@ private struct SettingsView: View {
             .font(Theme.mono(11))
             .spacing(0.06, size: 11)
             .foregroundStyle(Theme.muted)
-    }
-
-    private var deletingBinding: Binding<Bool> {
-        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
     }
 
     private func add() {

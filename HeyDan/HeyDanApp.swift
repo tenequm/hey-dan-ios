@@ -45,9 +45,19 @@ extension HeyDanApp {
     @MainActor
     static func debugScript() async {
         let env = ProcessInfo.processInfo.environment
+        #if targetEnvironment(simulator)
+        let launched = ContinuousClock.now
+        // Read here, not in App.init: before a scene connects the content size category is still unspecified.
+        CallLog.log(.call, "a11y reduceMotion=\(UIAccessibility.isReduceMotionEnabled) contentSize=\(UIApplication.shared.preferredContentSizeCategory.rawValue)")
+        if env["HEYDAN_START_ON_SAMPLE"] == "1" { VoiceDebug.installSampleStart() }
+        if let patch = env["HEYDAN_TTS_PATCH"], !patch.isEmpty { await VoiceDebug.patch(patch) }
+        if let steps = env["HEYDAN_VOICE_STEPS"], !steps.isEmpty { VoiceDebug.schedule(steps, launched: launched) }
+        #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
         guard env["HEYDAN_AUTOCALL"] == "1" else { return }
         if let steps = env["HEYDAN_STEPS"], !steps.isEmpty { DebugStep.schedule(steps) }
+        var feed: Task<Void, Never>?
+        defer { feed?.cancel() }
         if let path = env["HEYDAN_FEED_WAV"], !path.isEmpty {
             // No microphone at all: the engine takes the frames AudioFeed hands it. On a phone CallKit still
             // activates the call's session and gates the engine; a manual-rendering engine just never uses the device.
@@ -58,9 +68,25 @@ extension HeyDanApp {
                 CallLog.log(.audio, "debug feed: manual rendering failed \(CallLog.describe(error))", level: .error)
             }
             let delay = env["HEYDAN_FEED_AFTER"].flatMap(Double.init) ?? 8
-            Task.detached { await AudioFeed.run(path: path, after: delay) }
+            #if targetEnvironment(simulator)
+            let gated = env["HEYDAN_FEED_ON_VOICE"] == "1"
+            if gated { VoiceDebug.gateFeed(launched: launched) }
+            feed = Task.detached { await AudioFeed.run(path: path, after: delay, gated: gated) }
+            #else
+            feed = Task.detached { await AudioFeed.run(path: path, after: delay) }
+            #endif
         }
+        #if targetEnvironment(simulator)
+        if env["HEYDAN_START_ON_SAMPLE"] == "1" {
+            while CallController.shared.callID == nil, !Task.isCancelled {
+                if case .ended = CallController.shared.phase { return }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        } else { await CallController.shared.start() }
+        #else
         await CallController.shared.start()
+        #endif
+        while CallController.shared.isCallActive, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
     }
 }
 
@@ -107,6 +133,163 @@ private enum DebugStep: String {
         case .send: await controller.send()
         case .discard: await controller.discard()
         }
+    }
+}
+#endif
+
+#if DEBUG && targetEnvironment(simulator)
+@MainActor
+enum VoiceDebug {
+    nonisolated static let feedDeadline = OSAllocatedUnfairLock<ContinuousClock.Instant?>(initialState: nil)
+    static var sampleDrained = false
+    private static var starts: [Task<UUID?, Never>] = []
+    private static var returned = 0
+    private static var refused = 0
+    private static var sampleOwner: UUID?
+    private static var released = false
+    private static var barrier: CheckedContinuation<Void, Never>?
+    private static var firstVoiceOutcome: VoiceRequestOutcome?
+    private static var feedGated = false
+    private static var feedTriggered = false
+    private static var voiceSteps: Task<Void, Never>?
+    private static var feedTimer: Task<Void, Never>?
+    private static var voiceFeedTimer: Task<Void, Never>?
+    private static var patched = false
+
+    static func installSampleStart() {
+        VoiceSample.activationBarrier = {
+            guard !released else { return }
+            await withCheckedContinuation { barrier = $0 }
+        }
+        VoiceSample.onActivationStarted = {
+            VoiceSample.onActivationStarted = nil
+            for _ in 0..<2 {
+                starts.append(Task {
+                    let id = await CallController.shared.start(lineID: nil)
+                    returned += 1
+                    if id == nil { refused += 1 }
+                    return id
+                })
+            }
+            Task {
+                let deadline = ContinuousClock.now + .seconds(2)
+                while !(sampleOwner != nil && refused > 0) && returned < 2 {
+                    guard ContinuousClock.now < deadline else {
+                        CallLog.log(.audio, "sample barrier released at deadline", level: .error)
+                        break
+                    }
+                    await Task.yield()
+                }
+                released = true
+                barrier?.resume()
+                barrier = nil
+                VoiceSample.activationBarrier = nil
+            }
+        }
+    }
+
+    static func callClaimed(_ id: UUID) {
+        sampleDrained = false
+        if !starts.isEmpty, !released { sampleOwner = id }
+    }
+
+    static func callEnded(_ id: UUID) {
+        voiceSteps?.cancel()
+        feedTimer?.cancel()
+        voiceFeedTimer?.cancel()
+        guard sampleOwner == id else { return }
+        Task {
+            var acceptedStarts = 0
+            var refusedStarts = 0
+            for start in starts {
+                if await start.value == nil { refusedStarts += 1 } else { acceptedStarts += 1 }
+            }
+            CallController.shared.trace(.audio, "sample start accepted=\(acceptedStarts) refused=\(refusedStarts) drained=\(sampleDrained) late=\(VoiceSample.deactivationsAfterHandoff)", id)
+            starts.removeAll()
+        }
+    }
+
+    static func patch(_ json: String) async {
+        guard !patched else { return }
+        patched = true
+        struct Input: Decodable {
+            let reset: Bool?
+            let provider: String?
+            let model: String?
+            let voice: String?
+        }
+        guard let line = CallController.shared.line else {
+            return CallLog.log(.net, "tts patch status=0")
+        }
+        guard let input = try? JSONDecoder().decode(Input.self, from: Data(json.utf8)), input.reset == true || input.provider != nil else {
+            return CallLog.log(.net, "tts patch status=0")
+        }
+        let patch: TTSPatch = input.reset == true ? .reset : .choice(TTSChoice(provider: input.provider ?? "", model: input.model, voice: input.voice))
+        let request: URLRequest
+        do { request = try line.ttsPatchRequest(patch) } catch {
+            return CallLog.log(.net, "tts patch skipped bodyTooLarge")
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 15
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let response = try? await session.data(for: request).1
+        CallLog.log(.net, "tts patch status=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
+    }
+
+    static func schedule(_ script: String, launched: ContinuousClock.Instant) {
+        let steps = script.split(separator: ",").compactMap { item -> (Double, TTSChoice)? in
+            let parts = item.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2, let at = Double(parts[0]), at.isFinite, at >= 0 else { return nil }
+            let choice = parts[1].split(separator: "/", maxSplits: 1)
+            guard choice.count == 2 else { return nil }
+            return (at, TTSChoice(provider: String(choice[0]), voice: String(choice[1])))
+        }.sorted { $0.0 < $1.0 }
+        voiceSteps = Task {
+            let controller = CallController.shared
+            var owner: UUID?
+            for (at, choice) in steps {
+                do { try await Task.sleep(until: launched + .seconds(at)) } catch { return }
+                while controller.liveVoice == nil {
+                    guard !Task.isCancelled else { return }
+                    if let owner, controller.liveCallID != owner { return }
+                    if case .ended = controller.phase { return }
+                    if owner == nil { owner = controller.liveCallID }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                guard let id = controller.liveCallID, id == owner ?? id else { return }
+                owner = id
+                let outcome = await controller.requestVoice(choice, for: id)
+                if firstVoiceOutcome == nil {
+                    firstVoiceOutcome = outcome
+                    if case .queued = outcome { triggerFeed("voice") }
+                }
+            }
+        }
+    }
+
+    static func gateFeed(launched: ContinuousClock.Instant) {
+        feedGated = true
+        if case .queued = firstVoiceOutcome { triggerFeed("voice") }
+        feedTimer = Task {
+            do { try await Task.sleep(until: launched + .seconds(30)) } catch { return }
+            triggerFeed("timeout", deadline: launched + .seconds(30))
+        }
+    }
+
+    private static func triggerFeed(_ trigger: String, deadline: ContinuousClock.Instant? = nil) {
+        guard feedGated, !feedTriggered else { return }
+        guard let deadline else {
+            voiceFeedTimer = Task {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                triggerFeed(trigger, deadline: .now)
+            }
+            return
+        }
+        feedTriggered = true
+        feedDeadline.withLock { $0 = deadline }
+        CallLog.log(.audio, "feed trigger=\(trigger)")
     }
 }
 #endif
@@ -245,7 +428,7 @@ enum ReconnectDrill {
 /// Feeds the call 10 ms frames in real time: silence, the file once, then silence, like a caller who speaks and stops.
 /// Silence keeps flowing because the worker ends a turn on the silence it hears.
 private enum AudioFeed {
-    static func run(path: String, after delay: Double) async {
+    static func run(path: String, after delay: Double, gated: Bool = false) async {
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false) else { return }
         let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : URL.cachesDirectory.appending(path: path)
         let speech = load(url, format: format)
@@ -259,7 +442,13 @@ private enum AudioFeed {
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frame), let out = buffer.floatChannelData?[0] else { return }
             buffer.frameLength = frame
             out.update(repeating: 0, count: Int(frame))
-            if clock.now - start >= .seconds(delay), let speech, let source = speech.floatChannelData?[0], offset < speech.frameLength {
+            let ready: Bool
+            #if targetEnvironment(simulator)
+            ready = gated ? VoiceDebug.feedDeadline.withLock { $0.map { clock.now >= $0 } ?? false } : clock.now - start >= .seconds(delay)
+            #else
+            ready = clock.now - start >= .seconds(delay)
+            #endif
+            if ready, let speech, let source = speech.floatChannelData?[0], offset < speech.frameLength {
                 let count = min(frame, speech.frameLength - offset)
                 out.update(from: source + Int(offset), count: Int(count))
                 offset += count

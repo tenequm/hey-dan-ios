@@ -126,6 +126,24 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   land in `build/checks`. `xcrun
   devicectl device settings audio --device <sim> --input-device <uid>` picks the Simulator's microphone
   (`systemDefault` is the Mac's).
+- Voice picker fixture checks: `just sim-checks VoicePickerSaved` (saved, queued-to-active and provider samples),
+  `VoicePickerLive` (active, refused, ended), `VoicePickerFailures` (unsaved, unavailable,
+  unsupported route and access lost), `VoicePickerFailuresCatalog` (catalog retry, empty search, access lost),
+  and `CallOptions` (hands-free and Manual options).
+  `VoicePickerSaves`, `SampleThenCall` and `SampleDismissThenCall` require a real test line.
+  Before `VoicePickerSaves`, capture the server's raw saved tuple and set `HEYDAN_TTS_RESTORE` to its ready
+  JSON PATCH body; the check refuses to mutate without it and restores it in teardown. Keep an independent
+  server restore/compare cleanup in the calling script too. The sample checks expect ElevenLabs available.
+  `SampleDismissThenCall` plays a sample for two seconds, taps Back to stop it, closes the picker,
+  discards changes if prompted, taps Call once, and requires Call again after 45 seconds.
+- DEBUG Simulator voice hooks: `HEYDAN_PREVIEW_TTS=saved|unsaved|eleven-unavailable|catalog-fail|search-empty|no-route|forbidden`
+  supplies HTTP fixtures; `HEYDAN_PREVIEW_VOICE=pending|active|ended|refused` supplies live voice state
+  (use `HEYDAN_PREVIEW_PHASE=waiting` and open Voice). `HEYDAN_VOICE_STEPS="20:gemini/Alnilam,35:elevenlabs/bIHbv24MWmeRgasZH58o"`
+  queues timed live choices after voice support appears; an omitted model uses the provider default.
+  `HEYDAN_TTS_PATCH='<json>'` applies one saved-choice PATCH at launch, including `{"reset":true}`.
+  `HEYDAN_FEED_ON_VOICE=1` delays `HEYDAN_FEED_WAV` until one second after the first queued voice outcome,
+  with a 30-second fallback. `HEYDAN_START_ON_SAMPLE=1` issues two controller starts while sample activation
+  is held; `SampleThenCall` checks the UI and the verifier checks the accepted/refused/drained/late log evidence.
 - Simulator calls go through CallKit as on the phone (provider, start/end/mute transactions), with
   Simulator-only stand-ins for what the Simulator lacks, in Debug and Release Simulator builds and never in a
   device build: the app claims the `facetime` URL scheme, because callservicesd ends a call it finds no FaceTime
