@@ -93,7 +93,7 @@ final class CallController: NSObject {
     private var previewVoice: PreviewVoice?
     private var previewVoiceUpdate: Task<Void, Never>?
     private static let previewVoiceCallID = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
-    private static let previewVoiceAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_turbo_v2_5","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
+    private static let previewVoiceAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
     #endif
 
     var isCallActive: Bool {
