@@ -4,10 +4,10 @@ import Testing
 
 struct CallVoiceTests {
     @Test func decodesVoiceAttribute() throws {
-        let json = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_turbo_v2_5","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
+        let json = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
         let expected = CallVoiceState(
             active: TTSChoice(provider: "gemini", model: "gemini-3.8-flash-tts", voice: "alnilam"),
-            pending: TTSChoice(provider: "elevenlabs", model: "eleven_turbo_v2_5", voice: "bIHbv24MWmeRgasZH58o"),
+            pending: TTSChoice(provider: "elevenlabs", model: "eleven_v4_turbo", voice: "bIHbv24MWmeRgasZH58o"),
             gen: 7
         )
         #expect(try JSONDecoder().decode(CallVoiceState.self, from: Data(json.utf8)) == expected)
@@ -24,10 +24,10 @@ struct CallVoiceTests {
     }
 
     private let initial = TTSChoice(provider: "gemini", model: "gemini-3.8-flash-tts", voice: "alnilam")
-    private let choice = TTSChoice(provider: "elevenlabs", model: "eleven_turbo_v2_5", voice: "bIHbv24MWmeRgasZH58o")
+    private let choice = TTSChoice(provider: "elevenlabs", model: "eleven_v4_turbo", voice: "bIHbv24MWmeRgasZH58o")
     private let id = UUID()
-    private let pendingAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_turbo_v2_5","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
-    private let activeAttribute = #"{"v":1,"active":{"provider":"elevenlabs","model":"eleven_turbo_v2_5","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
+    private let pendingAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
+    private let activeAttribute = #"{"v":1,"active":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
 
     private func live() -> LiveVoice { LiveVoice(callID: id, state: CallVoiceState(active: initial)) }
     private func reply(gen: Int = 7, ok: Bool = true, error: String? = nil) -> ReviewReply {

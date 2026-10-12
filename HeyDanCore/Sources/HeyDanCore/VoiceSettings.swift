@@ -207,11 +207,11 @@ public extension VoiceLine {
         return request
     }
 
-    func voicesRequest(provider: String, q: String?, language: String?, cursor: String?, limit: Int) -> URLRequest {
+    func voicesRequest(provider: String, q: String?, language: String?, gender: String? = nil, cursor: String?, limit: Int) -> URLRequest {
         var components = URLComponents(url: endpoint("voices"), resolvingAgainstBaseURL: false)!
         var query = components.queryItems ?? []
         query.append(URLQueryItem(name: "provider", value: provider))
-        for (name, value) in [("q", q), ("language", language), ("cursor", cursor)] {
+        for (name, value) in [("q", q), ("language", language), ("gender", gender), ("cursor", cursor)] {
             if let value {
                 var utf16Length = 0
                 let scalars = value.unicodeScalars.prefix { scalar in
