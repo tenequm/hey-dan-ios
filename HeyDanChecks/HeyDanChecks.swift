@@ -128,6 +128,8 @@ final class HeyDanChecks: XCTestCase {
             text(ID.pickerLive).contains("Tech Advisor 4") && !element(ID.pickerNext).exists
         }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: promoted, object: nil)], timeout: remaining(5, since: requestedAt)), .completed)
+        // The worker posts the promoted choice without names first: the result line follows the named post.
+        assertText(ID.pickerResult, "Active for this call: Tech Advisor 4 (Gemini)")
         shot("saved-active")
         expandPicker()
         assertText(ID.pickerModel, "Gemini 3.8 Flash TTS")
@@ -252,7 +254,8 @@ final class HeyDanChecks: XCTestCase {
         shot("names-retried")
     }
 
-    /// A save and a reset whose answers are lost are confirmed by the reload, against the values the server filled in.
+    /// A save whose answer is lost is confirmed by the reload, against the values the server filled in. A lost reset is
+    /// not: the server does not report the line default it writes, so the sheet shows the reloaded choice instead.
     func testVoicePickerLostSave() throws {
         fixture("lost-save")
         openVoice()
@@ -269,7 +272,7 @@ final class HeyDanChecks: XCTestCase {
         let confirm = app.buttons["Reset saved voice"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
-        assertText(ID.pickerResult, "reset to server default (confirmed after retry)")
+        assertText(ID.pickerResult, "Save not confirmed. Saved state refreshed")
         assertText(ID.pickerSaved, "Tech Advisor 4 (Gemini)")
         shot("lost-reset-confirmed")
     }

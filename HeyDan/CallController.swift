@@ -93,7 +93,7 @@ final class CallController: NSObject {
     private var previewVoice: PreviewVoice?
     private var previewVoiceUpdate: Task<Void, Never>?
     private static let previewVoiceCallID = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
-    private static let previewVoiceAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"Alnilam"},"activeDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS","voice":"Alnilam","voiceName":"Alnilam","language":"en-US","gender":null,"preview":null,"status":"resolved"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"pendingDetails":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo","voice":"bIHbv24MWmeRgasZH58o","voiceName":"Will","language":"en","gender":"male","preview":null,"status":"resolved"},"gen":7}"#
+    private static let previewVoiceAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"activeDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS","voice":"alnilam","voiceName":"Alnilam","language":"en-US","gender":null,"preview":null,"status":"resolved"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"pendingDetails":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo","voice":"bIHbv24MWmeRgasZH58o","voiceName":"Will","language":"en","gender":"male","preview":null,"status":"resolved"},"gen":7}"#
     #endif
 
     var isCallActive: Bool {
@@ -1744,13 +1744,19 @@ extension CallController {
             guard previewVoice != .ended, id == liveCallID else { return .over }
             if previewVoice == .refused { return .refused(reason: "tts_invalid") }
             previewVoiceUpdate?.cancel()
-            if let state = liveVoice {
-                liveVoice = CallVoiceState(active: state.active, activeDetails: state.activeDetails, pending: choice,
-                                           pendingDetails: PickerFixture.details(choice), gen: 8)
-            }
+            // As the worker does: each state goes out with ids at once, then again with names.
+            let names = Duration.milliseconds(500)
+            if let state = liveVoice { liveVoice = CallVoiceState(active: state.active, pending: choice, gen: 8) }
             previewVoiceUpdate = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                guard let self, liveCallID == id else { return }
+                do { try await Task.sleep(for: names) } catch { return }
+                guard let self, liveCallID == id, let state = liveVoice else { return }
+                liveVoice = CallVoiceState(active: state.active, activeDetails: PickerFixture.details(state.active), pending: choice,
+                                           pendingDetails: PickerFixture.details(choice), gen: 8)
+                do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
+                guard liveCallID == id else { return }
+                liveVoice = CallVoiceState(active: choice, gen: 8)
+                do { try await Task.sleep(for: names) } catch { return }
+                guard liveCallID == id else { return }
                 liveVoice = CallVoiceState(active: choice, activeDetails: PickerFixture.details(choice), gen: 8)
                 previewVoiceUpdate = nil
             }

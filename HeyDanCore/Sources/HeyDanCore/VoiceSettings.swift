@@ -36,7 +36,15 @@ public struct TTSDefaults: Decodable, Sendable, Equatable {
     }
 }
 
-/// The server's names for one choice. Every field is optional here, so a server that sends less still decodes.
+/// Whether the provider named a voice: `unavailable` means it certainly does not have it, `lookupFailed` that it
+/// could not be asked.
+public enum VoiceStatus: String, Sendable {
+    case resolved, unavailable
+    case lookupFailed = "lookup_failed"
+}
+
+/// The server's names for one choice. Every field is optional and decodes on its own, so a server that sends less,
+/// or a value this app cannot read, still decodes the rest.
 public struct ChoiceDetails: Decodable, Sendable, Equatable {
     public let provider: String?
     public let providerName: String?
@@ -47,12 +55,12 @@ public struct ChoiceDetails: Decodable, Sendable, Equatable {
     public let language: String?
     public let gender: String?
     public let preview: URL?
-    /// `resolved`, `unavailable` or `lookup_failed`.
-    public let status: String?
+    /// Nil when none was given or this app does not know it.
+    public let status: VoiceStatus?
 
     public init(provider: String? = nil, providerName: String? = nil, model: String? = nil, modelName: String? = nil,
                 voice: String? = nil, voiceName: String? = nil, language: String? = nil, gender: String? = nil,
-                preview: URL? = nil, status: String? = nil) {
+                preview: URL? = nil, status: VoiceStatus? = nil) {
         self.provider = provider
         self.providerName = providerName
         self.model = model
@@ -64,6 +72,25 @@ public struct ChoiceDetails: Decodable, Sendable, Equatable {
         self.preview = preview
         self.status = status
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, providerName, model, modelName, voice, voiceName, language, gender, preview, status
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func text(_ key: CodingKeys) -> String? { try? container.decodeIfPresent(String.self, forKey: key) }
+        provider = text(.provider)
+        providerName = text(.providerName)
+        model = text(.model)
+        modelName = text(.modelName)
+        voice = text(.voice)
+        voiceName = text(.voiceName)
+        language = text(.language)
+        gender = text(.gender)
+        preview = try? container.decodeIfPresent(URL.self, forKey: .preview)
+        status = text(.status).flatMap(VoiceStatus.init(rawValue:))
+    }
 }
 
 /// What a label says for a voice: the server's name for it, or why there is none.
@@ -71,8 +98,10 @@ public enum VoiceLabel: Sendable, Equatable {
     case named(String)
     /// The provider says the voice does not exist.
     case unavailable
-    /// The provider could not be asked.
+    /// The provider could not be asked; asking again may name it.
     case lookupFailed
+    /// The provider has the voice but gave it no name; asking again will not change that.
+    case unnamed
     /// A server from before voice names sent no details: a generic label, never the id.
     case noDetails(providerDefault: Bool)
 
@@ -81,12 +110,12 @@ public enum VoiceLabel: Sendable, Equatable {
             self = .noDetails(providerDefault: providerDefault)
             return
         }
-        if details.status == "unavailable" {
+        if details.status == .unavailable {
             self = .unavailable
         } else if let name = details.voiceName {
             self = .named(name)
         } else {
-            self = .lookupFailed
+            self = details.status == .resolved ? .unnamed : .lookupFailed
         }
     }
 
@@ -94,7 +123,7 @@ public enum VoiceLabel: Sendable, Equatable {
         switch self {
         case let .named(name): name
         case .unavailable: "Voice no longer available"
-        case .lookupFailed: "Name unavailable"
+        case .lookupFailed, .unnamed: "Name unavailable"
         case let .noDetails(providerDefault): providerDefault ? "Provider default voice" : "Selected voice"
         }
     }
@@ -146,13 +175,13 @@ public struct TTSView: Decodable, Sendable, Equatable {
 }
 
 public extension TTSView {
-    /// Whether this view shows `patch` saved. The server fills an omitted model or voice with the provider default,
-    /// and a reset writes the line's default, which only the server knows: a reset shows as nothing saved (an older
-    /// server) or as a saved choice that differs from `previous`.
-    func confirms(_ patch: TTSPatch, previous: SavedTTSChoice?) -> Bool {
+    /// Whether this view shows `patch` saved. The server fills an omitted model or voice with the provider default.
+    /// A reset writes the line's default, which the server does not report, so only an older server's empty row
+    /// proves one: a changed saved choice may be another client's save.
+    func confirms(_ patch: TTSPatch) -> Bool {
         switch patch {
         case .reset:
-            return saved.isEmpty || (previous.map { saved != $0 } ?? false)
+            return saved.isEmpty
         case let .choice(choice):
             let fallback = providers.first { $0.id == choice.provider }?.default
             return saved.provider == choice.provider
