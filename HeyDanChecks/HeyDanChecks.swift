@@ -222,6 +222,29 @@ final class HeyDanChecks: XCTestCase {
         shot("failure-forbidden-catalog")
     }
 
+    func testVoicePickerGender() throws {
+        fixture("saved")
+        openVoice()
+        chooseElevenLabs()
+        element(ID.pickerVoice).tap()
+        XCTAssertTrue(element(ID.pickerSample("bIHbv24MWmeRgasZH58o")).waitForExistence(timeout: 5))
+        element(ID.pickerFilter).tap()
+        let female = app.buttons["Female"].firstMatch
+        XCTAssertTrue(female.waitForExistence(timeout: 5))
+        shot("gender-menu")
+        female.tap()
+        XCTAssertTrue(element(ID.pickerSample("EXAVITQu4vr4xnSDxMaL")).waitForExistence(timeout: 5))
+        XCTAssertFalse(element(ID.pickerSample("bIHbv24MWmeRgasZH58o")).exists)
+        assertText(ID.pickerFilter, "Gender: Female")
+        shot("gender-eleven-female")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        chooseProvider("Gemini")
+        element(ID.pickerVoice).tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Achernar'")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Tech Advisor'")).firstMatch.exists)
+        shot("gender-gemini-female")
+    }
+
     func testCallOptions() throws {
         for phase in ["waiting", "manual"] {
             fixture("saved", phase: phase)
@@ -370,7 +393,7 @@ final class HeyDanChecks: XCTestCase {
             pickerClose = "picker.close", pickerSaved = "picker.saved", pickerLive = "picker.live", pickerNext = "picker.next",
             pickerProvider = "picker.provider", pickerVoice = "picker.voice", pickerSearch = "picker.search",
             pickerUseForCall = "picker.useForCall", pickerSave = "picker.save", pickerResult = "picker.result",
-            pickerRetry = "picker.retry"
+            pickerRetry = "picker.retry", pickerFilter = "picker.filter"
         static func pickerSample(_ id: String) -> String { "picker.sample.\(id)" }
     }
 

@@ -129,7 +129,8 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
 - Voice picker fixture checks: `just sim-checks VoicePickerSaved` (saved, queued-to-active and provider samples),
   `VoicePickerLive` (active, refused, ended), `VoicePickerFailures` (unsaved, unavailable,
   unsupported route and access lost), `VoicePickerFailuresCatalog` (catalog retry, empty search, access lost),
-  and `CallOptions` (hands-free and Manual options).
+  `VoicePickerGender` (the Female filter on both providers, kept across a provider switch) and `CallOptions`
+  (hands-free and Manual options).
   `VoicePickerSaves`, `SampleThenCall` and `SampleDismissThenCall` require a real test line.
   Before `VoicePickerSaves`, capture the server's raw saved tuple and set `HEYDAN_TTS_RESTORE` to its ready
   JSON PATCH body; the check refuses to mutate without it and restores it in teardown. Keep an independent
