@@ -114,20 +114,24 @@ final class HeyDanChecks: XCTestCase {
     func testVoicePickerSaved() throws {
         fixture("saved", voice: "pending")
         openVoice()
-        assertText(ID.pickerSaved, "en-us-techagent-4")
-        assertText(ID.pickerLive, "alnilam")
-        assertText(ID.pickerNext, "bIHbv24MWmeRgasZH58o")
+        assertText(ID.pickerSaved, "Tech Advisor 4 (Gemini)")
+        assertText(ID.pickerLive, "Alnilam (Gemini)")
+        assertText(ID.pickerNext, "Will (ElevenLabs)")
+        assertNoID(ID.pickerSaved, "en-us-techagent-4")
+        assertNoID(ID.pickerNext, "bIHbv24MWmeRgasZH58o")
         shot("saved-pending")
         let requestedAt = Date()
         element(ID.pickerUseForCall).tap()
         XCTAssertTrue(element(ID.pickerResult).label.contains("Queued"), "picker.result must report queued before promotion")
         shot("saved-queued")
         let promoted = NSPredicate { [self] _, _ in
-            text(ID.pickerLive).contains("en-us-techagent-4") && !element(ID.pickerNext).exists
+            text(ID.pickerLive).contains("Tech Advisor 4") && !element(ID.pickerNext).exists
         }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: promoted, object: nil)], timeout: remaining(5, since: requestedAt)), .completed)
         shot("saved-active")
         expandPicker()
+        assertText(ID.pickerModel, "Gemini 3.8 Flash TTS")
+        assertText(ID.pickerVoice, "Tech Advisor 4")
         element(ID.pickerVoice).tap()
         XCTAssertTrue(element(ID.pickerSearch).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Achernar'")).firstMatch.waitForExistence(timeout: 5))
@@ -144,7 +148,8 @@ final class HeyDanChecks: XCTestCase {
     func testVoicePickerLive() throws {
         fixture("saved", voice: "active")
         openVoice()
-        assertText(ID.pickerLive, "bIHbv24MWmeRgasZH58o")
+        assertText(ID.pickerLive, "Will (ElevenLabs)")
+        assertNoID(ID.pickerLive, "bIHbv24MWmeRgasZH58o")
         XCTAssertFalse(element(ID.pickerNext).exists)
         shot("live-active")
         fixture("saved", voice: "refused")
@@ -164,10 +169,11 @@ final class HeyDanChecks: XCTestCase {
     }
 
     func testVoicePickerFailures() throws {
-        fixture("unsaved")
+        fixture("legacy")
         openVoice()
-        assertText(ID.pickerSaved, "Server default")
-        shot("failure-unsaved")
+        assertText(ID.pickerSaved, "Server default - Provider default voice (Gemini)")
+        XCTAssertFalse(element(ID.pickerNameRetry).exists)
+        shot("failure-legacy")
         fixture("eleven-unavailable")
         openVoice()
         expandPicker()
@@ -220,6 +226,52 @@ final class HeyDanChecks: XCTestCase {
         XCTAssertTrue(element(ID.pickerRetry).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Access lost. Check this line's call link in Settings."].exists)
         shot("failure-forbidden-catalog")
+    }
+
+    /// Without a name from the server the row reads a placeholder (the id is only a caption VoiceOver skips, seen in
+    /// the screenshots), and Retry asks again.
+    func testVoicePickerNames() throws {
+        fixture("unavailable")
+        openVoice()
+        assertText(ID.pickerSaved, "Voice no longer available (ElevenLabs)")
+        assertNoID(ID.pickerSaved, "pNInz6obpgDQGcFmaJgB")
+        XCTAssertFalse(element(ID.pickerNameRetry).exists)
+        shot("names-unavailable")
+        fixture("lookup-failed")
+        openVoice()
+        assertText(ID.pickerSaved, "Name unavailable (Gemini)")
+        assertNoID(ID.pickerSaved, "en-us-techagent-4")
+        XCTAssertTrue(element(ID.pickerNameRetry).exists)
+        shot("names-lookup-failed")
+        element(ID.pickerNameRetry).tap()
+        assertText(ID.pickerSaved, "Tech Advisor 4 (Gemini)")
+        XCTAssertTrue(element(ID.pickerNameRetry).waitForNonExistence(timeout: 5))
+        chooseElevenLabs()
+        assertText(ID.pickerModel, "Eleven v4 Turbo")
+        assertText(ID.pickerVoice, "Will")
+        shot("names-retried")
+    }
+
+    /// A save and a reset whose answers are lost are confirmed by the reload, against the values the server filled in.
+    func testVoicePickerLostSave() throws {
+        fixture("lost-save")
+        openVoice()
+        chooseElevenLabs()
+        element(ID.pickerSave).tap()
+        assertText(ID.pickerResult, "Saved for next calls (confirmed after retry)")
+        assertText(ID.pickerSaved, "Will (ElevenLabs)")
+        shot("lost-save-confirmed")
+        app.buttons.matching(NSPredicate(format: "label == 'More' OR identifier == 'More'")).firstMatch.tap()
+        // The system overflow menu drops the item's identifier: it is found by its label.
+        let reset = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reset saved voice to server default'")).firstMatch
+        XCTAssertTrue(reset.waitForExistence(timeout: 5))
+        reset.tap()
+        let confirm = app.buttons["Reset saved voice"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        assertText(ID.pickerResult, "reset to server default (confirmed after retry)")
+        assertText(ID.pickerSaved, "Tech Advisor 4 (Gemini)")
+        shot("lost-reset-confirmed")
     }
 
     func testVoicePickerGender() throws {
@@ -394,7 +446,8 @@ final class HeyDanChecks: XCTestCase {
             pickerClose = "picker.close", pickerSaved = "picker.saved", pickerLive = "picker.live", pickerNext = "picker.next",
             pickerProvider = "picker.provider", pickerVoice = "picker.voice", pickerSearch = "picker.search",
             pickerUseForCall = "picker.useForCall", pickerSave = "picker.save", pickerResult = "picker.result",
-            pickerRetry = "picker.retry", pickerFilter = "picker.filter"
+            pickerRetry = "picker.retry", pickerNameRetry = "picker.nameRetry", pickerFilter = "picker.filter",
+            pickerModel = "picker.model"
         static func pickerSample(_ id: String) -> String { "picker.sample.\(id)" }
     }
 
@@ -418,6 +471,11 @@ final class HeyDanChecks: XCTestCase {
                        "\(id) must show \(expected)")
     }
 
+    /// A row reads the server's name or a placeholder, never the voice id.
+    private func assertNoID(_ id: String, _ voice: String) {
+        XCTAssertFalse(text(id).contains(voice), "\(id) must not read the voice id \(voice)")
+    }
+
     private func remaining(_ seconds: TimeInterval, since start: Date) -> TimeInterval {
         max(0, seconds - Date().timeIntervalSince(start))
     }
@@ -438,7 +496,9 @@ final class HeyDanChecks: XCTestCase {
         XCTAssertTrue(element(ID.controlsVoice).waitForExistence(timeout: 10))
         element(ID.controlsVoice).tap()
         XCTAssertTrue(element(ID.pickerTitle).waitForExistence(timeout: 5))
-        if loaded { XCTAssertTrue(element(ID.pickerSaved).waitForExistence(timeout: 10)) }
+        guard loaded else { return }
+        let ready = NSPredicate { [self] _, _ in element(ID.pickerSaved).exists && !text(ID.pickerSaved).contains("Loading") }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 10), .completed)
     }
 
     private func expandPicker() {

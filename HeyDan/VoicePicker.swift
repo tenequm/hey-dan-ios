@@ -23,11 +23,8 @@ final class VoiceSettingsModel {
     var query = ""
     var language = ""
     var gender = ""
-    private struct VoiceKey: Hashable {
-        let provider: String
-        let id: String
-    }
-    private var knownVoices: [VoiceKey: CatalogVoice] = [:]
+    /// The catalog row the caller tapped: its own name labels the draft until the server answers the save.
+    private var pickedVoice: CatalogVoice?
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private var catalogTask: Task<Void, Never>?
     private var catalogGeneration = UUID()
@@ -76,18 +73,51 @@ final class VoiceSettingsModel {
     var hasUnsavedChanges: Bool { hasChanges && !saving }
     var canSave: Bool { !invalidated && view != nil && draft != nil && hasChanges && provider?.available == true && !saving }
     var languages: [String] { Array(Set(voices.compactMap(\.language))).sorted() }
-    var selectedVoice: CatalogVoice? {
-        guard let draft, let id = draft.voice else { return nil }
-        guard let voice = knownVoice(provider: draft.provider, id: id) else { return CatalogVoice(id: id, name: id) }
-        return CatalogVoice(id: id, name: voice.name, language: voice.language, gender: voice.gender,
-                            description: voice.description, preview: voice.preview)
+    /// The server's details for the draft's voice: the saved one, or the provider default the server will use.
+    var draftDetails: ChoiceDetails? {
+        guard let draft else { return nil }
+        if let saved = view?.details?.saved, draft.voice != nil, saved.provider == draft.provider, saved.voice == draft.voice { return saved }
+        guard let provider, draft.voice == nil || draft.voice == provider.default.voice else { return nil }
+        return provider.defaultDetails
     }
 
-    func name(_ choice: TTSChoice) -> String {
-        let provider = provider(choice.provider)
-        let id = choice.voice ?? provider?.default.voice
-        let name = id.map { knownVoice(provider: choice.provider, id: $0)?.name ?? $0 } ?? "Provider default voice"
-        return "\(name) (\(provider?.name ?? choice.provider))"
+    var draftVoiceLabel: VoiceLabel {
+        if let pickedVoice, pickedVoice.id == draft?.voice { return .named(pickedVoice.name) }
+        return VoiceLabel(draftDetails, providerDefault: draft?.voice == nil || draft?.voice == provider?.default.voice)
+    }
+
+    /// The saved choice's label; nothing saved (an older server) shows the effective one.
+    var savedLabel: VoiceLabel {
+        guard let view else { return .lookupFailed }
+        let voice = view.saved.isEmpty ? view.effective.voice : view.saved.voice
+        let fallback = provider(view.saved.provider ?? view.effective.provider)?.default.voice
+        return VoiceLabel(view.saved.isEmpty ? view.details?.effective : view.details?.saved, providerDefault: voice == nil || voice == fallback)
+    }
+
+    var selectedVoice: CatalogVoice? {
+        guard let id = draft?.voice else { return nil }
+        if let pickedVoice, pickedVoice.id == id { return pickedVoice }
+        guard let details = draftDetails, case let .named(name) = VoiceLabel(details) else { return nil }
+        return CatalogVoice(id: id, name: name, language: details.language, gender: details.gender, preview: details.preview)
+    }
+
+    /// Names from `/voice/tts` the provider could not give; Retry asks again.
+    var namesUnavailable: Bool {
+        guard view != nil else { return false }
+        return savedLabel == .lookupFailed || draftVoiceLabel == .lookupFailed
+    }
+
+    func modelName(_ id: String) -> String { provider?.modelNames?[id] ?? id }
+
+    func name(_ label: VoiceLabel, provider id: String, details: ChoiceDetails? = nil) -> String {
+        guard let provider = details?.providerName ?? provider(id)?.name else { return label.title }
+        return "\(label.title) (\(provider))"
+    }
+
+    /// A live choice's name; a worker that sends no details gets the generic label.
+    func name(_ details: ChoiceDetails?, choice: TTSChoice) -> String {
+        name(VoiceLabel(details, providerDefault: choice.voice == nil || choice.voice == provider(choice.provider)?.default.voice),
+             provider: choice.provider, details: details)
     }
 
     func load() async {
@@ -111,6 +141,7 @@ final class VoiceSettingsModel {
         guard !saving, !invalidated, id != draft?.provider else { return }
         guard provider(id)?.available == true else { return }
         draft = TTSChoice(provider: id)
+        pickedVoice = nil
         query = ""
         language = ""
         resetCatalog()
@@ -123,6 +154,7 @@ final class VoiceSettingsModel {
 
     func setVoice(_ voice: CatalogVoice?) {
         guard !saving, !invalidated, let draft else { return }
+        pickedVoice = voice
         self.draft = TTSChoice(provider: draft.provider, model: draft.model, voice: voice?.id)
     }
 
@@ -192,6 +224,7 @@ final class VoiceSettingsModel {
             }
             await previous?.value
             guard !invalidated else { return }
+            let savedBefore = view?.saved
             do {
                 let loaded: TTSView = try await fetch(request)
                 guard !invalidated else { return }
@@ -209,16 +242,13 @@ final class VoiceSettingsModel {
                         let loaded: TTSView = try await fetch(line.ttsRequest)
                         guard !invalidated else { return }
                         adopt(loaded, replaceDraft: false)
-                        let matches = reset ? loaded.saved.isEmpty : loaded.saved == SavedTTSChoice(
-                            provider: draft.provider, model: draft.model, voice: draft.voice
-                        )
+                        let matches = loaded.confirms(patch, previous: savedBefore)
                         saveResult = matches
                             ? (reset ? "Saved voice reset to server default (confirmed after retry)" : "Saved for next calls (confirmed after retry)")
                             : "Save not confirmed. Saved state refreshed; check it before retrying."
                         if matches {
                             saveFailure = nil
-                            applied = self.draft
-                            if reset { adopt(loaded, replaceDraft: true) }
+                            adopt(loaded, replaceDraft: true)
                             if !reset { saveSuccess += 1 }
                         }
                     } catch {
@@ -240,6 +270,7 @@ final class VoiceSettingsModel {
             let saved = loaded.saved
             draft = TTSChoice(provider: saved.provider ?? loaded.effective.provider, model: saved.model, voice: saved.voice)
             applied = draft
+            pickedVoice = nil
         }
     }
 
@@ -264,12 +295,8 @@ final class VoiceSettingsModel {
             guard generation == catalogGeneration, key == catalogKey, !Task.isCancelled else { return }
             guard page.provider == provider else { throw TTSServiceFailure.malformed }
             if let cursor { usedCursors.insert(cursor) }
-            var seen = Set(voices.map { VoiceKey(provider: provider, id: $0.id) })
-            for voice in page.voices {
-                let entry = VoiceKey(provider: provider, id: voice.id)
-                knownVoices[entry] = voice
-                if seen.insert(entry).inserted { voices.append(voice) }
-            }
+            var seen = Set(voices.map(\.id))
+            for voice in page.voices where seen.insert(voice.id).inserted { voices.append(voice) }
             next = page.next.flatMap { usedCursors.contains($0) ? nil : $0 }
             catalogFailure = nil
         } catch {
@@ -277,12 +304,6 @@ final class VoiceSettingsModel {
             catalogFailure = failure(error)
         }
         catalogLoading = false
-    }
-
-    private func knownVoice(provider: String, id: String) -> CatalogVoice? {
-        knownVoices[VoiceKey(provider: provider, id: id)] ?? knownVoices.first {
-            $0.key.provider == provider && $0.value.id.caseInsensitiveCompare(id) == .orderedSame
-        }?.value
     }
 
     private func fetch<Value: Decodable>(_ input: URLRequest) async throws -> Value {
@@ -500,10 +521,10 @@ struct VoicePickerSheet: View {
         }
         .onChange(of: call.liveVoice) { old, new in
             guard callID != nil, callID == call.liveCallID else { return }
-            if let pending = new?.pending, pending != old?.pending {
-                announce("\(model.name(pending)) from \(agentName)'s next reply")
-            } else if let active = new?.active, new?.pending == nil, old?.pending != nil || old?.active != active {
-                announce("\(model.name(active)) configured for this call")
+            if let new, let pending = new.pending, pending != old?.pending {
+                announce("\(model.name(new.pendingDetails, choice: pending)) from \(agentName)'s next reply")
+            } else if let new, new.pending == nil, old?.pending != nil || old?.active != new.active {
+                announce("\(model.name(new.activeDetails, choice: new.active)) configured for this call")
             }
             updateLiveResult()
         }
@@ -521,13 +542,26 @@ struct VoicePickerSheet: View {
                 Section {
                     Text("\(agentName)'s voice").font(.headline).accessibilityIdentifier(AXID.pickerTitle)
                     if let view = model.view {
-                        LabeledContent("Saved for next calls", value: view.saved.isEmpty ? "Server default - \(model.name(view.effective))" : model.name(view.effective))
+                        let details = view.saved.isEmpty ? view.details?.effective : view.details?.saved
+                        let name = model.name(model.savedLabel, provider: view.saved.provider ?? view.effective.provider, details: details)
+                        voiceRow("Saved for next calls", view.saved.isEmpty ? "Server default - \(name)" : name, model.savedLabel,
+                                 id: view.saved.voice ?? view.effective.voice, loading: model.loading)
+                            .accessibilityIdentifier(AXID.pickerSaved)
+                        if model.namesUnavailable && model.loadFailure == nil {
+                            Button("Retry") { Task { await model.load() } }.disabled(model.loading).accessibilityIdentifier(AXID.pickerNameRetry)
+                        }
+                    } else if model.loadFailure == nil {
+                        voiceRow("Saved for next calls", "Loading voice name", .lookupFailed, id: nil, loading: true)
                             .accessibilityIdentifier(AXID.pickerSaved)
                     }
                     if callID != nil, callID == call.liveCallID, let state = call.liveVoice {
-                        LabeledContent("This call", value: model.name(state.active)).accessibilityIdentifier(AXID.pickerLive)
+                        voiceRow("This call", model.name(state.activeDetails, choice: state.active), VoiceLabel(state.activeDetails),
+                                 id: state.active.voice)
+                            .accessibilityIdentifier(AXID.pickerLive)
                         if let pending = state.pending {
-                            LabeledContent("Next spoken line", value: model.name(pending)).accessibilityIdentifier(AXID.pickerNext)
+                            voiceRow("Next spoken line", model.name(state.pendingDetails, choice: pending), VoiceLabel(state.pendingDetails),
+                                     id: pending.voice)
+                                .accessibilityIdentifier(AXID.pickerNext)
                         }
                         Text("The current spoken line finishes unchanged. These are configured voices; the worker may use a fallback.")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -555,11 +589,10 @@ struct VoicePickerSheet: View {
                         } label: { LabeledContent("Provider", value: model.provider?.name ?? draft.provider) }
                         .accessibilityIdentifier(AXID.pickerProvider)
                         fieldFailure("provider")
-                        Picker("Model", selection: Binding(get: { model.draft?.model }, set: model.setModel)) {
-                            LabeledContent("Provider default", value: model.provider?.default.model ?? "Unknown")
-                                .tag(String?.none)
-                            ForEach(model.provider?.models ?? [], id: \.self) { Text($0).tag(Optional($0)) }
-                            if let id = draft.model, !(model.provider?.models.contains(id) ?? false) { Text(id).tag(Optional(id)) }
+                        // An omitted model is the provider default, the one the server saves for it.
+                        Picker("Model", selection: Binding(get: { model.draft?.model ?? model.provider?.default.model }, set: model.setModel)) {
+                            ForEach(model.provider?.models ?? [], id: \.self) { Text(model.modelName($0)).tag(Optional($0)) }
+                            if let id = draft.model, !(model.provider?.models.contains(id) ?? false) { Text(model.modelName(id)).tag(Optional(id)) }
                         }
                         .pickerStyle(.menu).accessibilityIdentifier(AXID.pickerModel)
                         fieldFailure("model")
@@ -567,7 +600,10 @@ struct VoicePickerSheet: View {
                             detent = .large
                             path.append("catalog")
                         } label: {
-                            LabeledContent("Voice", value: model.selectedVoice?.name ?? "Provider default voice")
+                            LabeledContent("Voice") {
+                                VoiceName(title: model.draftVoiceLabel.title, label: model.draftVoiceLabel,
+                                          id: draft.voice ?? model.provider?.default.voice)
+                            }
                         }
                         .accessibilityIdentifier(AXID.pickerVoice)
                         fieldFailure("voice")
@@ -594,6 +630,15 @@ struct VoicePickerSheet: View {
             }
         }
         .safeAreaBar(edge: .bottom) { commits }
+    }
+
+    /// A voice as the server names it; VoiceOver reads the name or placeholder, never the id caption.
+    private func voiceRow(_ title: String, _ name: String, _ label: VoiceLabel, id: String?, loading: Bool = false) -> some View {
+        LabeledContent(title) { VoiceName(title: name, label: label, id: id) }
+            .redacted(reason: loading ? .placeholder : [])
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityValue(loading ? "Loading" : name)
     }
 
     @ViewBuilder private func fieldFailure(_ field: String) -> some View {
@@ -642,7 +687,16 @@ struct VoicePickerSheet: View {
     private var catalog: some View {
         List {
             Section("Current selection") {
-                if let voice = model.selectedVoice { catalogRow(voice) }
+                if let voice = model.selectedVoice {
+                    catalogRow(voice)
+                } else if let id = model.draft?.voice {
+                    HStack {
+                        VoiceName(title: model.draftVoiceLabel.title, label: model.draftVoiceLabel, id: id, alignment: .leading)
+                        Spacer()
+                        Image(systemName: "checkmark").accessibilityLabel("Selected")
+                    }
+                    .accessibilityElement(children: .combine)
+                }
                 Button { model.setVoice(nil); path.removeLast() } label: {
                     HStack {
                         Text("Provider default voice")
@@ -652,8 +706,8 @@ struct VoicePickerSheet: View {
                 }
             }
             Section {
-                let selectedID = model.selectedVoice?.id.lowercased()
-                ForEach(model.voices.filter { $0.id.lowercased() != selectedID }, id: \.id) { catalogRow($0) }
+                let selectedID = model.selectedVoice?.id
+                ForEach(model.voices.filter { $0.id != selectedID }, id: \.id) { catalogRow($0) }
                 if model.catalogLoading { ProgressView("Loading voices") }
                 if let failure = model.catalogFailure {
                     ContentUnavailableView {
@@ -712,7 +766,7 @@ struct VoicePickerSheet: View {
                         if voice.preview == nil { Text("No sample available").font(.caption).foregroundStyle(.secondary) }
                     }
                     Spacer()
-                    if voice.id.lowercased() == model.draft?.voice?.lowercased() { Image(systemName: "checkmark").accessibilityLabel("Selected") }
+                    if voice.id == model.draft?.voice { Image(systemName: "checkmark").accessibilityLabel("Selected") }
                 }
                 .frame(minHeight: 44)
             }
@@ -741,7 +795,7 @@ struct VoicePickerSheet: View {
         case .queued:
             queuedChoice = draft
             liveResult = "Queued for the next spoken line. The current spoken line finishes unchanged."
-            announce("\(model.name(draft)) from \(agentName)'s next reply")
+            announce("\(model.name(model.draftVoiceLabel, provider: draft.provider)) from \(agentName)'s next reply")
             updateLiveResult()
         case let .refused(reason):
             liveResult = reason == "tts_unavailable" ? "That provider is unavailable. Choose another voice." : "The live voice change was refused. Choose another voice."
@@ -762,9 +816,10 @@ struct VoicePickerSheet: View {
         if state.pending == nil, state.active.provider == choice.provider,
            state.active.model == expectedModel || state.active.model == choice.model,
            state.active.voice == expectedVoice || state.active.voice == choice.voice {
-            liveResult = "Active for this call: \(model.name(state.active))"
+            let name = model.name(state.activeDetails, choice: state.active)
+            liveResult = "Active for this call: \(name)"
             queuedChoice = nil
-            announce("\(model.name(state.active)) configured for this call")
+            announce("\(name) configured for this call")
         }
     }
 
@@ -774,6 +829,28 @@ struct VoicePickerSheet: View {
         var text = AttributedString(message)
         text.accessibilitySpeechAnnouncementPriority = .high
         AccessibilityNotification.Announcement(text).post()
+    }
+}
+
+/// A voice name; without one, the id shows under the placeholder as a small caption VoiceOver skips.
+private struct VoiceName: View {
+    let title: String
+    let label: VoiceLabel
+    let id: String?
+    var alignment: HorizontalAlignment = .trailing
+
+    private var caption: String? {
+        if case .named = label { nil } else { id }
+    }
+
+    var body: some View {
+        VStack(alignment: alignment, spacing: 2) {
+            Text(title)
+            if let caption {
+                Text(caption).font(.caption2.monospaced()).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        }
+        .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
     }
 }
 
@@ -795,11 +872,18 @@ private final class PickerFixtureProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// `/voice/tts` and `/voice/voices` as the server answers them, from `HEYDAN_PREVIEW_TTS`. `legacy` is a server from
+/// before voice names (no details, no model names, nothing saved); `unavailable` saves a voice the provider no longer
+/// has; `lookup-failed` answers the first load with names unavailable and the next with names; `lost-save` applies
+/// every PATCH but loses its answer.
 @MainActor
-private enum PickerFixture {
+enum PickerFixture {
     static let scenario = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_TTS"]
     private static var savedByLine: [URL: [String: Any]] = [:]
-    private static let providers = #"[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"Alnilam"}},{"id":"elevenlabs","name":"ElevenLabs","available":true,"models":["eleven_v4_turbo","eleven_v4"],"default":{"model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"}}]"#
+    private static var ttsLoads = 0
+    private static let providers = #"[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"Alnilam"},"modelNames":{"gemini-3.8-flash-tts":"Gemini 3.8 Flash TTS","gemini-3.8-flash-lite-tts":"Gemini 3.8 Flash Lite TTS"}},{"id":"elevenlabs","name":"ElevenLabs","available":true,"models":["eleven_v4_turbo","eleven_v4"],"default":{"model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"modelNames":{"eleven_v4_turbo":"Eleven v4 Turbo","eleven_v4":"Eleven v4"}}]"#
+    private static let geminiVoices = #"[{"id":"achernar","name":"Achernar","language":"en-US","gender":"female","description":"Storyteller & Narrator. Soft, calm, and soothing voice with a higher pitch."},{"id":"en-us-techagent-4","name":"Tech Advisor 4","language":"en-US","gender":"male","description":"Tech Support Agent / Tech Advisor. Confident and clear."},{"id":"Alnilam","name":"Alnilam","language":"en-US"}]"#
+    private static var providerRows: [[String: Any]] { try! JSONSerialization.jsonObject(with: Data(providers.utf8)) as! [[String: Any]] }
 
     static func response(_ request: URLRequest) throws -> (Int, Data) {
         guard let url = request.url else { throw URLError(.badURL) }
@@ -810,19 +894,10 @@ private enum PickerFixture {
             let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             let provider = query.first { $0.name == "provider" }?.value ?? "gemini"
             if scenario == "eleven-unavailable", provider == "elevenlabs" { return (503, Data(#"{"error":"provider_unavailable","provider":"elevenlabs"}"#.utf8)) }
-            var rows: [[String: Any]]
-            if provider == "elevenlabs" {
-                let preview = try sampleURL().absoluteString
-                rows = [["id": "bIHbv24MWmeRgasZH58o", "name": "Will", "language": "en", "gender": "male", "preview": preview],
-                        ["id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "language": "en", "gender": "female", "preview": preview]]
-            } else {
-                let data = Data(#"[{"id":"achernar","name":"Achernar","language":"en-US","gender":"female","description":"Storyteller & Narrator. Soft, calm, and soothing voice with a higher pitch."},{"id":"en-us-techagent-4","name":"Tech Advisor 4","language":"en-US","gender":"male","description":"Tech Support Agent / Tech Advisor. Confident and clear."},{"id":"Alnilam","name":"Alnilam","language":"en-US"}]"#.utf8)
-                rows = try JSONSerialization.jsonObject(with: data) as! [[String: Any]]
-            }
             let search = query.first { $0.name == "q" }?.value ?? ""
             let language = query.first { $0.name == "language" }?.value
             let gender = query.first { $0.name == "gender" }?.value
-            rows = rows.filter { row in
+            var rows = try voices(provider).filter { row in
                 (search.isEmpty || "\(row["name"] ?? "") \(row["description"] ?? "")".localizedCaseInsensitiveContains(search))
                     && (language == nil || row["language"] as? String == language) && (gender == nil || row["gender"] as? String == gender)
             }
@@ -834,8 +909,11 @@ private enum PickerFixture {
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.path = "/voice/tts"
         let key = components.url!
-        var saved = savedByLine[key] ?? (scenario == "unsaved" ? [:] : ["provider": "gemini", "voice": "en-us-techagent-4"])
-        let providerRows = try JSONSerialization.jsonObject(with: Data(providers.utf8)) as! [[String: Any]]
+        let legacy = scenario == "legacy"
+        let lineDefault: [String: Any] = scenario == "unavailable"
+            ? ["provider": "elevenlabs", "model": "eleven_v4_turbo", "voice": "pNInz6obpgDQGcFmaJgB"]
+            : ["provider": "gemini", "model": "gemini-3.8-flash-tts", "voice": "en-us-techagent-4"]
+        var saved = savedByLine[key] ?? (legacy ? [:] : lineDefault)
         var available = providerRows
         if scenario == "eleven-unavailable" { available[1]["available"] = false }
         if request.httpMethod == "PATCH" {
@@ -852,17 +930,59 @@ private enum PickerFixture {
                 return body
             } ?? Data()
             let input = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-            if input["reset"] as? Bool == true { saved = [:] } else {
+            if input["reset"] as? Bool == true { saved = legacy ? [:] : lineDefault } else {
                 guard let id = input["provider"] as? String, let provider = available.first(where: { $0["id"] as? String == id }) else { return (400, Data(#"{"error":"invalid","field":"provider"}"#.utf8)) }
                 guard provider["available"] as? Bool == true else { return (503, Data(#"{"error":"provider_unavailable","provider":"elevenlabs"}"#.utf8)) }
-                saved = input
+                // The server stores the provider default for an omitted model or voice.
+                saved = legacy ? input : (provider["default"] as! [String: Any]).merging(input) { $1 }
             }
             savedByLine[key] = saved
+            if scenario == "lost-save" { return (502, Data(#"{"error":"upstream"}"#.utf8)) }
         }
         let provider = available.first { $0["id"] as? String == saved["provider"] as? String } ?? available[0]
+        let effective = (provider["default"] as! [String: Any]).merging(["provider": provider["id"]!]) { $1 }.merging(saved) { $1 }
+        var body: [String: Any] = ["effective": effective, "saved": saved]
+        if legacy {
+            body["providers"] = available.map { $0.filter { $0.key != "modelNames" } }
+        } else {
+            ttsLoads += 1
+            let status = scenario == "lookup-failed" && ttsLoads == 1 ? "lookup_failed" : nil
+            body["details"] = ["saved": try details(saved, status: status), "effective": try details(effective, status: status)]
+            body["providers"] = try available.map { row in
+                row.merging(["defaultDetails": try details(["provider": row["id"]!], status: status)]) { $1 }
+            }
+        }
+        return (200, try JSONSerialization.data(withJSONObject: body))
+    }
+
+    /// What the worker says about a live choice, for the stand-in call.
+    static func details(_ choice: TTSChoice) -> ChoiceDetails? {
+        let fields = ["provider": choice.provider, "model": choice.model, "voice": choice.voice].compactMapValues(\.self)
+        guard let data = try? JSONSerialization.data(withJSONObject: details(fields)) else { return nil }
+        return try? JSONDecoder().decode(ChoiceDetails.self, from: data)
+    }
+
+    /// `ChoiceDetails` for a choice: names from this catalog, `unavailable` for a voice it does not have.
+    private static func details(_ choice: [String: Any], status: String? = nil) throws -> [String: Any] {
+        let id = choice["provider"] as? String ?? "gemini"
+        let provider = providerRows.first { $0["id"] as? String == id } ?? providerRows[0]
         let defaults = provider["default"] as! [String: Any]
-        let effective: [String: Any] = ["provider": saved["provider"] ?? provider["id"]!, "model": saved["model"] ?? defaults["model"]!, "voice": saved["voice"] ?? defaults["voice"]!]
-        return (200, try JSONSerialization.data(withJSONObject: ["effective": effective, "saved": saved, "providers": available]))
+        let model = choice["model"] as? String ?? defaults["model"] as! String
+        let voice = choice["voice"] as? String ?? defaults["voice"] as! String
+        let row = try voices(id).first { $0["id"] as? String == voice }
+        let status = status ?? (row == nil ? "unavailable" : "resolved")
+        let named = status == "resolved" ? row : nil
+        return ["provider": id, "providerName": provider["name"]!, "model": model,
+                "modelName": (provider["modelNames"] as? [String: String])?[model] ?? model, "voice": voice,
+                "voiceName": named?["name"] ?? NSNull(), "language": named?["language"] ?? NSNull(),
+                "gender": named?["gender"] ?? NSNull(), "preview": named?["preview"] ?? NSNull(), "status": status]
+    }
+
+    private static func voices(_ provider: String) throws -> [[String: Any]] {
+        guard provider == "elevenlabs" else { return try JSONSerialization.jsonObject(with: Data(geminiVoices.utf8)) as! [[String: Any]] }
+        let preview = try sampleURL().absoluteString
+        return [["id": "bIHbv24MWmeRgasZH58o", "name": "Will", "language": "en", "gender": "male", "preview": preview],
+                ["id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "language": "en", "gender": "female", "preview": preview]]
     }
 
     private static func sampleURL() throws -> URL {

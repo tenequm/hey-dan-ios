@@ -39,6 +39,94 @@ struct VoiceSettingsTests {
         #expect(view.providers.map(\.available) == [true, false])
     }
 
+    @Test func decodesTTSViewDetails() throws {
+        let json = #"""
+        {"effective":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"S80713fa2M70CssGEBj5"},
+          "saved":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"S80713fa2M70CssGEBj5"},
+          "details":{
+           "saved":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo",
+                    "voice":"S80713fa2M70CssGEBj5","voiceName":"Dan","language":"en","gender":"male","preview":"https://example.invalid/d.mp3","status":"resolved"},
+           "effective":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo",
+                        "voice":"S80713fa2M70CssGEBj5","voiceName":null,"language":null,"gender":null,"preview":null,"status":"lookup_failed"}},
+          "providers":[
+           {"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"Alnilam"},
+            "modelNames":{"gemini-3.8-flash-tts":"Gemini 3.8 Flash TTS"},
+            "defaultDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS",
+                              "voice":"Alnilam","voiceName":null,"language":null,"gender":null,"preview":null,"status":"unavailable"}}]}
+        """#
+        let view = try JSONDecoder().decode(TTSView.self, from: Data(json.utf8))
+        let saved = try #require(view.details?.saved)
+        #expect(saved == ChoiceDetails(provider: "elevenlabs", providerName: "ElevenLabs", model: "eleven_v4_turbo",
+                                       modelName: "Eleven v4 Turbo", voice: "S80713fa2M70CssGEBj5", voiceName: "Dan",
+                                       language: "en", gender: "male", preview: URL(string: "https://example.invalid/d.mp3"),
+                                       status: "resolved"))
+        #expect(VoiceLabel(saved) == .named("Dan"))
+        #expect(VoiceLabel(view.details?.effective) == .lookupFailed)
+        let gemini = try #require(view.providers.first)
+        #expect(gemini.modelNames == ["gemini-3.8-flash-tts": "Gemini 3.8 Flash TTS"])
+        #expect(VoiceLabel(gemini.defaultDetails) == .unavailable)
+        #expect(gemini.defaultDetails?.voice == "Alnilam")
+    }
+
+    @Test func olderServerHasNoDetails() throws {
+        let json = #"""
+        {"effective":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"Alnilam"},"saved":{"provider":null,"model":null,"voice":null},
+         "providers":[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"Alnilam"}}]}
+        """#
+        let view = try JSONDecoder().decode(TTSView.self, from: Data(json.utf8))
+        #expect(view.details == nil)
+        #expect(view.providers.first?.modelNames == nil)
+        #expect(view.providers.first?.defaultDetails == nil)
+        #expect(VoiceLabel(view.details?.effective) == .noDetails(providerDefault: false))
+    }
+
+    private func view(saved: SavedTTSChoice) -> TTSView {
+        TTSView(effective: TTSChoice(provider: "gemini", model: "gemini-3.8-flash-tts", voice: "Alnilam"), saved: saved, providers: [
+            TTSProvider(id: "gemini", name: "Gemini", available: true, models: ["gemini-3.8-flash-tts"],
+                        default: TTSDefaults(model: "gemini-3.8-flash-tts", voice: "Alnilam")),
+            TTSProvider(id: "elevenlabs", name: "ElevenLabs", available: true, models: ["eleven_v4_turbo", "eleven_v4"],
+                        default: TTSDefaults(model: "eleven_v4_turbo", voice: "bIHbv24MWmeRgasZH58o")),
+        ])
+    }
+
+    @Test func providerDefaultSaveConfirmsAgainstFilledValues() {
+        let patch = TTSPatch.choice(TTSChoice(provider: "elevenlabs"))
+        let filled = SavedTTSChoice(provider: "elevenlabs", model: "eleven_v4_turbo", voice: "bIHbv24MWmeRgasZH58o")
+        #expect(view(saved: filled).confirms(patch, previous: nil))
+        #expect(view(saved: SavedTTSChoice(provider: "elevenlabs")).confirms(patch, previous: nil))
+        #expect(!view(saved: SavedTTSChoice(provider: "elevenlabs", model: "eleven_v4", voice: "bIHbv24MWmeRgasZH58o")).confirms(patch, previous: nil))
+        #expect(!view(saved: SavedTTSChoice(provider: "gemini", model: "gemini-3.8-flash-tts", voice: "Alnilam")).confirms(patch, previous: nil))
+    }
+
+    @Test func explicitSaveConfirmsExactly() {
+        let choice = TTSChoice(provider: "elevenlabs", model: "eleven_v4", voice: "EXAVITQu4vr4xnSDxMaL")
+        #expect(view(saved: SavedTTSChoice(provider: "elevenlabs", model: "eleven_v4", voice: "EXAVITQu4vr4xnSDxMaL")).confirms(.choice(choice), previous: nil))
+        #expect(!view(saved: SavedTTSChoice(provider: "elevenlabs", model: "eleven_v4", voice: "exavitqu4vr4xnsdxmal")).confirms(.choice(choice), previous: nil))
+        #expect(!view(saved: SavedTTSChoice(provider: "elevenlabs", model: "eleven_v4_turbo", voice: "bIHbv24MWmeRgasZH58o")).confirms(.choice(choice), previous: nil))
+    }
+
+    @Test func resetConfirmsAsEmptyOrChanged() {
+        let before = SavedTTSChoice(provider: "elevenlabs", model: "eleven_v4_turbo", voice: "bIHbv24MWmeRgasZH58o")
+        let lineDefault = SavedTTSChoice(provider: "gemini", model: "gemini-3.8-flash-tts", voice: "en-us-techagent-4")
+        #expect(view(saved: SavedTTSChoice()).confirms(.reset, previous: before))
+        #expect(view(saved: lineDefault).confirms(.reset, previous: before))
+        #expect(!view(saved: before).confirms(.reset, previous: before))
+        #expect(!view(saved: lineDefault).confirms(.reset, previous: nil))
+    }
+
+    @Test func voiceLabels() {
+        #expect(VoiceLabel(ChoiceDetails(voice: "a", voiceName: "Achernar", status: "resolved")) == .named("Achernar"))
+        #expect(VoiceLabel(ChoiceDetails(voice: "a", voiceName: "Achernar", status: "lookup_failed")) == .named("Achernar"))
+        #expect(VoiceLabel(ChoiceDetails(voice: "a", voiceName: "Achernar", status: "unavailable")) == .unavailable)
+        #expect(VoiceLabel(ChoiceDetails(voice: "a", status: "lookup_failed")) == .lookupFailed)
+        #expect(VoiceLabel(ChoiceDetails(voice: "a", status: "resolved")) == .lookupFailed)
+        #expect(VoiceLabel(nil) == .noDetails(providerDefault: false))
+        #expect(VoiceLabel(nil, providerDefault: true).title == "Provider default voice")
+        #expect(VoiceLabel(nil).title == "Selected voice")
+        #expect(VoiceLabel.unavailable.title == "Voice no longer available")
+        #expect(VoiceLabel.lookupFailed.title == "Name unavailable")
+    }
+
     @Test func mapsPatchInvalidFixture() {
         let json = #"""
         {"error":"invalid","field":"voice"}

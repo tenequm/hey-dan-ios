@@ -15,6 +15,14 @@ struct CallVoiceTests {
         #expect(expected.v == 1)
     }
 
+    @Test func decodesVoiceAttributeDetails() throws {
+        let json = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"Alnilam"},"activeDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS","voice":"Alnilam","voiceName":"Alnilam","language":"en-US","gender":null,"preview":null,"status":"resolved"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"gone"},"pendingDetails":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo","voice":"gone","voiceName":null,"status":"unavailable"},"gen":7}"#
+        let state = try #require(CallVoiceState(attribute: json))
+        #expect(VoiceLabel(state.activeDetails) == .named("Alnilam"))
+        #expect(VoiceLabel(state.pendingDetails) == .unavailable)
+        #expect(CallVoiceState(attribute: pendingAttribute)?.activeDetails == nil)
+    }
+
     @Test func protocol4HasNoVoiceAttribute() {
         #expect(VoiceProtocol.Names(version: 4)?.voiceAttribute == nil)
     }
