@@ -22,6 +22,7 @@ final class VoiceSettingsModel {
     private(set) var next: String?
     var query = ""
     var language = ""
+    var gender = ""
     private struct VoiceKey: Hashable {
         let provider: String
         let id: String
@@ -38,9 +39,10 @@ final class VoiceSettingsModel {
         let provider: String
         let query: String
         let language: String
+        let gender: String
     }
     private var catalogKey: CatalogKey? {
-        draft.map { CatalogKey(provider: $0.provider, query: query, language: language) }
+        draft.map { CatalogKey(provider: $0.provider, query: query, language: language, gender: gender) }
     }
 
     private struct LineKey: Hashable {
@@ -255,7 +257,8 @@ final class VoiceSettingsModel {
     private func catalogPage(cursor: String?, generation: UUID, key: CatalogKey) async {
         let provider = key.provider
         let request = line.voicesRequest(provider: provider, q: key.query.isEmpty ? nil : key.query,
-                                        language: key.language.isEmpty ? nil : key.language, cursor: cursor, limit: 50)
+                                        language: key.language.isEmpty ? nil : key.language,
+                                        gender: key.gender.isEmpty ? nil : key.gender, cursor: cursor, limit: 50)
         do {
             let page: CatalogPage = try await fetch(request)
             guard generation == catalogGeneration, key == catalogKey, !Task.isCancelled else { return }
@@ -673,14 +676,24 @@ struct VoicePickerSheet: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Picker("Gender", selection: $model.gender) {
+                        Text("All genders").tag("")
+                        Text("Female").tag("female")
+                        Text("Male").tag("male")
+                    }
+                    Divider()
                     Button("All languages") { model.language = "" }
                     ForEach(model.languages, id: \.self) { code in Button(code) { model.language = code } }
                     Button("Enter language code...") { customLanguage = model.language; languagePrompt = true }
-                } label: { Label(model.language.isEmpty ? "Language code: All" : "Language code: \(model.language)", systemImage: "line.3.horizontal.decrease") }
+                } label: {
+                    Label("Language code: \(model.language.isEmpty ? "All" : model.language), Gender: \(model.gender.isEmpty ? "All" : model.gender.capitalized)",
+                          systemImage: "line.3.horizontal.decrease")
+                }
+                .accessibilityIdentifier(AXID.pickerFilter)
             }
         }
         .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
-        .task(id: "\(model.draft?.provider ?? "")\n\(model.query)\n\(model.language)") { await model.loadCatalog() }
+        .task(id: "\(model.draft?.provider ?? "")\n\(model.query)\n\(model.language)\n\(model.gender)") { await model.loadCatalog() }
         .onDisappear { model.cancelCatalog(); VoiceSample.release(sample) }
     }
 
@@ -693,7 +706,8 @@ struct VoicePickerSheet: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(voice.name)
-                        if let language = voice.language { Text(language).font(.caption).foregroundStyle(.secondary) }
+                        let traits = [voice.language, voice.gender?.capitalized].compactMap(\.self)
+                        if !traits.isEmpty { Text(traits.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
                         if let description = voice.description { Text(description).font(.caption).foregroundStyle(.secondary) }
                         if voice.preview == nil { Text("No sample available").font(.caption).foregroundStyle(.secondary) }
                     }
@@ -785,7 +799,7 @@ private final class PickerFixtureProtocol: URLProtocol, @unchecked Sendable {
 private enum PickerFixture {
     static let scenario = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_TTS"]
     private static var savedByLine: [URL: [String: Any]] = [:]
-    private static let providers = #"[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"Alnilam"}},{"id":"elevenlabs","name":"ElevenLabs","available":true,"models":["eleven_turbo_v2_5","eleven_flash_v2_5","eleven_multilingual_v2"],"default":{"model":"eleven_turbo_v2_5","voice":"bIHbv24MWmeRgasZH58o"}}]"#
+    private static let providers = #"[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"Alnilam"}},{"id":"elevenlabs","name":"ElevenLabs","available":true,"models":["eleven_v4_turbo","eleven_v4"],"default":{"model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"}}]"#
 
     static func response(_ request: URLRequest) throws -> (Int, Data) {
         guard let url = request.url else { throw URLError(.badURL) }
@@ -798,15 +812,19 @@ private enum PickerFixture {
             if scenario == "eleven-unavailable", provider == "elevenlabs" { return (503, Data(#"{"error":"provider_unavailable","provider":"elevenlabs"}"#.utf8)) }
             var rows: [[String: Any]]
             if provider == "elevenlabs" {
-                rows = [["id": "bIHbv24MWmeRgasZH58o", "name": "Will", "language": "en", "gender": "male", "preview": try sampleURL().absoluteString]]
+                let preview = try sampleURL().absoluteString
+                rows = [["id": "bIHbv24MWmeRgasZH58o", "name": "Will", "language": "en", "gender": "male", "preview": preview],
+                        ["id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "language": "en", "gender": "female", "preview": preview]]
             } else {
                 let data = Data(#"[{"id":"achernar","name":"Achernar","language":"en-US","gender":"female","description":"Storyteller & Narrator. Soft, calm, and soothing voice with a higher pitch."},{"id":"en-us-techagent-4","name":"Tech Advisor 4","language":"en-US","gender":"male","description":"Tech Support Agent / Tech Advisor. Confident and clear."},{"id":"Alnilam","name":"Alnilam","language":"en-US"}]"#.utf8)
                 rows = try JSONSerialization.jsonObject(with: data) as! [[String: Any]]
             }
             let search = query.first { $0.name == "q" }?.value ?? ""
             let language = query.first { $0.name == "language" }?.value
+            let gender = query.first { $0.name == "gender" }?.value
             rows = rows.filter { row in
-                (search.isEmpty || "\(row["name"] ?? "") \(row["description"] ?? "")".localizedCaseInsensitiveContains(search)) && (language == nil || row["language"] as? String == language)
+                (search.isEmpty || "\(row["name"] ?? "") \(row["description"] ?? "")".localizedCaseInsensitiveContains(search))
+                    && (language == nil || row["language"] as? String == language) && (gender == nil || row["gender"] as? String == gender)
             }
             if scenario == "search-empty" { rows = [] }
             var page: [String: Any] = ["provider": provider, "voices": rows]
