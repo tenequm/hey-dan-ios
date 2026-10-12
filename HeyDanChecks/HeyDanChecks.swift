@@ -233,6 +233,7 @@ final class HeyDanChecks: XCTestCase {
         XCTAssertTrue(female.waitForExistence(timeout: 5))
         shot("gender-menu")
         female.tap()
+        XCTAssertTrue(element(ID.pickerSample("bIHbv24MWmeRgasZH58o")).waitForNonExistence(timeout: 5))
         XCTAssertTrue(element(ID.pickerSample("EXAVITQu4vr4xnSDxMaL")).waitForExistence(timeout: 5))
         XCTAssertFalse(element(ID.pickerSample("bIHbv24MWmeRgasZH58o")).exists)
         assertText(ID.pickerFilter, "Gender: Female")
