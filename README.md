@@ -127,8 +127,10 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   devicectl device settings audio --device <sim> --input-device <uid>` picks the Simulator's microphone
   (`systemDefault` is the Mac's).
 - Voice picker fixture checks: `just sim-checks VoicePickerSaved` (saved, queued-to-active and provider samples),
-  `VoicePickerLive` (active, refused, ended), `VoicePickerFailures` (unsaved, unavailable,
-  unsupported route and access lost), `VoicePickerFailuresCatalog` (catalog retry, empty search, access lost),
+  `VoicePickerLive` (active, refused, ended), `VoicePickerFailures` (a server from before voice names, ElevenLabs unavailable,
+  unsupported route and access lost), `VoicePickerNames` (a saved voice the provider no longer has, names unavailable
+  then Retry), `VoicePickerLostSave` (a save whose answer is lost, confirmed against the values the server filled
+  in, and a lost reset, left not confirmed with the reloaded choice shown), `VoicePickerFailuresCatalog` (catalog retry, empty search, access lost),
   `VoicePickerGender` (the Female filter on both providers, kept across a provider switch) and `CallOptions`
   (hands-free and Manual options).
   `VoicePickerSaves`, `SampleThenCall` and `SampleDismissThenCall` require a real test line.
@@ -137,9 +139,9 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   server restore/compare cleanup in the calling script too. The sample checks expect ElevenLabs available.
   `SampleDismissThenCall` plays a sample for two seconds, taps Back to stop it, closes the picker,
   discards changes if prompted, taps Call once, and requires Call again after 45 seconds.
-- DEBUG Simulator voice hooks: `HEYDAN_PREVIEW_TTS=saved|unsaved|eleven-unavailable|catalog-fail|search-empty|no-route|forbidden`
+- DEBUG Simulator voice hooks: `HEYDAN_PREVIEW_TTS=saved|legacy|unavailable|lookup-failed|lost-save|eleven-unavailable|catalog-fail|search-empty|no-route|forbidden`
   supplies HTTP fixtures; `HEYDAN_PREVIEW_VOICE=pending|active|ended|refused` supplies live voice state
-  (use `HEYDAN_PREVIEW_PHASE=waiting` and open Voice). `HEYDAN_VOICE_STEPS="20:gemini/Alnilam,35:elevenlabs/bIHbv24MWmeRgasZH58o"`
+  (use `HEYDAN_PREVIEW_PHASE=waiting` and open Voice). `HEYDAN_VOICE_STEPS="20:gemini/alnilam,35:elevenlabs/bIHbv24MWmeRgasZH58o"`
   queues timed live choices after voice support appears; an omitted model uses the provider default.
   `HEYDAN_TTS_PATCH='<json>'` applies one saved-choice PATCH at launch, including `{"reset":true}`.
   `HEYDAN_FEED_ON_VOICE=1` delays `HEYDAN_FEED_WAV` until one second after the first queued voice outcome,

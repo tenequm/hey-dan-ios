@@ -36,19 +36,127 @@ public struct TTSDefaults: Decodable, Sendable, Equatable {
     }
 }
 
+/// Whether the provider named a voice: `unavailable` means it certainly does not have it, `lookupFailed` that it
+/// could not be asked.
+public enum VoiceStatus: String, Sendable {
+    case resolved, unavailable
+    case lookupFailed = "lookup_failed"
+}
+
+/// The server's names for one choice. Every field is optional and decodes on its own, so a server that sends less,
+/// or a value this app cannot read, still decodes the rest.
+public struct ChoiceDetails: Decodable, Sendable, Equatable {
+    public let provider: String?
+    public let providerName: String?
+    public let model: String?
+    public let modelName: String?
+    public let voice: String?
+    public let voiceName: String?
+    public let language: String?
+    public let gender: String?
+    public let preview: URL?
+    /// Nil when none was given or this app does not know it.
+    public let status: VoiceStatus?
+
+    public init(provider: String? = nil, providerName: String? = nil, model: String? = nil, modelName: String? = nil,
+                voice: String? = nil, voiceName: String? = nil, language: String? = nil, gender: String? = nil,
+                preview: URL? = nil, status: VoiceStatus? = nil) {
+        self.provider = provider
+        self.providerName = providerName
+        self.model = model
+        self.modelName = modelName
+        self.voice = voice
+        self.voiceName = voiceName
+        self.language = language
+        self.gender = gender
+        self.preview = preview
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, providerName, model, modelName, voice, voiceName, language, gender, preview, status
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func text(_ key: CodingKeys) -> String? { try? container.decodeIfPresent(String.self, forKey: key) }
+        provider = text(.provider)
+        providerName = text(.providerName)
+        model = text(.model)
+        modelName = text(.modelName)
+        voice = text(.voice)
+        voiceName = text(.voiceName)
+        language = text(.language)
+        gender = text(.gender)
+        preview = try? container.decodeIfPresent(URL.self, forKey: .preview)
+        status = text(.status).flatMap(VoiceStatus.init(rawValue:))
+    }
+}
+
+/// What a label says for a voice: the server's name for it, or why there is none.
+public enum VoiceLabel: Sendable, Equatable {
+    case named(String)
+    /// The provider says the voice does not exist.
+    case unavailable
+    /// The provider could not be asked; asking again may name it.
+    case lookupFailed
+    /// The provider has the voice but gave it no name; asking again will not change that.
+    case unnamed
+    /// A server from before voice names sent no details: a generic label, never the id.
+    case noDetails(providerDefault: Bool)
+
+    public init(_ details: ChoiceDetails?, providerDefault: Bool = false) {
+        guard let details else {
+            self = .noDetails(providerDefault: providerDefault)
+            return
+        }
+        if details.status == .unavailable {
+            self = .unavailable
+        } else if let name = details.voiceName {
+            self = .named(name)
+        } else {
+            self = details.status == .resolved ? .unnamed : .lookupFailed
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case let .named(name): name
+        case .unavailable: "Voice no longer available"
+        case .lookupFailed, .unnamed: "Name unavailable"
+        case let .noDetails(providerDefault): providerDefault ? "Provider default voice" : "Selected voice"
+        }
+    }
+}
+
 public struct TTSProvider: Decodable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let available: Bool
     public let models: [String]
     public let `default`: TTSDefaults
+    public let modelNames: [String: String]?
+    public let defaultDetails: ChoiceDetails?
 
-    public init(id: String, name: String, available: Bool, models: [String], default: TTSDefaults) {
+    public init(id: String, name: String, available: Bool, models: [String], default: TTSDefaults,
+                modelNames: [String: String]? = nil, defaultDetails: ChoiceDetails? = nil) {
         self.id = id
         self.name = name
         self.available = available
         self.models = models
         self.default = `default`
+        self.modelNames = modelNames
+        self.defaultDetails = defaultDetails
+    }
+}
+
+public struct TTSDetails: Decodable, Sendable, Equatable {
+    public let saved: ChoiceDetails?
+    public let effective: ChoiceDetails?
+
+    public init(saved: ChoiceDetails? = nil, effective: ChoiceDetails? = nil) {
+        self.saved = saved
+        self.effective = effective
     }
 }
 
@@ -56,11 +164,30 @@ public struct TTSView: Decodable, Sendable, Equatable {
     public let effective: TTSChoice
     public let saved: SavedTTSChoice
     public let providers: [TTSProvider]
+    public let details: TTSDetails?
 
-    public init(effective: TTSChoice, saved: SavedTTSChoice, providers: [TTSProvider]) {
+    public init(effective: TTSChoice, saved: SavedTTSChoice, providers: [TTSProvider], details: TTSDetails? = nil) {
         self.effective = effective
         self.saved = saved
         self.providers = providers
+        self.details = details
+    }
+}
+
+public extension TTSView {
+    /// Whether this view shows `patch` saved. The server fills an omitted model or voice with the provider default.
+    /// A reset writes the line's default, which the server does not report, so only an older server's empty row
+    /// proves one: a changed saved choice may be another client's save.
+    func confirms(_ patch: TTSPatch) -> Bool {
+        switch patch {
+        case .reset:
+            return saved.isEmpty
+        case let .choice(choice):
+            let fallback = providers.first { $0.id == choice.provider }?.default
+            return saved.provider == choice.provider
+                && (saved.model == choice.model || (choice.model == nil && saved.model == fallback?.model))
+                && (saved.voice == choice.voice || (choice.voice == nil && saved.voice == fallback?.voice))
+        }
     }
 }
 

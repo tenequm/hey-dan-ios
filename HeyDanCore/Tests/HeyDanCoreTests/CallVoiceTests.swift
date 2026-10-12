@@ -15,6 +15,23 @@ struct CallVoiceTests {
         #expect(expected.v == 1)
     }
 
+    @Test func decodesVoiceAttributeDetails() throws {
+        let json = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"activeDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS","voice":"alnilam","voiceName":"Alnilam","language":"en-US","gender":null,"preview":null,"status":"resolved"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"gone"},"pendingDetails":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo","voice":"gone","voiceName":null,"status":"unavailable"},"gen":7}"#
+        let state = try #require(CallVoiceState(attribute: json))
+        #expect(VoiceLabel(state.activeDetails) == .named("Alnilam"))
+        #expect(VoiceLabel(state.pendingDetails) == .unavailable)
+        #expect(CallVoiceState(attribute: pendingAttribute)?.activeDetails == nil)
+    }
+
+    /// nanoclaw's `voice-mode-tts.fixtures.json` `voiceAttribute`: the worker's named post as it sends it.
+    @Test func decodesServerVoiceAttributeFixture() throws {
+        let state = try #require(CallVoiceState(attribute: #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"gen":7,"activeDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS","voice":"alnilam","voiceName":"Alnilam","language":"en-US","gender":"male","preview":null,"status":"resolved"},"pendingDetails":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo","voice":"bIHbv24MWmeRgasZH58o","voiceName":"Will","language":"en","gender":"male","preview":"https://example.invalid/w.mp3","status":"resolved"}}"#))
+        #expect(state.active == TTSChoice(provider: "gemini", model: "gemini-3.8-flash-tts", voice: "alnilam"))
+        #expect(VoiceLabel(state.activeDetails) == .named("Alnilam"))
+        #expect(VoiceLabel(state.pendingDetails) == .named("Will"))
+        #expect(state.pendingDetails?.preview == URL(string: "https://example.invalid/w.mp3"))
+    }
+
     @Test func protocol4HasNoVoiceAttribute() {
         #expect(VoiceProtocol.Names(version: 4)?.voiceAttribute == nil)
     }

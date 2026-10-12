@@ -15,13 +15,18 @@ public struct VoiceRequest: Encodable, Sendable, Equatable {
 public struct CallVoiceState: Decodable, Sendable, Equatable {
     public let v: Int
     public let active: TTSChoice
+    public let activeDetails: ChoiceDetails?
     public let pending: TTSChoice?
+    public let pendingDetails: ChoiceDetails?
     public let gen: Int?
 
-    public init(active: TTSChoice, pending: TTSChoice? = nil, gen: Int? = nil) {
+    public init(active: TTSChoice, activeDetails: ChoiceDetails? = nil, pending: TTSChoice? = nil,
+                pendingDetails: ChoiceDetails? = nil, gen: Int? = nil) {
         v = 1
         self.active = active
+        self.activeDetails = activeDetails
         self.pending = pending
+        self.pendingDetails = pendingDetails
         self.gen = gen
     }
 
