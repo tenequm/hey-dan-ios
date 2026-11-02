@@ -36,7 +36,12 @@ sim: gen
     #!/usr/bin/env bash
     set -euo pipefail
     udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
-    [ -n "$udid" ] || udid=$(xcrun simctl create "{{sim_name}}" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max com.apple.CoreSimulator.SimRuntime.iOS-27-0)
+    if [ -z "$udid" ]; then
+        # Newest generic iOS runtime; the -iPhone<N> variants are device-specific downloads.
+        runtime=$(xcrun simctl list runtimes available -j | jq -r '[.runtimes[] | select(.platform == "iOS" and (.identifier | test("-iPhone") | not))] | sort_by(.version | split(".") | map(tonumber)) | last | .identifier // empty')
+        [ -n "$runtime" ] || { echo "no iOS Simulator runtime: run xcodebuild -downloadPlatform iOS" >&2; exit 1; }
+        udid=$(xcrun simctl create "{{sim_name}}" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "$runtime")
+    fi
     xcrun simctl bootstatus "$udid" -b >/dev/null
     open "$(xcode-select -p)/../Applications/DeviceHub.app"
     xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination "id=$udid" -derivedDataPath "{{sim_build}}" build -quiet
