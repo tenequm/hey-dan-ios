@@ -136,9 +136,9 @@ extension ChatController {
     func download(_ file: FileAttachment) async throws -> URL {
         guard let host, let pairing else { throw AppError.notPaired }
         let token = generation
-        if let cached = await files.cached(fileId: file.id, host: host, deviceId: pairing.deviceId) { return cached }
+        if let cached = await files.cached(fileId: file.id, name: file.name, host: host, deviceId: pairing.deviceId) { return cached }
         let bytes = try await service.download(fileId: file.id)
         guard token == generation else { throw CancellationError() }
-        return try await files.cache(bytes, fileId: file.id, host: host, deviceId: pairing.deviceId)
+        return try await files.cache(bytes, fileId: file.id, name: file.name, host: host, deviceId: pairing.deviceId)
     }
 }

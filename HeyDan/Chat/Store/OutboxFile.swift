@@ -76,15 +76,19 @@ extension OutboxFile {
             }
         }
     }
-    private func downloadURL(fileId: String, host: URL, deviceId: String) -> URL {
-        directory(host: host, deviceId: deviceId).appending(path: "downloads").appending(path: StoreLocation.digest(fileId))
+    private func safeName(_ name: String) -> String {
+        let value = name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? "attachment"
+        return value == "." || value == ".." || value.isEmpty ? "attachment" : value
     }
-    func cached(fileId: String, host: URL, deviceId: String) -> URL? {
-        let url = downloadURL(fileId: fileId, host: host, deviceId: deviceId)
+    private func downloadURL(fileId: String, name: String, host: URL, deviceId: String) -> URL {
+        directory(host: host, deviceId: deviceId).appending(path: "downloads").appending(path: StoreLocation.digest(fileId)).appending(path: safeName(name))
+    }
+    func cached(fileId: String, name: String, host: URL, deviceId: String) -> URL? {
+        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
-    func cache(_ data: Data, fileId: String, host: URL, deviceId: String) throws -> URL {
-        let url = downloadURL(fileId: fileId, host: host, deviceId: deviceId)
+    func cache(_ data: Data, fileId: String, name: String, host: URL, deviceId: String) throws -> URL {
+        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return url
