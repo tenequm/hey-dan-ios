@@ -260,14 +260,17 @@ import UIKit
         guard self.host == host else { return nil }
         return conversations.first { $0.agent.id == agent }
     }
-    func unpair(host: URL) async {
+    func unpair(host: URL, localOnly: Bool = false) async {
         guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return }
         do {
             let client: any AppService = self.host == host ? service : SignedClient(host: host, deviceId: entry.pairing.deviceId)
-            try await client.unpair()
-            try Pairings.shared.remove(host: host)
+            if !localOnly {
+                do { try await client.unpair() }
+                catch AppError.server(401, let body) where ["device_revoked", "unknown_device"].contains(body.error) {}
+            }
             try await store.clear(host: host, deviceId: entry.pairing.deviceId)
             try await files.clear(host: host, deviceId: entry.pairing.deviceId)
+            try Pairings.shared.remove(host: host)
         } catch { self.error = AppError.map(error) }
     }
     func persist(_ changed: Set<String>) async throws {
@@ -288,9 +291,9 @@ import UIKit
             if ["device_revoked", "unknown_device"].contains(body.error), let host, let pairing {
                 selectPairing(nil, host: host)
                 do {
-                    try Pairings.shared.remove(host: host)
                     try await store.clear(host: host, deviceId: pairing.deviceId)
                     try await files.clear(host: host, deviceId: pairing.deviceId)
+                    try Pairings.shared.remove(host: host)
                 } catch { self.error = AppError.map(error) }
                 return
             }
