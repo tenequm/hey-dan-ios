@@ -24,8 +24,21 @@ import UIKit
     var error: AppError?
     var features: [String] = []
     var conversations: [Conversation] { reducer.conversations.values.sorted { $0.id < $1.id } }
-    var thread: [ThreadEntity] { openConversationId.map { reducer.thread(conversationId: $0) } ?? [] }
-    var rows: [ThreadRow] { openConversationId.map { reducer.rows(conversationId: $0, outbox: outbox.entries) } ?? [] }
+    var thread: [ThreadEntity] { openConversationId.map { visibleThread($0) } ?? [] }
+    var rows: [ThreadRow] { openConversationId.map { visibleRows($0) } ?? [] }
+    var historyFloors: [String: Int64] = [:]
+    private func order(_ entity: ThreadEntity) -> Int64 {
+        switch entity { case .message(let m): m.order; case .question(let q): q.order; case .unknown: 0 }
+    }
+    private func visibleThread(_ id: String) -> [ThreadEntity] {
+        reducer.thread(conversationId: id).filter { order($0) >= (historyFloors[id] ?? 0) }
+    }
+    private func visibleRows(_ id: String) -> [ThreadRow] {
+        reducer.rows(conversationId: id, outbox: outbox.entries).filter {
+            if case .entity(let entity) = $0 { return order(entity) >= (historyFloors[id] ?? 0) }
+            return true
+        }
+    }
     var statuses: [String: Status] { reducer.statuses }
     var badge: Badge? { reducer.badge }
     var hasMoreBefore: Bool { openConversationId.flatMap { reducer.hasMoreBefore[$0] } ?? false }
@@ -102,6 +115,7 @@ import UIKit
         runner = nil; streamTask = nil
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); openConversationId = nil
+        historyFloors = [:]
         savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; features = []; error = nil; uploadProgress = [:]
         connectionState = .disconnected
         guard let pairing else { return }
@@ -190,8 +204,11 @@ import UIKit
         guard let id = openConversationId, ready else { return }
         let token = generation
         do {
-            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before, after: after))
+            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before ?? (after == nil ? historyFloors[id] : nil), after: after))
             guard token == generation, !Task.isCancelled else { return }
+            if after == nil, let floor = page.items.map({ order($0) }).min() {
+                historyFloors[id] = min(historyFloors[id] ?? floor, floor)
+            }
             let changed = reducer.upsert(page, conversationId: id)
             for entity in page.items { if case .message(let message) = entity { outbox.reconcile(message) } }
             try await persist(changed)
