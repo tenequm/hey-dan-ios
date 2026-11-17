@@ -110,11 +110,12 @@ import UIKit
 
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }
+        let pendingOpen = self.host == nil || self.host == host ? openConversationId : nil
         generation = UUID()
         loadTask?.cancel(); streamTask?.cancel(); runner?.cancel(); readTask?.cancel()
         runner = nil; streamTask = nil
         self.host = host; self.pairing = pairing
-        reducer = ThreadReducer(); outbox = Outbox(); openConversationId = nil
+        reducer = ThreadReducer(); outbox = Outbox(); openConversationId = pairing == nil ? nil : pendingOpen
         historyFloors = [:]
         savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; features = []; error = nil; uploadProgress = [:]
         connectionState = .disconnected
@@ -138,6 +139,7 @@ import UIKit
                 }
                 ready = true
                 restart()
+                if openConversationId != nil { await loadHistory() }
             } catch { if token == generation { self.error = AppError.map(error) } }
         }
     }
