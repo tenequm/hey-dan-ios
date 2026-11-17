@@ -101,6 +101,32 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
 
 ## Development
 
+- `just sim-e2e` runs an unattended call on a dedicated Simulator. Install Python 3.9+ and
+  GNU `timeout` (from [coreutils](https://www.gnu.org/software/coreutils/)) in addition to the
+  requirements above. Supply only Stan's or a dedicated test agent's call link through the
+  environment or `TEST_CALL_LINK` in `.env.local`; never use the main agent's line.
+  For a wake-enabled line, run
+  `HEYDAN_E2E_SAY='Hey Dan. What is two plus two? Zulu.' just sim-e2e`.
+  The harness builds, installs, accepts the microphone prompt, feeds synthesized audio,
+  and hangs up after 65 seconds. Only a connect timeout gets one retry; other failures stop.
+  A pass requires a caller caption, a non-notice spoken reply and its caption, a subscribed
+  agent audio track, and a clean hangup acknowledged by the host. This is protocol evidence,
+  not a measurement of audible playback.
+
+  | Environment variable | Default / purpose |
+  | --- | --- |
+  | `HEYDAN_E2E_CALL_LINK` | Test-line link; falls back to `TEST_CALL_LINK`. Passed only to the app launch, not Xcode. |
+  | `HEYDAN_SIM` | `Hey Dan e2e`; use a unique device name. |
+  | `HEYDAN_RUN_DIR` | `build/e2e`; JSON checks in `results/`, evidence in `logs/`. |
+  | `HEYDAN_LOCAL_CA` | Optional root certificate installed in that Simulator for a local HTTPS chain. |
+  | `HEYDAN_E2E_SAY` | `What is two plus two? Please answer briefly.`; include the server's wake phrase when enabled. |
+  | `HEYDAN_E2E_ATTEMPTS` | `2`; use `1` to disable the connect-timeout retry. |
+
+  Derived data and synthesized audio stay in `build/sim-e2e`, independent of `just sim`;
+  `HEYDAN_DERIVED_DATA` does not apply. Run only one harness per checkout at a time.
+  Each invocation replaces its result files. The app is terminated on exit; the Simulator,
+  saved test line, installed CA, builds and evidence remain. Logs contain call metadata,
+  never message text or call links. Xcode test runs have both process and test timeouts.
 - `just test` runs the `HeyDanCore` tests on the Mac (no simulator needed); `just build` compile-checks
   for a device without signing.
 - `just sim` runs the app in the Simulator (named "Hey Dan iPhone"; `HEYDAN_SIM` and `HEYDAN_DERIVED_DATA`
