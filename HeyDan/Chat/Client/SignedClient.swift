@@ -58,17 +58,17 @@ final class SignedClient: AppService {
         }
         if signed {
             guard let deviceId else { throw AppError.notPaired }
-            var nonce = Data(count: 16)
-            let status = nonce.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
-            guard status == errSecSuccess else { throw AppError.keyUnavailable }
-            let ts = Int64(Date().timeIntervalSince1970 + clockOffset.withLock { $0 })
-            let hash = SigningText.bodyHash(body)
-            let text = SigningText.canonical(protocol: 1, method: method, target: target, ts: ts,
-                nonce: SigningText.base64url(nonce), bodyHash: hash, deviceId: deviceId)
-            let signature = try signer(Data(text.utf8), host)
-            let authorization = try Authorization(protocol: 1, deviceId: deviceId, ts: ts,
-                nonce: nonce, bodyHash: hash, signature: signature)
-            request.setValue(authorization.header, forHTTPHeaderField: "Authorization")
+            let host = self.host
+            let signBytes = signer
+            let requestSigner = RequestSigner(offset: clockOffset.withLock { $0 }, nonce: {
+                var nonce = Data(count: 16)
+                let status = nonce.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+                guard status == errSecSuccess else { throw AppError.keyUnavailable }
+                return nonce
+            }, signer: { try signBytes($0, host) })
+            let signedRequest = try requestSigner.sign(method: method, path: path, query: query,
+                body: body, deviceId: deviceId)
+            request.setValue(signedRequest.authorization.header, forHTTPHeaderField: "Authorization")
         }
         return request
     }
