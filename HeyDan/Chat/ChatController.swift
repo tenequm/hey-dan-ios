@@ -65,6 +65,7 @@ import UIKit
     @ObservationIgnored var savedEntries: [Outbox.Entry] = []
     @ObservationIgnored var durableIDs: Set<String> = []
     @ObservationIgnored var runner: Task<Void, Never>?
+    @ObservationIgnored var readFlushTask: Task<Void, Never>?
     @ObservationIgnored var readTask: Task<Void, Never>?
     @ObservationIgnored var readOrder: Int64 = 0
     @ObservationIgnored private var monitor: NWPathMonitor?
@@ -110,6 +111,7 @@ import UIKit
 
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }
+        flushRead()
         let pendingOpen = self.host == nil || self.host == host ? openConversationId : nil
         generation = UUID()
         loadTask?.cancel(); streamTask?.cancel(); runner?.cancel(); readTask?.cancel()
@@ -244,11 +246,12 @@ import UIKit
         guard let id = openConversationId, readOrder > 0 else { return }
         let order = readOrder, token = generation
         readOrder = 0
-        readTask = Task { await sendRead(id: id, order: order, token: token) }
+        let client = service
+        readFlushTask = Task { await sendRead(id: id, order: order, token: token, client: client) }
     }
-    func sendRead(id: String, order: Int64, token: UUID) async {
+    func sendRead(id: String, order: Int64, token: UUID, client: (any AppService)? = nil) async {
         do {
-            let response = try await service.markRead(conversationId: id, request: ReadRequest(order: order))
+            let response = try await (client ?? service).markRead(conversationId: id, request: ReadRequest(order: order))
             guard token == generation else { return }
             reducer.upsert(response.badge)
             try await persist(reducer.upsert(response.conversation))
