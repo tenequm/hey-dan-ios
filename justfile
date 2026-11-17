@@ -13,6 +13,7 @@ gen:
 
 test:
     cd HeyDanCore && swift test
+    python3 scripts/sim-e2e-test.py
 
 # Compile-check for a device without signing.
 build: gen
@@ -65,6 +66,10 @@ sim-call seconds="90" say="" mode="":
         feed="$PWD/build/feed.wav"
     fi
     HEYDAN_AUTOCALL=1 HEYDAN_HANGUP_AFTER={{seconds}} HEYDAN_FEED_WAV="$feed" HEYDAN_TURN_MODE={{quote(mode)}} just sim
+
+# A hands-free Simulator call with machine-readable evidence in HEYDAN_RUN_DIR (default build/e2e).
+sim-e2e:
+    @python3 scripts/sim-e2e.py {{bundle_id}}
 
 # Sign (registering the iPhone with the team on first run), install and launch on the connected iPhone.
 device: gen
@@ -219,7 +224,7 @@ sim-checks check="LiveActivityOnLockScreen": gen
     results=$(mktemp -d)
     trap '[ -n "$results" ] && rm -rf -- "$results"' EXIT
     mkdir -p build/checks
-    for name in $(compgen -e | grep '^HEYDAN_' | grep -vx 'HEYDAN_CALL_LINK' || true); do export "TEST_RUNNER_$name=${!name}"; done
+    for name in $(compgen -e | grep '^HEYDAN_' | grep -vxE 'HEYDAN_(E2E_)?CALL_LINK' || true); do export "TEST_RUNNER_$name=${!name}"; done
     xcodebuild build-for-testing -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" -derivedDataPath "{{sim_build}}" -quiet
     xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
     xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
@@ -227,9 +232,18 @@ sim-checks check="LiveActivityOnLockScreen": gen
     sleep 3
     xcrun simctl terminate "$udid" {{bundle_id}}
     status=0
+    # --foreground keeps xcodebuild in the terminal's group, so Ctrl-C still reaches it.
     TEST_RUNNER_HEYDAN_CHECKS_OUT="$PWD/build/checks" \
-        xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
+        timeout --foreground --kill-after=10 600 xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
         -derivedDataPath "{{sim_build}}" -resultBundlePath "$results/HeyDanChecks.xcresult" \
         -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -only-testing "HeyDanChecks/HeyDanChecks/test{{check}}" 2>&1 \
         | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}
     exit "$status"
+
+# App-hosted tests use resolved dependencies to avoid package updates during the Simulator gate.
+app-test: gen
+    #!/usr/bin/env bash
+    set -euo pipefail
+    udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
+    [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
+    timeout 600 xcodebuild test -project HeyDan.xcodeproj -scheme HeyDanTests -destination "id=$udid" -derivedDataPath "{{sim_build}}" -disableAutomaticPackageResolution -skipPackageUpdates -test-timeouts-enabled YES -default-test-execution-time-allowance 180
