@@ -24,6 +24,10 @@ struct ConversationList: View {
                     .listRowBackground(Theme.page)
                 }
             }
+            .refreshable { await chat.refresh() }
+            .task(id: chat.openConversationId) {
+                if chat.openConversationId == nil { await AppDelegate.requestPermission() }
+            }
             .overlay {
                 if chat.conversations.isEmpty {
                     ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right")
