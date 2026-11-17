@@ -548,7 +548,7 @@ final class HeyDanChecks: XCTestCase {
     /// The call link never goes through here: `just sim-checks` seeds it into the Simulator's keychain, and a result
     /// bundle records every launch environment.
     private func launch(_ extra: [String: String] = [:], excluding: Set<String> = []) {
-        let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK"])
+        let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK", "HEYDAN_E2E_CALL_LINK"])
         app.launchEnvironment = env.filter { $0.key.hasPrefix("HEYDAN_") && !withheld.contains($0.key) && !excluding.contains($0.key) }
             .merging(extra) { $1 }
         app.launch()

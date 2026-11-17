@@ -223,7 +223,7 @@ sim-checks check="LiveActivityOnLockScreen": gen
     results=$(mktemp -d)
     trap '[ -n "$results" ] && rm -rf -- "$results"' EXIT
     mkdir -p build/checks
-    for name in $(compgen -e | grep '^HEYDAN_' | grep -vx 'HEYDAN_CALL_LINK' || true); do export "TEST_RUNNER_$name=${!name}"; done
+    for name in $(compgen -e | grep '^HEYDAN_' | grep -vxE 'HEYDAN_(E2E_)?CALL_LINK' || true); do export "TEST_RUNNER_$name=${!name}"; done
     xcodebuild build-for-testing -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" -derivedDataPath "{{sim_build}}" -quiet
     xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
     xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
