@@ -58,17 +58,17 @@ private enum ThreadPreviewValues {
     QuestionCard(question: ThreadPreviewValues.questionopen, errorMessage: "The answer did not reach the agent. Try again.")
 }
 #Preview("200 messages") {
-    ThreadContent(entities: (0..<200).map { index in
+    ThreadContent(rows: (0..<200).map { index in
         var message = ThreadPreviewValues.agentMarkdown0
         message.id = "preview-\(index)"
         message.order = Int64(index)
-        return .message(message)
+        return .entity(.message(message))
     }).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2)
 }
 #Preview("Outbox states") {
     ScrollView {
         VStack {
-            ForEach(Array([Outbox.State.queued, .uploading, .sending, .stored, .routed, .reached, .failed, .outcomeUnknown].enumerated()), id: \.offset) { _, state in
+            ForEach(Array([Outbox.State.queued, .uploading, .sending, .waiting, .held, .stored, .routed, .reached, .failed, .outcomeUnknown].enumerated()), id: \.offset) { _, state in
                 MessageRow(message: ThreadPreviewValues.userWithFile0, outboxState: state)
             }
         }

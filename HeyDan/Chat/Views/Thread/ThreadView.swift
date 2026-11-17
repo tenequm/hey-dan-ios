@@ -6,19 +6,29 @@ struct ThreadView: View {
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsCall = false
+    @State private var answeredQuestionID: String?
 
     var body: some View {
         ThreadContent(
-            entities: chat.thread,
+            rows: chat.rows,
             status: chat.statuses[conversation.id],
             outboxStates: chat.outboxStates,
+            uploadProgress: chat.uploadProgress,
+            hasMoreBefore: chat.hasMoreBefore,
+            errorMessage: chat.error?.message,
+            errorQuestionID: answeredQuestionID,
             active: scenePhase == .active && !showsCall,
-            answer: { id, value in Task { await chat.answer(questionId: id, value: value) } },
+            answer: { id, value in
+                answeredQuestionID = id
+                Task { await chat.answer(questionId: id, value: value) }
+            },
             retry: { id in Task { await chat.retry(clientId: id) } },
-            markRead: { order in Task { await chat.markRead(order: order) } }
+            discard: { id in Task { await chat.discard(clientId: id) } },
+            markRead: { order in Task { await chat.markRead(order: order) } },
+            loadHistory: { await chat.loadHistory(before: $0) }
         )
         .safeAreaBar(edge: .bottom) {
-            ComposerView { request in Task { await chat.send(request) } }
+            ComposerView { request in Task { await chat.send(text: request.text) } }
         }
         .navigationTitle(conversation.agent.name)
         .toolbar { Button("Call") { showsCall = true }.disabled(!conversation.canCall) }
@@ -28,19 +38,24 @@ struct ThreadView: View {
 }
 
 struct ThreadContent: View {
-    let entities: [ThreadEntity]
+    let rows: [ThreadRow]
     var status: Status?
     var outboxStates: [String: Outbox.State] = [:]
+    var uploadProgress: [String: Double] = [:]
     var hasMoreBefore = false
+    var errorMessage: String?
+    var errorQuestionID: String?
     var active = true
     var answer: (String, String) -> Void = { _, _ in }
     var retry: (String) -> Void = { _ in }
+    var discard: (String) -> Void = { _ in }
     var markRead: (Int64) -> Void = { _ in }
     var loadHistory: (Int64) async -> Void = { _ in }
     @State private var visibleID: String?
     @State private var atBottom = false
     @State private var loadingHistory = false
 
+    private var entities: [ThreadEntity] { rows.compactMap { if case .entity(let entity) = $0 { return entity }; return nil } }
     private var firstOrder: Int64? { entities.compactMap { order($0) }.min() }
     private var newestOrder: Int64? { entities.compactMap(item).compactMap { order($0.entity) }.max() }
 
@@ -54,14 +69,18 @@ struct ThreadContent: View {
                     .disabled(loadingHistory)
                     .onAppear { Task { await loadOlder(firstOrder) } }
                 }
-                ForEach(entities.compactMap(item), id: \.id) { row in
-                    switch row.entity {
-                    case .message(let message):
+                ForEach(rows, id: \.presentationID) { row in
+                    switch row {
+                    case .entity(.message(let message)):
                         MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry)
-                            .id(row.id)
-                    case .question(let question):
-                        QuestionCard(question: question) { answer(question.id, $0) }.id(row.id)
-                    case .unknown: EmptyView()
+                            .id(row.presentationID)
+                    case .entity(.question(let question)):
+                        QuestionCard(question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
+                            .id(row.presentationID)
+                    case .outbox(let entry):
+                        OutboxRow(entry: entry, uploadProgress: uploadProgress, retry: retry, discard: discard)
+                            .id(row.presentationID)
+                    case .entity(.unknown): EmptyView()
                     }
                 }
                 if let status { StatusPill(status: status) }
@@ -111,6 +130,17 @@ struct ThreadContent: View {
             guard [.open, .answered, .expired].contains(question.state) else { return nil }
             return (question.id, entity)
         case .unknown: return nil
+        }
+    }
+}
+
+private extension ThreadRow {
+    var presentationID: String {
+        switch self {
+        case .entity(.message(let message)): return message.clientId.map { "client.\($0)" } ?? message.id
+        case .entity(.question(let question)): return question.id
+        case .outbox(let entry): return "client.\(entry.request.clientId)"
+        case .entity(.unknown): return "unknown"
         }
     }
 }

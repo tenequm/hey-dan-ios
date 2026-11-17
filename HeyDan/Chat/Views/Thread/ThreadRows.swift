@@ -74,7 +74,7 @@ struct MessageRow: View {
     }
 
     @ViewBuilder private var delivery: some View {
-        if let outboxState {
+        if let outboxState, ![.stored, .routed, .reached, .failed, .outcomeUnknown].contains(outboxState) {
             Text(outboxLabel(outboxState)).font(Theme.sans(12)).foregroundStyle(Theme.muted)
         } else if let state = message.delivery {
             switch state {
@@ -97,6 +97,8 @@ struct MessageRow: View {
         case .queued: "Queued"
         case .uploading: "Uploading"
         case .sending: "Sending"
+        case .waiting: "Waiting to retry"
+        case .held: "Held"
         case .stored: "Stored"
         case .routed: "Routed"
         case .reached: "Reached"
@@ -148,6 +150,58 @@ struct QuestionCard: View {
         } else {
             Button(option.label, role: option.style == "danger" ? .destructive : nil) { answer(option.value) }
                 .buttonStyle(.bordered)
+        }
+    }
+}
+
+struct OutboxRow: View {
+    let entry: Outbox.Entry
+    var uploadProgress: [String: Double]
+    var retry: (String) -> Void
+    var discard: (String) -> Void
+    @State private var confirmsRetry = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(entry.request.text).textSelection(.enabled)
+            Text(label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+            ForEach(entry.attachments, id: \.uploadKey) { attachment in
+                Text(attachment.name)
+                if entry.state == .uploading {
+                    ProgressView(value: uploadProgress[attachment.uploadKey] ?? 0)
+                }
+            }
+            if let error = entry.lastServerError { Text(error.message).foregroundStyle(Theme.error) }
+            if entry.state == .failed || entry.state == .outcomeUnknown {
+                Button("Send again") {
+                    if entry.state == .outcomeUnknown { confirmsRetry = true }
+                    else { retry(entry.request.clientId) }
+                }
+            }
+            if entry.state == .held { Button("Discard", role: .destructive) { discard(entry.request.clientId) } }
+        }
+        .font(Theme.sans(16)).foregroundStyle(Theme.text)
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.outbox.\(entry.request.clientId)")
+        .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
+            Button("Send again") { retry(entry.request.clientId) }
+        }
+    }
+
+    private var label: String {
+        switch entry.state {
+        case .queued: "Queued"
+        case .uploading: "Uploading"
+        case .sending: "Sending"
+        case .waiting: "Waiting to retry"
+        case .held: "Held"
+        case .stored: "Stored"
+        case .routed: "Routed"
+        case .reached: "Reached"
+        case .failed: "Failed"
+        case .outcomeUnknown: "Outcome unknown"
         }
     }
 }
