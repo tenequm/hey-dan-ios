@@ -49,6 +49,10 @@ extension OutboxFile {
             for attachment in attachments {
                 let access = attachment.fileURL.startAccessingSecurityScopedResource()
                 defer { if access { attachment.fileURL.stopAccessingSecurityScopedResource() } }
+                let size = try attachment.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size <= Outbox.maximumFileBytes else {
+                    throw AppError.server(status: 400, body: ErrorBody(error: "local_limit", message: "Files must be at most 25 MiB."))
+                }
                 let data = try Data(contentsOf: attachment.fileURL)
                 let name = UUID().uuidString
                 try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

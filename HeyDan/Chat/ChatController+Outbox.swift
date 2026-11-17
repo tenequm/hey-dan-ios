@@ -9,6 +9,10 @@ extension ChatController {
     }
     private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async -> Bool {
         guard ready, let host, let pairing else { error = .transport(.unavailable); return false }
+        guard text.utf8.count <= Outbox.maximumTextBytes, attachments.count <= Outbox.maximumFiles else {
+            error = .server(status: 400, body: ErrorBody(error: "local_limit", message: "Use at most 32 KiB of text and 10 files."))
+            return false
+        }
         let token = generation
         do {
             let copied = try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
