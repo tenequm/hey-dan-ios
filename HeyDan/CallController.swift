@@ -952,6 +952,11 @@ extension CallController {
         let now = Date()
         switch event {
         case let .caption(segment, text, isFinal, fromCaller, command):
+            #if DEBUG
+            if isFinal, !text.isEmpty {
+                trace(.stream, "e2e caption final caller=\(fromCaller)", id)
+            }
+            #endif
             // A review recording's words are the draft's, never the transcript's.
             let known = transcript.knows(segment: segment)
             if fromCaller, editReview({ $0.caption(segment: segment, text: text, knownToTranscript: known) }) { return }
@@ -960,6 +965,9 @@ extension CallController {
             if case let .status(status) = message { editReview { $0.turnStatus(status) } }
             editTranscript { $0.apply(message, at: now) }
         case let .reply(reply):
+            #if DEBUG
+            trace(.stream, "e2e reply turn=\(reply.turn != nil) notice=\(reply.notice == true) unspoken=\(reply.unspoken == true)", id)
+            #endif
             editTranscript { $0.apply(reply, at: now) }
         case let .review(state):
             var next = transcript
