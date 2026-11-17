@@ -5,33 +5,34 @@ struct PairedCallButton: View {
     let target: PairedCallTarget
     let service: any AppService
     let callsEnabled: Bool
-    @State private var showsCall = false
+    private var call: CallController { .shared }
 
     var body: some View {
         if callsEnabled {
             VStack {
                 Button("Call") {
-                    guard !CallController.shared.isCallActive else { return }
+                    if call.pairedCallTarget != nil, call.isCallActive {
+                        call.showsPairedCall = true
+                        return
+                    }
+                    guard !call.isCallActive else { return }
                     let callTarget = CallTarget(paired: target, service: service)
                     Task {
-                        if await CallController.shared.start(target: callTarget) != nil { showsCall = true }
+                        _ = await call.start(target: callTarget)
                     }
                 }
-                .disabled(!target.conversation.canCall || CallController.shared.isCallActive)
+                .disabled(call.isCallActive ? call.pairedCallTarget == nil : !target.conversation.canCall)
                 .accessibilityIdentifier("chat.call")
                 if !target.conversation.canCall, let refusal = target.conversation.callRefusal {
                     Text(refusal.message)
                         .accessibilityIdentifier("chat.call.refusal")
                 }
             }
-            .fullScreenCover(isPresented: $showsCall) {
-                PairedCallCover(target: CallTarget(paired: target, service: service))
-            }
         }
     }
 }
 
-private struct PairedCallCover: View {
+struct PairedCallCover: View {
     let target: CallTarget
     @Environment(\.dismiss) private var dismiss
 

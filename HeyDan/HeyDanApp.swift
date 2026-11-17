@@ -44,6 +44,12 @@ struct HeyDanApp: App {
                 }
             }
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
+                .fullScreenCover(isPresented: Binding(
+                    get: { CallController.shared.showsPairedCall },
+                    set: { CallController.shared.showsPairedCall = $0 }
+                )) {
+                    if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
+                }
                 .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG

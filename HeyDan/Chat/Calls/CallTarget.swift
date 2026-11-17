@@ -75,11 +75,21 @@ struct CallTarget {
     }
 
     func end(callId: String, reason: VoiceLine.EndReason?, over http: URLSession) async throws {
-        if let line {
-            let (_, response) = try await http.data(for: line.endRequest(callId: callId, reason: reason))
-            CallLog.log(.net, "end status=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
-        } else if let service {
-            try await service.endCall(callId: callId, request: CallEndRequest(reason: reason?.rawValue ?? "hangup"))
+        let tag = "cid=\(callId.prefix(8)) end reason=\(reason?.rawValue ?? "hangup")"
+        let asked = ContinuousClock.now
+        do {
+            let status: Int
+            if let line {
+                let (_, response) = try await http.data(for: line.endRequest(callId: callId, reason: reason))
+                status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            } else if let service {
+                try await service.endCall(callId: callId, request: CallEndRequest(reason: reason?.rawValue ?? "hangup"))
+                status = 204
+            } else { return }
+            CallLog.log(.net, "\(tag) status=\(status) ms=\(CallLog.ms(since: asked)) paired=\(paired != nil)")
+        } catch {
+            CallLog.log(.net, "\(tag) failed \(CallLog.describe(error))", level: .error)
+            throw error
         }
     }
 

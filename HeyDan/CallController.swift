@@ -14,6 +14,9 @@ import UIKit
 final class CallController: NSObject {
     static let shared = CallController()
 
+    private(set) var pairedCallTarget: CallTarget?
+    var showsPairedCall = false
+
     enum Phase: Equatable {
         case idle
         case connecting
@@ -276,6 +279,8 @@ final class CallController: NSObject {
         guard !isCallActive else { return nil }
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
+        pairedCallTarget = target.paired == nil ? nil : target
+        showsPairedCall = target.paired != nil
         call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
         liveVoice = nil
@@ -285,7 +290,11 @@ final class CallController: NSObject {
         commands = nil
         commandWords = .builtIn
         editReview { $0.startCall() }
-        trace(.call, "claim paired=\(target.paired != nil) mode=\(reviewSession.pick.rawValue)")
+        if target.line != nil {
+            trace(.call, "claim line=\(Self.short(shownLineID)) mode=\(reviewSession.pick.rawValue) paired=false")
+        } else {
+            trace(.call, "claim paired=true mode=\(reviewSession.pick.rawValue)")
+        }
         #if DEBUG && targetEnvironment(simulator)
         previewVoiceUpdate?.cancel()
         previewVoiceUpdate = nil
@@ -666,8 +675,7 @@ final class CallController: NSObject {
 
     private func endOnHost(_ target: CallTarget, callId: String, reason: VoiceLine.EndReason? = nil) {
         Task {
-            do { try await target.end(callId: callId, reason: reason, over: Self.http) }
-            catch { CallLog.log(.net, "call end failed", level: .error) }
+            try? await target.end(callId: callId, reason: reason, over: Self.http)
         }
     }
 

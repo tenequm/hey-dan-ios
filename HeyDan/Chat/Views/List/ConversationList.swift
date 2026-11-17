@@ -8,6 +8,7 @@ struct ConversationList: View {
         NavigationStack(path: Binding(get: { chat.openConversationId.map { [$0] } ?? [] }, set: { ids in if let id = ids.last { chat.openConversation(id) } else { chat.closeConversation() } })) {
             List(chat.conversations, id: \.id) { conversation in
                 NavigationLink(conversation.agent.name, value: conversation.id)
+                    .accessibilityIdentifier("conversation.\(conversation.id)")
             }
             .navigationDestination(for: String.self) { id in
                 if let conversation = chat.conversations.first(where: { $0.id == id }) { ThreadView(conversation: conversation) }
