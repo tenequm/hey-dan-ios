@@ -19,7 +19,15 @@ extension ChatController {
                     guard token == generation, !Task.isCancelled else { return }
                     var candidate = reducer
                     var changed: Set<String> = []
-                    for event in batch { changed.formUnion(try candidate.apply(event)) }
+                    for event in batch {
+                        do { changed.formUnion(try candidate.apply(event)) }
+                        catch {
+                            CallLog.log(.stream, "decode_skip seq=\(event.id ?? 0)")
+                            candidate = ThreadReducer(cursor: max(candidate.cursor, event.id ?? candidate.cursor),
+                                conversations: candidate.conversations, entities: candidate.entities,
+                                statuses: candidate.statuses, badge: candidate.badge, hasMoreBefore: candidate.hasMoreBefore)
+                        }
+                    }
                     guard let host, let pairing else { return }
                     if candidate.cursor != reducer.cursor || !changed.isEmpty {
                     try await store.save(ThreadSnapshot(cursor: candidate.cursor,
@@ -27,9 +35,9 @@ extension ChatController {
                         entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
                     }
                     guard token == generation, !Task.isCancelled else { return }
-                    for event in batch { try reducer.apply(event) }
+                    reducer = candidate
                     for event in batch {
-                        if event.kind == .message { outbox.reconcile(try event.decode(Message.self)) }
+                        if event.kind == .message, let message = try? event.decode(Message.self) { outbox.reconcile(message) }
                         if event.kind == .synchronized {
                             connectionState = .connected; error = nil; attempts = 0
                         }
