@@ -12,6 +12,7 @@ import SwiftUI
 
 @main
 struct HeyDanApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
         // Before anything touches LiveKit: its logger is fixed on first use. Debug builds keep the SDK's own story of
@@ -42,6 +43,7 @@ struct HeyDanApp: App {
                     #endif
                 }
             }
+                .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
                 .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG
