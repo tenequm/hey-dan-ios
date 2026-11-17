@@ -143,11 +143,11 @@ import UIKit
     }
     func openConversation(_ id: String) {
         guard openConversationId != id else { return }
-        readTask?.cancel(); readOrder = 0
+        flushRead()
         openConversationId = id
         Task { await loadHistory() }
     }
-    func closeConversation() { openConversationId = nil; readTask?.cancel(); readOrder = 0 }
+    func closeConversation() { flushRead(); openConversationId = nil }
     func setActive(_ active: Bool) {
         guard self.active != active else { return }
         self.active = active
@@ -236,19 +236,30 @@ import UIKit
             await handle(error, token: token)
         }
     }
+    func flushRead() {
+        readTask?.cancel()
+        guard let id = openConversationId, readOrder > 0 else { return }
+        let order = readOrder, token = generation
+        readOrder = 0
+        readTask = Task { await sendRead(id: id, order: order, token: token) }
+    }
+    func sendRead(id: String, order: Int64, token: UUID) async {
+        do {
+            let response = try await service.markRead(conversationId: id, request: ReadRequest(order: order))
+            guard token == generation else { return }
+            reducer.upsert(response.badge)
+            try await persist(reducer.upsert(response.conversation))
+        } catch { if !Task.isCancelled { await handle(error, token: token) } }
+    }
     func markRead(order: Int64) async {
         guard let id = openConversationId else { return }
         readOrder = max(readOrder, order)
         readTask?.cancel()
-        let token = generation
+        let token = generation, pending = readOrder
         readTask = Task {
-            do {
-                try await Task.sleep(for: .milliseconds(500))
-                let response = try await service.markRead(conversationId: id, request: ReadRequest(order: readOrder))
-                guard token == generation, !Task.isCancelled else { return }
-                reducer.upsert(response.badge)
-                try await persist(reducer.upsert(response.conversation))
-            } catch { if !Task.isCancelled { await handle(error, token: token) } }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+            readOrder = 0
+            await sendRead(id: id, order: pending, token: token)
         }
     }
     func conversation(forAgent agent: String, host: URL) async -> Conversation? {
