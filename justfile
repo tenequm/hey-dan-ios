@@ -13,6 +13,7 @@ gen:
 
 test:
     cd HeyDanCore && swift test
+    python3 scripts/sim-e2e-test.py
 
 # Compile-check for a device without signing.
 build: gen
@@ -231,8 +232,9 @@ sim-checks check="LiveActivityOnLockScreen": gen
     sleep 3
     xcrun simctl terminate "$udid" {{bundle_id}}
     status=0
+    # --foreground keeps xcodebuild in the terminal's group, so Ctrl-C still reaches it.
     TEST_RUNNER_HEYDAN_CHECKS_OUT="$PWD/build/checks" \
-        timeout --kill-after=10 600 xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
+        timeout --foreground --kill-after=10 600 xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
         -derivedDataPath "{{sim_build}}" -resultBundlePath "$results/HeyDanChecks.xcresult" \
         -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -only-testing "HeyDanChecks/HeyDanChecks/test{{check}}" 2>&1 \
         | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}
