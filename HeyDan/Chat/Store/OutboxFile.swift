@@ -16,7 +16,12 @@ actor OutboxFile {
     func load(host: URL, deviceId: String) throws -> [Outbox.Entry] {
         let file = directory(host: host, deviceId: deviceId).appending(path: "entries.json")
         guard FileManager.default.fileExists(atPath: file.path) else { return [] }
-        return try JSONDecoder().decode([Outbox.Entry].self, from: Data(contentsOf: file))
+        let data = try Data(contentsOf: file)
+        do { return try JSONDecoder().decode([Outbox.Entry].self, from: data) }
+        catch is DecodingError {
+            try FileManager.default.moveItem(at: file, to: file.deletingLastPathComponent().appending(path: "entries-invalid-" + UUID().uuidString + ".json"))
+            return []
+        }
     }
 
     func save(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {

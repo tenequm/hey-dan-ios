@@ -2,31 +2,32 @@ import Foundation
 import HeyDanCore
 
 extension ChatController {
-    func send(text: String, attachments: [StagedAttachment] = []) async {
-        guard let id = openConversationId else { return }
-        await enqueue(text: text, attachments: attachments, conversationId: id)
+    @discardableResult func send(text: String, attachments: [StagedAttachment] = []) async -> Bool {
+        guard let id = openConversationId else { error = .transport(.unavailable); return false }
+        return await enqueue(text: text, attachments: attachments, conversationId: id)
     }
-    private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async {
-        guard ready, let host, let pairing else { return }
+    private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async -> Bool {
+        guard ready, let host, let pairing else { error = .transport(.unavailable); return false }
         let token = generation
         do {
             let copied = try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
-            guard token == generation else { return }
+            guard token == generation else { return false }
             let entry = Outbox.Entry(host: host, conversationId: conversationId,
                 request: SendRequest(clientId: UUID().uuidString, text: text, fileIds: []), attachments: copied)
             outbox.enqueue(entry)
             try await saveOutbox()
-            guard token == generation else { return }
+            guard token == generation else { return false }
             durableIDs.insert(entry.request.clientId)
             runOutbox()
-        } catch { await handle(error, token: token) }
+            return true
+        } catch { await handle(error, token: token); return false }
     }
     func retry(clientId: String) async {
         guard let entry = outbox.entries.first(where: { $0.request.clientId == clientId }),
               [.failed, .outcomeUnknown].contains(entry.state), let host, let pairing else { return }
         let directory = await files.directory(host: host, deviceId: pairing.deviceId)
         let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType) }
-        await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId)
+        _ = await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId)
     }
     func saveOutbox() async throws {
         guard let host, let pairing else { return }

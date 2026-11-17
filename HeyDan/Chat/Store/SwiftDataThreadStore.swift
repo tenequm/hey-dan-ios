@@ -91,12 +91,25 @@ actor SwiftDataThreadStore: ThreadStore {
         let configuration = inMemory
             ? ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
             : ModelConfiguration(schema: schema, url: directory.appending(path: "threads.store"), cloudKitDatabase: .none)
-        let container = try ModelContainer(for: schema, configurations: configuration)
+        let container: ModelContainer
+        do { container = try ModelContainer(for: schema, configurations: configuration) }
+        catch {
+            guard !inMemory else { throw error }
+            try manager.removeItem(at: directory)
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(String(version).utf8).write(to: directory.appending(path: "schema"), options: .atomic)
+            container = try ModelContainer(for: schema, configurations: configuration)
+        }
         return ThreadStoreWorker(modelContainer: container)
     }
 
     func load(host: URL, deviceId: String) async throws -> ThreadSnapshot {
-        try await worker(host: host).load(deviceId: deviceId)
+        let worker = try await worker(host: host)
+        do { return try await worker.load(deviceId: deviceId) }
+        catch is DecodingError {
+            try await worker.clear(deviceId: deviceId)
+            return ThreadSnapshot()
+        }
     }
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws {
         let worker = try await worker(host: host)
