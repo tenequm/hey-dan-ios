@@ -149,18 +149,20 @@ def main():
         (OUT / evidence).write_text(text)
         connected = ' connected ms=' in text and re.search(r' live\n', text)
         caller = text.find('e2e caption final caller=true')
-        reply = caller >= 0 and text.find('e2e caption final caller=false', caller) > caller
+        answer = text.find('e2e reply turn=true notice=false unspoken=false', caller)
+        reply = caller >= 0 and answer > caller and text.find('e2e caption final caller=false', answer) > answer and 'unspoken=true' not in text[answer:]
         clean = re.search(r'finish site=.* cause=caller .*connected=true mic=true live=true', text)
         ended = re.search(r'end reason=hangup status=2\d\d', text)
         fed = re.search(r'debug feed: wav frames=[1-9]\d*', text)
-        if connected and reply and clean and ended and fed:
-            result(CHECK, 'pass', f'Attempt {attempt}: connected, caller and reply transcribed, clean hangup acknowledged', [evidence])
+        audio = 'agent audio subscribed sid=' in text
+        if connected and reply and audio and clean and ended and fed:
+            result(CHECK, 'pass', f'Attempt {attempt}: connected, agent audio subscribed, caller and reply in transcript, clean hangup acknowledged', [evidence])
             return
         connect_timeout = not connected and re.search(r'connect failed .*([Tt]imed?[Oo]ut|[Tt]imeout)', text)
         if attempt < attempts and connect_timeout:
             result(CHECK, 'skip', 'Connect timeout; retrying once', [evidence])
             continue
-        raise RuntimeError(f'Attempt {attempt}: connected={bool(connected)}, reply={reply}, clean={bool(clean)}, endAcknowledged={bool(ended)}, WAV={bool(fed)}; see {evidence}')
+        raise RuntimeError(f'Attempt {attempt}: connected={bool(connected)}, reply={reply}, audio={audio}, clean={bool(clean)}, endAcknowledged={bool(ended)}, WAV={bool(fed)}; see {evidence}')
 
 
 if __name__ == '__main__':

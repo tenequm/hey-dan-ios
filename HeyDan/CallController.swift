@@ -965,6 +965,9 @@ extension CallController {
             if case let .status(status) = message { editReview { $0.turnStatus(status) } }
             editTranscript { $0.apply(message, at: now) }
         case let .reply(reply):
+            #if DEBUG
+            trace(.stream, "e2e reply turn=\(reply.turn != nil) notice=\(reply.notice == true) unspoken=\(reply.unspoken == true)", id)
+            #endif
             editTranscript { $0.apply(reply, at: now) }
         case let .review(state):
             var next = transcript
