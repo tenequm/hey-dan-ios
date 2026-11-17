@@ -12,7 +12,15 @@ actor MemoryThreadStore: ThreadStore {
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) {
         let key = Key(host: host, deviceId: deviceId)
         var current = snapshots[key] ?? ThreadSnapshot()
+        if let allowed = snapshot.allowedConversations {
+            current.conversations.removeAll { !allowed.contains($0.id) }
+            current.entities.removeAll {
+                switch $0 { case .message(let m): !allowed.contains(m.conversationId); case .question(let q): !allowed.contains(q.conversationId); case .unknown: true }
+            }
+        }
+        current.historyFloors.merge(snapshot.historyFloors) { _, new in new }
         current.cursor = max(current.cursor, snapshot.cursor)
+        current.hasCursor = current.hasCursor || snapshot.hasCursor
         for conversation in snapshot.conversations {
             if let index = current.conversations.firstIndex(where: { $0.id == conversation.id }) {
                 if conversation.seq > current.conversations[index].seq { current.conversations[index] = conversation }

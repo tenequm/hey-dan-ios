@@ -30,6 +30,7 @@ import SwiftData
 @Model final class CachedStreamCursor {
     @Attribute(.unique) var deviceId: String
     var cursor: Int64
+    var historyFloors: Data?
     init(deviceId: String, cursor: Int64) {
         self.deviceId = deviceId
         self.cursor = cursor
@@ -53,12 +54,14 @@ actor SwiftDataThreadStore: ThreadStore {
     private let root: URL
     private let version: Int
     private let inMemory: Bool
+    private let beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)?
     private var workers: [URL: Task<ThreadStoreWorker, any Error>] = [:]
 
-    init(root: URL = StoreLocation.root, schemaVersion: Int = schemaVersion, inMemory: Bool = false) {
+    init(root: URL = StoreLocation.root, schemaVersion: Int = schemaVersion, inMemory: Bool = false, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)? = nil) {
         self.root = root
         version = schemaVersion
         self.inMemory = inMemory
+        self.beforeCommit = beforeCommit
     }
 
     private func worker(host: URL) async throws -> ThreadStoreWorker {
@@ -82,6 +85,7 @@ actor SwiftDataThreadStore: ThreadStore {
             let marker = directory.appending(path: "schema")
             let previous = try? String(contentsOf: marker, encoding: .utf8)
             if previous != String(version), manager.fileExists(atPath: directory.path) {
+                await CallLog.log(.store, "wipe reason=schema")
                 try manager.removeItem(at: directory)
             }
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -91,20 +95,37 @@ actor SwiftDataThreadStore: ThreadStore {
         let configuration = inMemory
             ? ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
             : ModelConfiguration(schema: schema, url: directory.appending(path: "threads.store"), cloudKitDatabase: .none)
-        let container = try ModelContainer(for: schema, configurations: configuration)
+        let container: ModelContainer
+        do { container = try ModelContainer(for: schema, configurations: configuration) }
+        catch {
+            guard !inMemory else { throw error }
+            await CallLog.log(.store, "wipe reason=container")
+            try manager.removeItem(at: directory)
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(String(version).utf8).write(to: directory.appending(path: "schema"), options: .atomic)
+            container = try ModelContainer(for: schema, configurations: configuration)
+        }
         return ThreadStoreWorker(modelContainer: container)
     }
 
     func load(host: URL, deviceId: String) async throws -> ThreadSnapshot {
-        try await worker(host: host).load(deviceId: deviceId)
+        let worker = try await worker(host: host)
+        do { return try await worker.load(deviceId: deviceId) }
+        catch is DecodingError {
+            await CallLog.log(.store, "wipe reason=decode")
+            try await worker.clear(deviceId: deviceId)
+            return ThreadSnapshot()
+        }
     }
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws {
+        let began = ContinuousClock.now
         let worker = try await worker(host: host)
-        try await Self.ingest(snapshot, deviceId: deviceId, worker: worker)
+        try await Self.ingest(snapshot, deviceId: deviceId, worker: worker, beforeCommit: beforeCommit)
+        await CallLog.log(.store, "save cursor=\(snapshot.cursor) count=\(snapshot.entities.count + snapshot.conversations.count) ms=\(CallLog.ms(since: began))")
     }
     @concurrent private static func ingest(_ snapshot: ThreadSnapshot, deviceId: String,
-                                           worker: ThreadStoreWorker) async throws {
-        try await worker.save(snapshot, deviceId: deviceId)
+                                           worker: ThreadStoreWorker, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)?) async throws {
+        try await worker.save(snapshot, deviceId: deviceId, beforeCommit: beforeCommit)
     }
     func clear(host: URL, deviceId: String) async throws {
         try await worker(host: host).clear(deviceId: deviceId)
@@ -116,8 +137,9 @@ actor SwiftDataThreadStore: ThreadStore {
         let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
             predicate: #Predicate { $0.deviceId == deviceId }, sortBy: [SortDescriptor(\.order)]))
         let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
-            predicate: #Predicate { $0.deviceId == deviceId })).first?.cursor ?? 0
-        var result = ThreadSnapshot(cursor: cursor)
+            predicate: #Predicate { $0.deviceId == deviceId })).first
+        var result = ThreadSnapshot(cursor: cursor?.cursor)
+        if let data = cursor?.historyFloors { result.historyFloors = try JSONDecoder().decode([String: Int64].self, from: data) }
         let decoder = JSONDecoder()
         for record in records {
             if record.kind == "conversation" {
@@ -129,10 +151,15 @@ actor SwiftDataThreadStore: ThreadStore {
         return result
     }
 
-    func save(_ snapshot: ThreadSnapshot, deviceId: String) throws {
+    func save(_ snapshot: ThreadSnapshot, deviceId: String, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)? = nil) throws {
         modelContext.autosaveEnabled = false
         do {
             let encoder = JSONEncoder()
+            if let allowed = snapshot.allowedConversations {
+                for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate { $0.deviceId == deviceId })) where !allowed.contains(row.conversationId) {
+                    modelContext.delete(row)
+                }
+            }
             for conversation in snapshot.conversations {
                 try upsert(CachedThreadEntity(deviceId: deviceId, entityId: conversation.id,
                     conversationId: conversation.id, order: 0, seq: conversation.seq,
@@ -153,8 +180,20 @@ actor SwiftDataThreadStore: ThreadStore {
             }
             let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
                 predicate: #Predicate { $0.deviceId == deviceId })).first
-            if let cursor { cursor.cursor = max(cursor.cursor, snapshot.cursor) }
-            else { modelContext.insert(CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)) }
+            if snapshot.hasCursor {
+            if let cursor {
+                cursor.cursor = max(cursor.cursor, snapshot.cursor)
+                var floors = try cursor.historyFloors.map { try JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
+                floors.merge(snapshot.historyFloors) { _, new in new }
+                cursor.historyFloors = try encoder.encode(floors)
+            }
+            else {
+                let record = CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)
+                record.historyFloors = try encoder.encode(snapshot.historyFloors)
+                modelContext.insert(record)
+            }
+            }
+            try beforeCommit?(snapshot)
             try modelContext.save()
         } catch {
             modelContext.rollback()

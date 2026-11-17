@@ -16,7 +16,12 @@ actor OutboxFile {
     func load(host: URL, deviceId: String) throws -> [Outbox.Entry] {
         let file = directory(host: host, deviceId: deviceId).appending(path: "entries.json")
         guard FileManager.default.fileExists(atPath: file.path) else { return [] }
-        return try JSONDecoder().decode([Outbox.Entry].self, from: Data(contentsOf: file))
+        let data = try Data(contentsOf: file)
+        do { return try JSONDecoder().decode([Outbox.Entry].self, from: data) }
+        catch is DecodingError {
+            try FileManager.default.moveItem(at: file, to: file.deletingLastPathComponent().appending(path: "entries-invalid-" + UUID().uuidString + ".json"))
+            return []
+        }
     }
 
     func save(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {
@@ -44,6 +49,10 @@ extension OutboxFile {
             for attachment in attachments {
                 let access = attachment.fileURL.startAccessingSecurityScopedResource()
                 defer { if access { attachment.fileURL.stopAccessingSecurityScopedResource() } }
+                let size = try attachment.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size <= Outbox.maximumFileBytes else {
+                    throw AppError.server(status: 400, body: ErrorBody(error: "local_limit", message: "Files must be at most 25 MiB."))
+                }
                 let data = try Data(contentsOf: attachment.fileURL)
                 let name = UUID().uuidString
                 try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
@@ -59,23 +68,27 @@ extension OutboxFile {
     func bytes(_ attachment: Outbox.Attachment, host: URL, deviceId: String) throws -> Data {
         try Data(contentsOf: directory(host: host, deviceId: deviceId).appending(path: attachment.localFileName))
     }
-    func removeReachedCopies(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {
-        for entry in entries where entry.state == .reached {
+    func removeCopies(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {
+        for entry in entries {
             for attachment in entry.attachments {
                 let file = directory(host: host, deviceId: deviceId).appending(path: attachment.localFileName)
                 if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
             }
         }
     }
-    private func downloadURL(fileId: String, host: URL, deviceId: String) -> URL {
-        directory(host: host, deviceId: deviceId).appending(path: "downloads").appending(path: StoreLocation.digest(fileId))
+    private func safeName(_ name: String) -> String {
+        let value = name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? "attachment"
+        return value == "." || value == ".." || value.isEmpty ? "attachment" : value
     }
-    func cached(fileId: String, host: URL, deviceId: String) -> URL? {
-        let url = downloadURL(fileId: fileId, host: host, deviceId: deviceId)
+    private func downloadURL(fileId: String, name: String, host: URL, deviceId: String) -> URL {
+        directory(host: host, deviceId: deviceId).appending(path: "downloads").appending(path: StoreLocation.digest(fileId)).appending(path: safeName(name))
+    }
+    func cached(fileId: String, name: String, host: URL, deviceId: String) -> URL? {
+        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
-    func cache(_ data: Data, fileId: String, host: URL, deviceId: String) throws -> URL {
-        let url = downloadURL(fileId: fileId, host: host, deviceId: deviceId)
+    func cache(_ data: Data, fileId: String, name: String, host: URL, deviceId: String) throws -> URL {
+        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return url

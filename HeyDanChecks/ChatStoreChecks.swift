@@ -1,7 +1,7 @@
 import XCTest
 
 final class ChatStoreChecks: XCTestCase {
-    @MainActor func testFixtureListSurvivesRelaunch() {
+    @MainActor func testFixtureListRelaunchSmoke() {
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_FIXTURE_CHAT"] = "1"
         app.launch()
