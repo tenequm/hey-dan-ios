@@ -59,14 +59,12 @@ extension HeyDanApp {
         #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
         guard env["HEYDAN_AUTOCALL"] == "1" else { return }
-        #if targetEnvironment(simulator)
         if let link = env["HEYDAN_CALL_LINK"] {
             guard let requested = VoiceLine(callLink: link), CallController.shared.line == requested else {
-                CallLog.log(.call, "debug autocall refused: supplied line was not selected", level: .error)
+                CallLog.log(.call, "debug autocall refused: supplied line invalid or not selected", level: .error)
                 return
             }
         }
-        #endif
         if let steps = env["HEYDAN_STEPS"], !steps.isEmpty { DebugStep.schedule(steps) }
         var feed: Task<Void, Never>?
         defer { feed?.cancel() }
