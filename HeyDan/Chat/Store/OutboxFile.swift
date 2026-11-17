@@ -64,8 +64,8 @@ extension OutboxFile {
     func bytes(_ attachment: Outbox.Attachment, host: URL, deviceId: String) throws -> Data {
         try Data(contentsOf: directory(host: host, deviceId: deviceId).appending(path: attachment.localFileName))
     }
-    func removeReachedCopies(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {
-        for entry in entries where entry.state == .reached {
+    func removeCopies(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {
+        for entry in entries {
             for attachment in entry.attachments {
                 let file = directory(host: host, deviceId: deviceId).appending(path: attachment.localFileName)
                 if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }

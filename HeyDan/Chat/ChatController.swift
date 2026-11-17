@@ -47,6 +47,7 @@ import UIKit
     @ObservationIgnored var streamTask: Task<Void, Never>?
     @ObservationIgnored var loadTask: Task<Void, Never>?
     @ObservationIgnored var runnerID = UUID()
+    @ObservationIgnored var savedEntries: [Outbox.Entry] = []
     @ObservationIgnored var durableIDs: Set<String> = []
     @ObservationIgnored var runner: Task<Void, Never>?
     @ObservationIgnored var readTask: Task<Void, Never>?
@@ -98,7 +99,7 @@ import UIKit
         runner = nil; streamTask = nil
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); openConversationId = nil
-        durableIDs = []; ready = false; hasCursor = false; paused = false; features = []; error = nil; uploadProgress = [:]
+        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; features = []; error = nil; uploadProgress = [:]
         connectionState = .disconnected
         guard let pairing else { return }
         if !fixedService { service = SignedClient(host: host, deviceId: pairing.deviceId) }
@@ -112,6 +113,7 @@ import UIKit
                 reducer = ThreadReducer(cursor: snapshot.cursor)
                 for value in snapshot.conversations { reducer.upsert(value) }
                 for value in snapshot.entities { reducer.upsert(value) }
+                savedEntries = entries
                 for entry in entries { outbox.enqueue(entry); durableIDs.insert(entry.request.clientId) }
                 for entity in reducer.entities.values {
                     if case .message(let message) = entity { outbox.reconcile(message) }

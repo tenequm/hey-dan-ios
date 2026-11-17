@@ -27,13 +27,26 @@ extension ChatController {
               [.failed, .outcomeUnknown].contains(entry.state), let host, let pairing else { return }
         let directory = await files.directory(host: host, deviceId: pairing.deviceId)
         let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType) }
-        _ = await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId)
+        if await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId) { await discard(clientId: clientId) }
+    }
+    func discard(clientId: String) async {
+        guard let entry = outbox.entries.first(where: { $0.request.clientId == clientId }), let host, let pairing else { return }
+        outbox.remove(clientId: clientId)
+        do {
+            try await saveOutbox()
+            try await files.removeCopies([entry], host: host, deviceId: pairing.deviceId)
+            durableIDs.remove(clientId)
+        } catch { self.error = AppError.map(error) }
     }
     func saveOutbox() async throws {
         guard let host, let pairing else { return }
+        let removed = outbox.entries.filter { $0.state == .reached }
+        for entry in removed { outbox.remove(clientId: entry.request.clientId) }
         let entries = outbox.entries
+        guard entries != savedEntries || !removed.isEmpty else { return }
         try await files.save(entries, host: host, deviceId: pairing.deviceId)
-        try await files.removeReachedCopies(entries, host: host, deviceId: pairing.deviceId)
+        savedEntries = entries
+        try await files.removeCopies(removed, host: host, deviceId: pairing.deviceId)
     }
     func runOutbox() {
         guard runner == nil, ready, active, !paused, let host, let pairing else { return }

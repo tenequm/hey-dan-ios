@@ -21,9 +21,11 @@ extension ChatController {
                     var changed: Set<String> = []
                     for event in batch { changed.formUnion(try candidate.apply(event)) }
                     guard let host, let pairing else { return }
+                    if candidate.cursor != reducer.cursor || !changed.isEmpty {
                     try await store.save(ThreadSnapshot(cursor: candidate.cursor,
                         conversations: changed.compactMap { candidate.conversations[$0] },
                         entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
+                    }
                     guard token == generation, !Task.isCancelled else { return }
                     for event in batch { try reducer.apply(event) }
                     for event in batch {
