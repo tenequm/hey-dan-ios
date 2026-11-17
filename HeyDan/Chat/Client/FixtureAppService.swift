@@ -6,6 +6,12 @@ import HeyDanCore
 actor FixtureAppService: AppService {
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Stan tester",
         agents: [Agent(id: "ag_stan", name: "Stan")], protocol: 1, serverTime: 0)
+    init() {
+        if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CALL_REFUSAL"] == "1" {
+            conversation.canCall = false
+            conversation.callRefusal = ErrorBody(error: "voice_offline", message: "Voice is offline.")
+        }
+    }
     private var fileMetadata: [String: FileAttachment] = [:]
     private var uploaded: [String: Data] = [:]
     private var sequence: Int64 = 10
