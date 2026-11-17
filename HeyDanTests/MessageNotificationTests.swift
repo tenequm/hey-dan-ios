@@ -15,6 +15,20 @@ struct MessageNotificationTests {
         )
     }
 
+    @Test func environmentMapping() {
+        #expect(AppDelegate.environment("development") == "sandbox")
+        #expect(AppDelegate.environment("production") == "production")
+        #expect(AppDelegate.environment(nil) == nil)
+        #expect(AppDelegate.environment("sandbox") == nil)
+    }
+
+    @Test func foregroundSuppressionRequiresHostAndConversation() {
+        #expect(AppDelegate.presentation(for: payload.hd, host: payload.hd.h, conversationID: payload.hd.c).isEmpty)
+        #expect(AppDelegate.presentation(for: payload.hd, host: "https://other.example", conversationID: payload.hd.c).contains(.banner))
+        #expect(AppDelegate.presentation(for: payload.hd, host: payload.hd.h, conversationID: nil).contains(.badge))
+        #expect(AppDelegate.presentation(for: nil, host: payload.hd.h, conversationID: payload.hd.c).contains(.banner))
+    }
+
     @Test func intentCarriesSenderAndConversation() {
         let intent = MessageNotification.intent(for: payload)
         #expect(intent.sender?.customIdentifier == payload.hd.a.id)

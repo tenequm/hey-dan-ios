@@ -84,6 +84,7 @@ extension ChatController {
                     guard token == generation, !Task.isCancelled else { return }
                     try await persist(reducer.upsert(.message(response.message)))
                     result = .sent(response.message)
+                    if let agent = reducer.conversations[entry.conversationId]?.agent { Task { await MessageNotification.donateOutgoing(agent: agent, conversationID: entry.conversationId) } }
                 default: return
                 }
             } catch {
