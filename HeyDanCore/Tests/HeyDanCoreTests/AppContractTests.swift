@@ -19,7 +19,10 @@ private struct CheckFailure: Error { let label: String }
     _ = try decode(HelloResponse.self, f["hello"]!)
     _ = try decode(PairRequest.self, f["pairRequest"]!)
     _ = try decode(PairResponse.self, f["pairResponse"]!)
-    _ = try decode(ConversationsResponse.self, f["conversations"]!)
+    let conversations = try decode(ConversationsResponse.self, f["conversations"]!)
+    try ensure(conversations.conversations.map(\.id) == ["conv_stan01"], "conversation list contains only Stan")
+    let refused = try decode(Conversation.self, f["conversationCallRefused"]!)
+    try ensure(refused.id == "conv_dan01" && !refused.canCall && refused.callRefusal?.error == "no_line", "separate call refusal")
     _ = try decode(HistoryPage.self, f["historyPage"]!)
     let messages = f["messages"] as! [String: Any]
     for (name, value) in messages {
@@ -31,6 +34,12 @@ private struct CheckFailure: Error { let label: String }
     for v in (f["statuses"] as! [String: Any]).values { _ = try decode(Status.self, v) }
     for group in ["errors", "callErrors"] {
         for v in (f[group] as! [String: [String: Any]]).values { _ = try decode(ErrorBody.self, v["body"]!) }
+    }
+    let errors = f["errors"] as! [String: [String: Any]]
+    for (name, status, code) in [("badProof", 400, "bad_proof"), ("answerNotDelivered", 502, "answer_not_delivered")] {
+        let fixture = errors[name]!
+        try ensure(fixture["status"] as? Int == status, "error HTTP status")
+        try ensure(try decode(ErrorBody.self, fixture["body"]!).error == code, "error code decoded")
     }
     _ = try decode(ErrorBody.self, (f["answerConflict"] as! [String: Any])["body"]!)
     _ = try decode(SendRequest.self, f["sendRequest"]!)
@@ -56,8 +65,10 @@ private struct CheckFailure: Error { let label: String }
     }
     _ = try decode(PushTokenRequest.self, f["pushTokenRequest"]!)
     let push = try decode(PushPayload.self, (f["pushPayload"] as! [String: Any])["body"]!)
+    try ensure(push.hd.h == "https://app.opx.one", "push host decoded")
     let roundTrip = try JSONSerialization.jsonObject(with: JSONEncoder().encode(push)) as! [String: Any]
     try ensure((roundTrip["aps"] as! [String: Any])["thread-id"] != nil, "push coding keys")
+    try ensure((roundTrip["hd"] as! [String: Any])["h"] as? String == push.hd.h, "push host encoded")
     let future = try decode(Message.self, messages["future"]!)
     if case .unknown = future.role {} else { throw CheckFailure(label: "unknown role") }
     if case .unknown = future.voice {} else { throw CheckFailure(label: "unknown voice") }

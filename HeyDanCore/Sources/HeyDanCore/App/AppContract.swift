@@ -645,12 +645,14 @@ nonisolated public struct PushAPS: Sendable, Equatable, Codable {
 }
 
 nonisolated public struct PushData: Sendable, Equatable, Codable {
+    public var `h`: String
     public var `v`: Int
     public var `c`: String
     public var `m`: String
     public var `k`: Kind
     public var `a`: Agent
-    public init(`v`: Int, `c`: String, `m`: String, `k`: Kind, `a`: Agent) {
+    public init(`h`: String, `v`: Int, `c`: String, `m`: String, `k`: Kind, `a`: Agent) {
+        self.`h` = `h`
         self.`v` = `v`
         self.`c` = `c`
         self.`m` = `m`

@@ -43,7 +43,7 @@ targets:
     entitlements:
       path: HeyDan/HeyDan.entitlements
       properties:
-        aps-environment: development
+        aps-environment: $(APS_ENVIRONMENT)
         com.apple.developer.usernotifications.communication: true
     # The Simulator has no FaceTime app, and callservicesd ends every CallKit call it cannot open
     # `facetime://?showInCallUI=1` for ("no UI to host the call"). Simulator builds (Debug and Release) answer for that
@@ -70,6 +70,7 @@ targets:
       path: HeyDan/Info.plist
       properties:
         CFBundleDisplayName: Hey Dan
+        HeyDanAPSEnvironment: $(APS_ENVIRONMENT)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSMicrophoneUsageDescription: Hey Dan sends your voice to your NanoClaw agent during a call.
@@ -90,6 +91,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID)
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
   # The call's Live Activity: lock screen and Dynamic Island.
   HeyDanActivity:
     type: app-extension
