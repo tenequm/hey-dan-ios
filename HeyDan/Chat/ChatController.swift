@@ -137,6 +137,7 @@ import UIKit
                 for entity in reducer.entities.values {
                     if case .message(let message) = entity { outbox.reconcile(message) }
                 }
+                CallLog.log(.store, "loaded cursor=\(snapshot.cursor) entities=\(snapshot.entities.count)")
                 ready = true
                 restart()
                 if openConversationId != nil { await loadHistory() }
@@ -284,6 +285,7 @@ import UIKit
             try await store.clear(host: host, deviceId: entry.pairing.deviceId)
             try await files.clear(host: host, deviceId: entry.pairing.deviceId)
             try Pairings.shared.remove(host: host)
+            CallLog.log(.store, "unpaired")
         } catch { self.error = AppError.map(error) }
     }
     func persist(_ changed: Set<String>) async throws {
@@ -297,16 +299,19 @@ import UIKit
     func handle(_ failure: any Error, token: UUID) async {
         guard token == generation, !Task.isCancelled else { return }
         let mapped = AppError.map(failure)
+        CallLog.log(.net, "failure code=\(mapped.logName)")
         error = mapped
         switch mapped {
         case .keyUnavailable: paused = true
         case .server(let status, let body):
             if ["device_revoked", "unknown_device"].contains(body.error), let host, let pairing {
+                CallLog.log(.store, "revoke")
                 selectPairing(nil, host: host)
                 do {
                     try await store.clear(host: host, deviceId: pairing.deviceId)
                     try await files.clear(host: host, deviceId: pairing.deviceId)
                     try Pairings.shared.remove(host: host)
+            CallLog.log(.store, "unpaired")
                 } catch { self.error = AppError.map(error) }
                 return
             }

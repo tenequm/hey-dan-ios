@@ -14,6 +14,8 @@ extension ChatController {
                 features = hello.features
                 try await refreshList(token: token)
                 guard token == generation, !paused, !Task.isCancelled else { return }
+                let started = ContinuousClock.now
+                CallLog.log(.stream, "connect after=\(reducer.cursor)")
                 let events = try await service.events(query: EventsQuery(after: reducer.cursor))
                 for try await batch in Self.batches(events) {
                     guard token == generation, !Task.isCancelled else { return }
@@ -39,6 +41,7 @@ extension ChatController {
                     for event in batch {
                         if event.kind == .message, let message = try? event.decode(Message.self) { outbox.reconcile(message) }
                         if event.kind == .synchronized {
+                            CallLog.log(.stream, "synchronized cursor=\(reducer.cursor) count=\(batch.count) ms=\(CallLog.ms(since: started))")
                             connectionState = .connected; error = nil; attempts = 0
                         }
                     }
@@ -51,6 +54,7 @@ extension ChatController {
                 await handle(error, token: token)
                 guard token == generation, active, !paused, !Task.isCancelled else { return }
                 attempts += 1
+                CallLog.log(.stream, "reconnect attempt=\(attempts) code=\(AppError.map(error).logName)")
                 connectionState = .reconnecting
                 do { try await Task.sleep(for: .seconds(Outbox.backoff(attempt: attempts))) }
                 catch { return }

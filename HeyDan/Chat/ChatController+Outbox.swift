@@ -96,6 +96,7 @@ extension ChatController {
                 self?.runner?.cancel()
             }
             defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+            CallLog.log(.net, "outbox step client=\(entry.request.clientId.prefix(8))")
             let result: Outbox.Result
             do {
                 switch action {
@@ -129,6 +130,7 @@ extension ChatController {
             }
             guard token == generation, !Task.isCancelled else { return }
             outbox.apply(result, clientId: entry.request.clientId, now: .now)
+            CallLog.log(.net, "outbox result client=\(entry.request.clientId.prefix(8))")
             do { try await saveOutbox() }
             catch { await handle(error, token: token); return }
         }
