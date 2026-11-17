@@ -54,12 +54,14 @@ actor SwiftDataThreadStore: ThreadStore {
     private let root: URL
     private let version: Int
     private let inMemory: Bool
+    private let beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)?
     private var workers: [URL: Task<ThreadStoreWorker, any Error>] = [:]
 
-    init(root: URL = StoreLocation.root, schemaVersion: Int = schemaVersion, inMemory: Bool = false) {
+    init(root: URL = StoreLocation.root, schemaVersion: Int = schemaVersion, inMemory: Bool = false, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)? = nil) {
         self.root = root
         version = schemaVersion
         self.inMemory = inMemory
+        self.beforeCommit = beforeCommit
     }
 
     private func worker(host: URL) async throws -> ThreadStoreWorker {
@@ -83,6 +85,7 @@ actor SwiftDataThreadStore: ThreadStore {
             let marker = directory.appending(path: "schema")
             let previous = try? String(contentsOf: marker, encoding: .utf8)
             if previous != String(version), manager.fileExists(atPath: directory.path) {
+                await CallLog.log(.store, "wipe reason=schema")
                 try manager.removeItem(at: directory)
             }
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -96,6 +99,7 @@ actor SwiftDataThreadStore: ThreadStore {
         do { container = try ModelContainer(for: schema, configurations: configuration) }
         catch {
             guard !inMemory else { throw error }
+            await CallLog.log(.store, "wipe reason=container")
             try manager.removeItem(at: directory)
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Data(String(version).utf8).write(to: directory.appending(path: "schema"), options: .atomic)
@@ -108,17 +112,20 @@ actor SwiftDataThreadStore: ThreadStore {
         let worker = try await worker(host: host)
         do { return try await worker.load(deviceId: deviceId) }
         catch is DecodingError {
+            await CallLog.log(.store, "wipe reason=decode")
             try await worker.clear(deviceId: deviceId)
             return ThreadSnapshot()
         }
     }
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws {
+        let began = ContinuousClock.now
         let worker = try await worker(host: host)
-        try await Self.ingest(snapshot, deviceId: deviceId, worker: worker)
+        try await Self.ingest(snapshot, deviceId: deviceId, worker: worker, beforeCommit: beforeCommit)
+        await CallLog.log(.store, "save cursor=\(snapshot.cursor) count=\(snapshot.entities.count + snapshot.conversations.count) ms=\(CallLog.ms(since: began))")
     }
     @concurrent private static func ingest(_ snapshot: ThreadSnapshot, deviceId: String,
-                                           worker: ThreadStoreWorker) async throws {
-        try await worker.save(snapshot, deviceId: deviceId)
+                                           worker: ThreadStoreWorker, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)?) async throws {
+        try await worker.save(snapshot, deviceId: deviceId, beforeCommit: beforeCommit)
     }
     func clear(host: URL, deviceId: String) async throws {
         try await worker(host: host).clear(deviceId: deviceId)
@@ -144,7 +151,7 @@ actor SwiftDataThreadStore: ThreadStore {
         return result
     }
 
-    func save(_ snapshot: ThreadSnapshot, deviceId: String) throws {
+    func save(_ snapshot: ThreadSnapshot, deviceId: String, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)? = nil) throws {
         modelContext.autosaveEnabled = false
         do {
             let encoder = JSONEncoder()
@@ -180,8 +187,13 @@ actor SwiftDataThreadStore: ThreadStore {
                 floors.merge(snapshot.historyFloors) { _, new in new }
                 cursor.historyFloors = try encoder.encode(floors)
             }
-            else { modelContext.insert(CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)) }
+            else {
+                let record = CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)
+                record.historyFloors = try encoder.encode(snapshot.historyFloors)
+                modelContext.insert(record)
             }
+            }
+            try beforeCommit?(snapshot)
             try modelContext.save()
         } catch {
             modelContext.rollback()

@@ -140,7 +140,7 @@ import UIKit
                 CallLog.log(.store, "loaded cursor=\(snapshot.cursor) entities=\(snapshot.entities.count)")
                 ready = true
                 restart()
-                if openConversationId != nil { await loadHistory() }
+                if openConversationId != nil { await loadHistory(newest: true) }
             } catch { if token == generation { self.error = AppError.map(error) } }
         }
     }
@@ -148,7 +148,7 @@ import UIKit
         guard openConversationId != id else { return }
         flushRead()
         openConversationId = id
-        Task { await loadHistory() }
+        Task { await loadHistory(newest: true) }
     }
     func closeConversation() { flushRead(); openConversationId = nil }
     func setActive(_ active: Bool) {
@@ -200,7 +200,7 @@ import UIKit
         snapshot.allowedConversations = allowed
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
         guard token == generation, !Task.isCancelled else { return }
-        reducer = ThreadReducer(cursor: cursor, conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
+        reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
             switch $0.value { case .message(let m): allowed.contains(m.conversationId); case .question(let q): allowed.contains(q.conversationId); case .unknown: false }
         },
             statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
@@ -209,11 +209,11 @@ import UIKit
         reducer.upsert(list.badge)
         hasCursor = true
     }
-    func loadHistory(before: Int64? = nil, after: Int64? = nil) async {
+    func loadHistory(before: Int64? = nil, after: Int64? = nil, newest: Bool = false) async {
         guard let id = openConversationId, ready else { return }
         let token = generation
         do {
-            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before ?? (after == nil ? historyFloors[id] : nil), after: after))
+            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before ?? (after == nil && !newest ? historyFloors[id] : nil), after: after))
             guard token == generation, !Task.isCancelled else { return }
             if after == nil, let floor = page.items.map({ order($0) }).min() {
                 historyFloors[id] = min(historyFloors[id] ?? floor, floor)

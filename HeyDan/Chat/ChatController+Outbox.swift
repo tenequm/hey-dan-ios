@@ -20,7 +20,12 @@ extension ChatController {
             let entry = Outbox.Entry(host: host, conversationId: conversationId,
                 request: SendRequest(clientId: UUID().uuidString, text: text, fileIds: []), attachments: copied)
             outbox.enqueue(entry)
-            try await saveOutbox()
+            do { try await saveOutbox() }
+            catch {
+                outbox.remove(clientId: entry.request.clientId)
+                try? await files.removeCopies([entry], host: host, deviceId: pairing.deviceId)
+                throw error
+            }
             guard token == generation else { return false }
             durableIDs.insert(entry.request.clientId)
             runOutbox()
