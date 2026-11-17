@@ -45,6 +45,10 @@ extension HeyDanApp {
     @MainActor
     static func debugScript() async {
         let env = ProcessInfo.processInfo.environment
+        if env["HEYDAN_E2E_MIC_PERMISSION"] == "1" {
+            _ = await AVAudioApplication.requestRecordPermission()
+            return
+        }
         #if targetEnvironment(simulator)
         let launched = ContinuousClock.now
         // Read here, not in App.init: before a scene connects the content size category is still unspecified.

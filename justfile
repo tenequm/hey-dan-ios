@@ -66,6 +66,10 @@ sim-call seconds="90" say="" mode="":
     fi
     HEYDAN_AUTOCALL=1 HEYDAN_HANGUP_AFTER={{seconds}} HEYDAN_FEED_WAV="$feed" HEYDAN_TURN_MODE={{quote(mode)}} just sim
 
+# A hands-free Simulator call with machine-readable evidence in HEYDAN_RUN_DIR (default build/e2e).
+sim-e2e:
+    @python3 scripts/sim-e2e.py {{bundle_id}}
+
 # Sign (registering the iPhone with the team on first run), install and launch on the connected iPhone.
 device: gen
     #!/usr/bin/env bash
@@ -228,7 +232,7 @@ sim-checks check="LiveActivityOnLockScreen": gen
     xcrun simctl terminate "$udid" {{bundle_id}}
     status=0
     TEST_RUNNER_HEYDAN_CHECKS_OUT="$PWD/build/checks" \
-        xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
+        timeout --kill-after=10 600 xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
         -derivedDataPath "{{sim_build}}" -resultBundlePath "$results/HeyDanChecks.xcresult" \
         -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -only-testing "HeyDanChecks/HeyDanChecks/test{{check}}" 2>&1 \
         | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}

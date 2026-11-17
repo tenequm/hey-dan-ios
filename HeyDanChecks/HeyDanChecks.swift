@@ -12,6 +12,23 @@ final class HeyDanChecks: XCTestCase {
     /// Hooks that start calls or change the line's saved voice: a check passes them itself, never inherits them.
     private static let scriptedEnv: Set = ["HEYDAN_AUTOCALL", "HEYDAN_START_ON_SAMPLE", "HEYDAN_TTS_PATCH", "HEYDAN_VOICE_STEPS"]
 
+    func testE2EMicrophonePermission() {
+        continueAfterFailure = false
+        app.launchEnvironment = ["HEYDAN_E2E_MIC_PERMISSION": "1"]
+        app.launch()
+        XCTAssertTrue(allowSpringBoardPermission(), "Microphone permission alert must be accepted")
+        app.terminate()
+    }
+
+    private func allowSpringBoardPermission(timeout: TimeInterval = 15) -> Bool {
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        guard alert.waitForExistence(timeout: timeout) else { return false }
+        let allow = alert.buttons["Allow"].firstMatch
+        guard allow.waitForExistence(timeout: 2) else { return false }
+        allow.tap()
+        return alert.waitForNonExistence(timeout: 5)
+    }
+
     /// A stand-in call's Live Activity in the Dynamic Island (expanded by the sample's alert), then on the Lock Screen,
     /// with the system's "Allow Live Activities from Hey Dan?" choice under it when it asks.
     func testLiveActivityOnLockScreen() async throws {
