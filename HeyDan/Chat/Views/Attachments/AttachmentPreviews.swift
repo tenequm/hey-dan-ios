@@ -2,11 +2,11 @@
 import SwiftUI
 import HeyDanCore
 
-#Preview("Empty composer") { ComposerView(features: ["files"], send: { _, _ in }) }
-#Preview("Typed composer") { ComposerView(features: ["files"], send: { _, _ in }, text: "Hello") }
-#Preview("Files off") { ComposerView(send: { _, _ in }) }
+#Preview("Empty composer") { ComposerView(features: ["files"], send: { _, _ in true }) }
+#Preview("Typed composer") { ComposerView(features: ["files"], send: { _, _ in true }, text: "Hello") }
+#Preview("Files off") { ComposerView(features: [], send: { _, _ in true }) }
 #Preview("Staged composer") {
-    ComposerView(features: ["files"], send: { _, _ in }, attachments: [
+    ComposerView(features: ["files"], send: { _, _ in true }, attachments: [
         StagedAttachment(fileURL: URL(fileURLWithPath: "/preview.pdf"), name: "Document.pdf", mimeType: "application/pdf")
     ])
 }
@@ -19,7 +19,7 @@ import HeyDanCore
 }
 #Preview("Landscape failed") {
     AttachmentView(file: FileAttachment(id: "landscape", name: "Landscape", mimeType: "image/jpeg", size: 800_000,
-                                        kind: .image, width: 1800, height: 1200))
+                                        kind: .image, width: 1800, height: 1200)) { _ in throw URLError(.notConnectedToInternet) }
 }
 #Preview("PDF and unknown file") {
     VStack {

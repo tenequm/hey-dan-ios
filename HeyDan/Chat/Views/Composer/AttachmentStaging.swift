@@ -3,12 +3,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import CoreTransferable
 
-// H1 supplies this value in HeyDanCore when its lane lands.
-nonisolated struct StagedAttachment: Sendable {
-    let fileURL: URL
-    let name: String
-    let mimeType: String
-}
+import HeyDanCore
 
 nonisolated struct PickedPhoto: Transferable {
     let attachment: StagedAttachment

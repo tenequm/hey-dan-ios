@@ -18,8 +18,8 @@ struct AttachmentView: View {
     @State private var requested = false
     @State private var openWhenLoaded = false
 
-    init(file: FileAttachment, download: @escaping (FileAttachment) async throws -> URL = { _ in
-        throw URLError(.notConnectedToInternet)
+    init(file: FileAttachment, download: @escaping (FileAttachment) async throws -> URL = { file in
+        try await ChatController.shared.download(file)
     }) {
         self.file = file
         self.download = download

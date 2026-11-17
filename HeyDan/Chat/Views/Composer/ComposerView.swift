@@ -3,19 +3,25 @@ import PhotosUI
 import HeyDanCore
 
 struct ComposerView: View {
-    var features: [String] = []
-    let send: (String, [StagedAttachment]) -> Void
+    var features: [String]? = nil
+    private var availableFeatures: [String] { features ?? ChatController.shared.features }
+    let send: (String, [StagedAttachment]) async -> Bool
     @State var text = ""
     @State var attachments: [StagedAttachment] = []
     @State private var draftFiles = AttachmentDraftFiles()
     @State private var photos: [PhotosPickerItem] = []
     @State private var importing = false
+    @State private var pickingPhotos = false
     @State private var importURLs: [URL] = []
     @State private var staging = false
+    @State private var sending = false
     @State private var importFailed = false
 
     var body: some View {
         VStack(alignment: .leading) {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["HEYDAN_COMPOSER_CHECKS"] == "1" { ComposerFixtureRows() }
+            #endif
             if !attachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack {
@@ -38,11 +44,10 @@ struct ComposerView: View {
                     .font(.caption)
             }
             HStack(alignment: .bottom) {
-                if features.contains("files") {
+                if availableFeatures.contains("files") {
                     Menu {
-                        PhotosPicker(selection: $photos, matching: .images) {
-                            Label("Photos", systemImage: "photo")
-                        }.accessibilityIdentifier(AXID.composerPhotos)
+                        Button("Photos", systemImage: "photo") { pickingPhotos = true }
+                            .accessibilityIdentifier(AXID.composerPhotos)
                         Button("Files", systemImage: "doc") { importing = true }
                     } label: { Image(systemName: "plus.circle") }
                     .accessibilityLabel("Attach")
@@ -54,18 +59,24 @@ struct ComposerView: View {
                     .accessibilityIdentifier(AXID.composerText)
                 if staging { ProgressView() }
                 Button("Send", systemImage: "arrow.up.circle.fill") {
-                    send(text, attachments)
-                    text = ""
-                    // The controller copies these files into its durable outbox before releasing them.
-                    attachments = []
-                    draftFiles.urls.removeAll()
+                    sending = true
+                    Task {
+                        defer { sending = false }
+                        guard await send(text, attachments) else { return }
+                        text = ""
+                        for attachment in attachments { AttachmentStaging.remove(attachment) }
+                        attachments = []
+                        draftFiles.urls.removeAll()
+                    }
                 }
                 .labelStyle(.iconOnly)
                 .disabled(staging || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
                 .accessibilityIdentifier(AXID.composerSend)
             }
         }
+        .disabled(sending)
         .padding()
+        .photosPicker(isPresented: $pickingPhotos, selection: $photos, matching: .images)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): importURLs = urls
@@ -105,7 +116,8 @@ struct ComposerView: View {
         }
         .task {
             #if DEBUG
-            if features.contains("files"), let path = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_ATTACHMENT"] {
+            if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1",
+               availableFeatures.contains("files"), let path = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_ATTACHMENT"] {
                 importURLs = [URL(fileURLWithPath: path)]
             }
             #endif

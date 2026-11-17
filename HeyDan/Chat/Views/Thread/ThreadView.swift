@@ -7,6 +7,12 @@ struct ThreadView: View {
     @State private var showsCall = false
     var body: some View {
         Color.clear
+            .safeAreaInset(edge: .bottom) {
+                ComposerView { text, attachments in
+                    await ChatController.shared.send(text: text, attachments: attachments)
+                }
+                .id(conversation.id)
+            }
             .navigationTitle(conversation.agent.name)
             .toolbar { Button("Call") { showsCall = true }.disabled(!conversation.canCall) }
             .fullScreenCover(isPresented: $showsCall) { ContentView() }
