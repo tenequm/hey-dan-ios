@@ -20,14 +20,16 @@ final class HeyDanChecks: XCTestCase {
         app.terminate()
     }
 
-    private func allowSpringBoardPermission(timeout: TimeInterval = 15) -> Bool {
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
-        guard alert.waitForExistence(timeout: timeout) else { return false }
+    private func allowSpringBoardPermission() -> Bool {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        guard alert.waitForExistence(timeout: 15) else { return false }
         let allow = alert.buttons["Allow"].firstMatch
         guard allow.waitForExistence(timeout: 2) else { return false }
+        // Waited on by identifier: `alert` is whichever SpringBoard alert shows, so one that follows this prompt matches it too.
         let identifier = allow.identifier
         guard !identifier.isEmpty else { return false }
-        let permissionButton = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons[identifier].firstMatch
+        let permissionButton = springboard.buttons[identifier].firstMatch
         allow.tap()
         return permissionButton.waitForNonExistence(timeout: 5)
     }
