@@ -30,6 +30,7 @@ import SwiftData
 @Model final class CachedStreamCursor {
     @Attribute(.unique) var deviceId: String
     var cursor: Int64
+    var historyFloors: Data?
     init(deviceId: String, cursor: Int64) {
         self.deviceId = deviceId
         self.cursor = cursor
@@ -129,8 +130,9 @@ actor SwiftDataThreadStore: ThreadStore {
         let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
             predicate: #Predicate { $0.deviceId == deviceId }, sortBy: [SortDescriptor(\.order)]))
         let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
-            predicate: #Predicate { $0.deviceId == deviceId })).first?.cursor
-        var result = ThreadSnapshot(cursor: cursor)
+            predicate: #Predicate { $0.deviceId == deviceId })).first
+        var result = ThreadSnapshot(cursor: cursor?.cursor)
+        if let data = cursor?.historyFloors { result.historyFloors = try JSONDecoder().decode([String: Int64].self, from: data) }
         let decoder = JSONDecoder()
         for record in records {
             if record.kind == "conversation" {
@@ -146,6 +148,11 @@ actor SwiftDataThreadStore: ThreadStore {
         modelContext.autosaveEnabled = false
         do {
             let encoder = JSONEncoder()
+            if let allowed = snapshot.allowedConversations {
+                for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate { $0.deviceId == deviceId })) where !allowed.contains(row.conversationId) {
+                    modelContext.delete(row)
+                }
+            }
             for conversation in snapshot.conversations {
                 try upsert(CachedThreadEntity(deviceId: deviceId, entityId: conversation.id,
                     conversationId: conversation.id, order: 0, seq: conversation.seq,
@@ -167,7 +174,12 @@ actor SwiftDataThreadStore: ThreadStore {
             let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
                 predicate: #Predicate { $0.deviceId == deviceId })).first
             if snapshot.hasCursor {
-            if let cursor { cursor.cursor = max(cursor.cursor, snapshot.cursor) }
+            if let cursor {
+                cursor.cursor = max(cursor.cursor, snapshot.cursor)
+                var floors = try cursor.historyFloors.map { try JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
+                floors.merge(snapshot.historyFloors) { _, new in new }
+                cursor.historyFloors = try encoder.encode(floors)
+            }
             else { modelContext.insert(CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)) }
             }
             try modelContext.save()

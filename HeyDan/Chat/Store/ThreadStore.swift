@@ -5,6 +5,8 @@ import HeyDanCore
 struct ThreadSnapshot: Sendable {
     var cursor: Int64 = 0
     var hasCursor = false
+    var allowedConversations: Set<String>?
+    var historyFloors: [String: Int64] = [:]
     init(cursor: Int64? = nil, conversations: [Conversation] = [], entities: [ThreadEntity] = []) {
         self.cursor = cursor ?? 0; hasCursor = cursor != nil
         self.conversations = conversations; self.entities = entities

@@ -126,6 +126,7 @@ import UIKit
                 let snapshot = try await store.load(host: host, deviceId: pairing.deviceId)
                 let entries = try await files.load(host: host, deviceId: pairing.deviceId)
                 guard token == generation, !Task.isCancelled else { return }
+                historyFloors = snapshot.historyFloors
                 hasCursor = snapshot.hasCursor
                 reducer = ThreadReducer(cursor: snapshot.cursor)
                 for value in snapshot.conversations { reducer.upsert(value) }
@@ -191,9 +192,14 @@ import UIKit
         let list = try await service.conversations()
         guard token == generation, !Task.isCancelled, let host, let pairing else { return }
         let cursor = hasCursor ? reducer.cursor : list.seq
-        try await store.save(ThreadSnapshot(cursor: cursor, conversations: list.conversations), host: host, deviceId: pairing.deviceId)
+        let allowed = Set(list.conversations.map(\.id))
+        var snapshot = ThreadSnapshot(cursor: cursor, conversations: list.conversations)
+        snapshot.allowedConversations = allowed
+        try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
         guard token == generation, !Task.isCancelled else { return }
-        reducer = ThreadReducer(cursor: cursor, conversations: reducer.conversations, entities: reducer.entities,
+        reducer = ThreadReducer(cursor: cursor, conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
+            switch $0.value { case .message(let m): allowed.contains(m.conversationId); case .question(let q): allowed.contains(q.conversationId); case .unknown: false }
+        },
             statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
         for value in list.conversations { reducer.upsert(value) }
         for value in list.statuses { reducer.upsert(value) }
@@ -266,9 +272,10 @@ import UIKit
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }
-        let snapshot = ThreadSnapshot(cursor: hasCursor ? reducer.cursor : nil,
+        var snapshot = ThreadSnapshot(cursor: hasCursor ? reducer.cursor : nil,
             conversations: changed.compactMap { reducer.conversations[$0] },
             entities: changed.compactMap { reducer.entities[$0] })
+        snapshot.historyFloors = historyFloors
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
     }
     func handle(_ failure: any Error, token: UUID) async {
