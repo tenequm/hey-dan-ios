@@ -116,7 +116,7 @@ actor SwiftDataThreadStore: ThreadStore {
         let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
             predicate: #Predicate { $0.deviceId == deviceId }, sortBy: [SortDescriptor(\.order)]))
         let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
-            predicate: #Predicate { $0.deviceId == deviceId })).first?.cursor ?? 0
+            predicate: #Predicate { $0.deviceId == deviceId })).first?.cursor
         var result = ThreadSnapshot(cursor: cursor)
         let decoder = JSONDecoder()
         for record in records {
@@ -153,8 +153,10 @@ actor SwiftDataThreadStore: ThreadStore {
             }
             let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
                 predicate: #Predicate { $0.deviceId == deviceId })).first
+            if snapshot.hasCursor {
             if let cursor { cursor.cursor = max(cursor.cursor, snapshot.cursor) }
             else { modelContext.insert(CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)) }
+            }
             try modelContext.save()
         } catch {
             modelContext.rollback()

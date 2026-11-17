@@ -4,6 +4,11 @@ import HeyDanCore
 /// H3 owns the atomic cache snapshot; no SwiftData objects cross this boundary.
 struct ThreadSnapshot: Sendable {
     var cursor: Int64 = 0
+    var hasCursor = false
+    init(cursor: Int64? = nil, conversations: [Conversation] = [], entities: [ThreadEntity] = []) {
+        self.cursor = cursor ?? 0; hasCursor = cursor != nil
+        self.conversations = conversations; self.entities = entities
+    }
     var conversations: [Conversation] = []
     var entities: [ThreadEntity] = []
 }

@@ -42,6 +42,7 @@ import UIKit
     @ObservationIgnored var offlineUntil: Date?
     @ObservationIgnored var active = true
     @ObservationIgnored var ready = false
+    @ObservationIgnored var hasCursor = false
     @ObservationIgnored var paused = false
     @ObservationIgnored var streamTask: Task<Void, Never>?
     @ObservationIgnored var loadTask: Task<Void, Never>?
@@ -97,7 +98,7 @@ import UIKit
         runner = nil; streamTask = nil
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); openConversationId = nil
-        durableIDs = []; ready = false; paused = false; features = []; error = nil; uploadProgress = [:]
+        durableIDs = []; ready = false; hasCursor = false; paused = false; features = []; error = nil; uploadProgress = [:]
         connectionState = .disconnected
         guard let pairing else { return }
         if !fixedService { service = SignedClient(host: host, deviceId: pairing.deviceId) }
@@ -107,6 +108,7 @@ import UIKit
                 let snapshot = try await store.load(host: host, deviceId: pairing.deviceId)
                 let entries = try await files.load(host: host, deviceId: pairing.deviceId)
                 guard token == generation, !Task.isCancelled else { return }
+                hasCursor = snapshot.hasCursor
                 reducer = ThreadReducer(cursor: snapshot.cursor)
                 for value in snapshot.conversations { reducer.upsert(value) }
                 for value in snapshot.entities { reducer.upsert(value) }
@@ -143,17 +145,25 @@ import UIKit
         try Task.checkCancellation()
     }
     func refresh() async {
+        await loadTask?.value
+        guard ready else { return }
         let token = generation
-        do {
-            let list = try await service.conversations()
-            guard token == generation, !Task.isCancelled else { return }
-            var candidate = reducer
-            candidate.upsert(list)
-            guard let host, let pairing else { return }
-            try await store.save(ThreadSnapshot(cursor: candidate.cursor, conversations: list.conversations), host: host, deviceId: pairing.deviceId)
-            guard token == generation, !Task.isCancelled else { return }
-            reducer.upsert(list)
-        } catch { await handle(error, token: token) }
+        do { try await refreshList(token: token) }
+        catch { await handle(error, token: token) }
+    }
+    func refreshList(token: UUID) async throws {
+        guard ready else { throw AppError.transport(.unavailable) }
+        let list = try await service.conversations()
+        guard token == generation, !Task.isCancelled, let host, let pairing else { return }
+        let cursor = hasCursor ? reducer.cursor : list.seq
+        try await store.save(ThreadSnapshot(cursor: cursor, conversations: list.conversations), host: host, deviceId: pairing.deviceId)
+        guard token == generation, !Task.isCancelled else { return }
+        reducer = ThreadReducer(cursor: cursor, conversations: reducer.conversations, entities: reducer.entities,
+            statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
+        for value in list.conversations { reducer.upsert(value) }
+        for value in list.statuses { reducer.upsert(value) }
+        reducer.upsert(list.badge)
+        hasCursor = true
     }
     func loadHistory(before: Int64? = nil, after: Int64? = nil) async {
         guard let id = openConversationId, ready else { return }
@@ -218,7 +228,7 @@ import UIKit
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }
-        let snapshot = ThreadSnapshot(cursor: reducer.cursor,
+        let snapshot = ThreadSnapshot(cursor: hasCursor ? reducer.cursor : nil,
             conversations: changed.compactMap { reducer.conversations[$0] },
             entities: changed.compactMap { reducer.entities[$0] })
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)

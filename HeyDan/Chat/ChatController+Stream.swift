@@ -12,7 +12,7 @@ extension ChatController {
                 let hello = try await service.hello()
                 guard token == generation, !Task.isCancelled else { return }
                 features = hello.features
-                await refresh()
+                try await refreshList(token: token)
                 guard token == generation, !paused, !Task.isCancelled else { return }
                 let events = try await service.events(query: EventsQuery(after: reducer.cursor))
                 for try await batch in Self.batches(events) {
