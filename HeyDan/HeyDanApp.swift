@@ -31,7 +31,15 @@ struct HeyDanApp: App {
                 if ChatController.shared.pairing != nil {
                     ConversationList()
                 } else {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
+                        || ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] != nil
+                        || ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
+                        PairingView()
+                    } else { ContentView() }
+                    #else
                     ContentView()
+                    #endif
                 }
             }
                 .environment(ChatController.shared)
