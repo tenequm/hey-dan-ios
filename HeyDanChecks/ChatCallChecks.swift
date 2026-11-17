@@ -5,7 +5,7 @@ import XCTest
         let app = XCUIApplication()
         app.launchEnvironment = ["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_CALL_REFUSAL": "1"]
         app.launch()
-        let stan = app.buttons["conversation.conv_stan01"].firstMatch
+        let stan = app.buttons["chat.conversation.conv_stan01"].firstMatch
         XCTAssertTrue(stan.waitForExistence(timeout: 15))
         stan.tap()
         let call = app.buttons["chat.call"]
@@ -18,7 +18,7 @@ import XCTest
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_FIXTURE_CHAT"] = "1"
         app.launch()
-        let stan = app.buttons["conversation.conv_stan01"].firstMatch
+        let stan = app.buttons["chat.conversation.conv_stan01"].firstMatch
         XCTAssertTrue(stan.waitForExistence(timeout: 15))
         stan.tap()
         let call = app.buttons["chat.call"]
