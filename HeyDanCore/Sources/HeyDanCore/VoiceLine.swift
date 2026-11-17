@@ -26,7 +26,7 @@ public struct VoiceLine: Sendable, Equatable {
 
     public var callLink: String { endpoint(nil).absoluteString }
 
-    /// Admits the call, opens its room and dispatches the worker; answers a `CallGrant`. Asks for
+    /// Admits the call, opens its room and dispatches the worker; answers a `VoiceLineGrant`. Asks for
     /// `VoiceProtocol.requestedVersion`, which a protocol 4 host ignores.
     public var tokenRequest: URLRequest {
         var request = URLRequest(url: endpoint("livekit/token", version: VoiceProtocol.requestedVersion))
@@ -63,7 +63,7 @@ public struct VoiceLine: Sendable, Equatable {
 
 /// The host's answer to `tokenRequest`: where to join, the caller's room token, the call's id for hangup, and the
 /// protocol the host speaks.
-public struct CallGrant: Decodable, Sendable, Equatable {
+public struct VoiceLineGrant: Decodable, Sendable, Equatable {
     public let url: String
     public let token: String
     public let callId: String

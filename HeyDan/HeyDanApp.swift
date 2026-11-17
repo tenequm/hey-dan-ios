@@ -12,6 +12,7 @@ import SwiftUI
 
 @main
 struct HeyDanApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
         // Before anything touches LiveKit: its logger is fixed on first use. Debug builds keep the SDK's own story of
         // every call (subsystem io.livekit.sdk) next to the app's; Release keeps LiveKit's default, info and above.
@@ -26,7 +27,14 @@ struct HeyDanApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if ChatController.shared.pairing != nil {
+                    ConversationList()
+                } else {
+                    ContentView()
+                }
+            }
+                .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG
                 .task { await Self.debugScript() }

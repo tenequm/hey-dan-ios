@@ -105,7 +105,7 @@ final class CallController: NSObject {
 
     /// A host's grant on a protocol this app speaks, with that protocol's names: held as one so neither is set alone.
     private struct AcceptedGrant {
-        let grant: CallGrant
+        let grant: VoiceLineGrant
         let names: VoiceProtocol.Names
     }
 
@@ -540,7 +540,7 @@ final class CallController: NSObject {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         CallLog.log(.net, "token status=\(status) bytes=\(data.count)", level: status == 200 ? .info : .error)
-        let grant = try CallGrant(status: status, body: data)
+        let grant = try VoiceLineGrant(status: status, body: data)
         guard let names = grant.names else {
             endOnHost(line, callId: grant.callId, reason: .updating)
             throw .unsupportedProtocol(grant.protocolVersion)

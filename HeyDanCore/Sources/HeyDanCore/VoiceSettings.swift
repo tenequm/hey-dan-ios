@@ -207,7 +207,7 @@ public enum TTSPatch: Encodable, Sendable, Equatable {
     }
 }
 
-public struct CatalogVoice: Decodable, Sendable, Equatable {
+public struct VoiceLineCatalogVoice: Decodable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let language: String?
@@ -227,10 +227,10 @@ public struct CatalogVoice: Decodable, Sendable, Equatable {
 
 public struct CatalogPage: Decodable, Sendable, Equatable {
     public let provider: String
-    public let voices: [CatalogVoice]
+    public let voices: [VoiceLineCatalogVoice]
     public let next: String?
 
-    public init(provider: String, voices: [CatalogVoice], next: String? = nil) {
+    public init(provider: String, voices: [VoiceLineCatalogVoice], next: String? = nil) {
         self.provider = provider
         self.voices = voices
         self.next = next

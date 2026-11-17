@@ -16,7 +16,7 @@ final class VoiceSettingsModel {
     private(set) var saveFailure: TTSServiceFailure?
     private(set) var saveResult: String?
     private(set) var saveSuccess = 0
-    private(set) var voices: [CatalogVoice] = []
+    private(set) var voices: [VoiceLineCatalogVoice] = []
     private(set) var catalogLoading = false
     private(set) var catalogFailure: TTSServiceFailure?
     private(set) var next: String?
@@ -24,7 +24,7 @@ final class VoiceSettingsModel {
     var language = ""
     var gender = ""
     /// The catalog row the caller tapped: its own name labels the draft until the server answers the save.
-    private var pickedVoice: CatalogVoice?
+    private var pickedVoice: VoiceLineCatalogVoice?
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private var catalogTask: Task<Void, Never>?
     private var catalogGeneration = UUID()
@@ -97,11 +97,11 @@ final class VoiceSettingsModel {
         return (label, unsaved ? "Server default - \(name)" : name, view.saved.voice ?? view.effective.voice)
     }
 
-    var selectedVoice: CatalogVoice? {
+    var selectedVoice: VoiceLineCatalogVoice? {
         guard let id = draft?.voice else { return nil }
         if let pickedVoice, pickedVoice.id == id { return pickedVoice }
         guard let details = draftDetails, case let .named(name) = VoiceLabel(details) else { return nil }
-        return CatalogVoice(id: id, name: name, language: details.language, gender: details.gender, preview: details.preview)
+        return VoiceLineCatalogVoice(id: id, name: name, language: details.language, gender: details.gender, preview: details.preview)
     }
 
     /// Names from `/voice/tts` the provider could not be asked for; Retry asks again.
@@ -153,7 +153,7 @@ final class VoiceSettingsModel {
         self.draft = TTSChoice(provider: draft.provider, model: id, voice: draft.voice)
     }
 
-    func setVoice(_ voice: CatalogVoice?) {
+    func setVoice(_ voice: VoiceLineCatalogVoice?) {
         guard !saving, !invalidated, let draft else { return }
         pickedVoice = voice
         self.draft = TTSChoice(provider: draft.provider, model: draft.model, voice: voice?.id)
@@ -346,7 +346,7 @@ enum VoiceSample {
     private static var handedOff = false
     #endif
 
-    fileprivate static func play(_ voice: CatalogVoice, using owner: SamplePlayback) {
+    fileprivate static func play(_ voice: VoiceLineCatalogVoice, using owner: SamplePlayback) {
         guard !CallController.shared.isCallActive, let url = voice.preview else { return }
         #if DEBUG
         handedOff = false
@@ -755,7 +755,7 @@ struct VoicePickerSheet: View {
         .onDisappear { model.cancelCatalog(); VoiceSample.release(sample) }
     }
 
-    private func catalogRow(_ voice: CatalogVoice) -> some View {
+    private func catalogRow(_ voice: VoiceLineCatalogVoice) -> some View {
         HStack {
             Button {
                 model.setVoice(voice)

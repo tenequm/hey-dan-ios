@@ -4,6 +4,9 @@ build/
 xcuserdata/
 HeyDan/Info.plist
 HeyDanActivity/Info.plist
+HeyDan/HeyDan.entitlements
+HeyDanNotificationService/Info.plist
+HeyDanNotificationService/HeyDanNotificationService.entitlements
 # The project is generated from project.yml; only its resolved package versions are kept.
 HeyDan.xcodeproj/*
 !HeyDan.xcodeproj/project.xcworkspace/
@@ -15,3 +18,5 @@ HeyDan.xcodeproj/project.xcworkspace/xcshareddata/*
 Local.xcconfig
 .env.local
 local.just
+
+.local/

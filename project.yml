@@ -10,13 +10,16 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.5.2"
+    MARKETING_VERSION: "0.6.0"
     # `just testflight` overrides this with a timestamp; uploads need a fresh build number.
     CURRENT_PROJECT_VERSION: "1"
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
     from: 2.17.0
+  MarkdownView:
+    url: https://github.com/Lakr233/MarkdownView
+    exactVersion: 4.8.5
   HeyDanCore:
     path: HeyDanCore
 targets:
@@ -32,9 +35,16 @@ targets:
         buildPhase: resources
       - path: HeyDanActivity/CallActivityAttributes.swift
     dependencies:
+      - package: MarkdownView
       - package: LiveKit
       - package: HeyDanCore
       - target: HeyDanActivity
+      - target: HeyDanNotificationService
+    entitlements:
+      path: HeyDan/HeyDan.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.usernotifications.communication: true
     # The Simulator has no FaceTime app, and callservicesd ends every CallKit call it cannot open
     # `facetime://?showInCallUI=1` for ("no UI to host the call"). Simulator builds (Debug and Release) answer for that
     # scheme themselves, so CallKit keeps the call; no device build ever has it. Signing runs after this phase.
@@ -48,6 +58,11 @@ targets:
         showEnvVars: false
         script: |
           touch "$DERIVED_FILE_DIR/simulator-in-call-ui.stamp"
+          if [ "$CONFIGURATION" = Debug ]; then
+            plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          else
+            plutil -remove NSAppTransportSecurity "$TARGET_BUILD_DIR/$INFOPLIST_PATH" 2>/dev/null || true
+          fi
           [ "$PLATFORM_NAME" = iphonesimulator ] || exit 0
           plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"simulator-in-call-ui","CFBundleURLSchemes":["facetime"]}]' \
               "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
@@ -65,6 +80,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
+        NSUserActivityTypes: [INSendMessageIntent]
         UIAppFonts:
           - Fonts/HankenGrotesk/HankenGrotesk[wght].ttf
           - Fonts/IBMPlexMono/IBMPlexMono-Regular.ttf
@@ -100,6 +116,29 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Activity
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) ACTIVITY_EXTENSION
+  HeyDanNotificationService:
+    type: app-extension
+    platform: iOS
+    sources: [HeyDanNotificationService, HeyDan/Shared/MessageNotification.swift]
+    dependencies:
+      - package: HeyDanCore
+    entitlements:
+      path: HeyDanNotificationService/HeyDanNotificationService.entitlements
+      properties:
+        com.apple.developer.usernotifications.communication: true
+    info:
+      path: HeyDanNotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Hey Dan
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).NotificationService
+        TARGETED_DEVICE_FAMILY: "1"
   # Simulator checks of what used to need the phone (`just sim-checks`); never part of the app's build.
   HeyDanChecks:
     type: bundle.ui-testing
@@ -113,6 +152,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Checks
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
+        INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TEST_TARGET_NAME: HeyDan
 schemes:
   HeyDanChecks:

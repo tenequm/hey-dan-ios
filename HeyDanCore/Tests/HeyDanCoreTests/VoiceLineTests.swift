@@ -43,31 +43,31 @@ struct VoiceLineTests {
     }
 }
 
-struct CallGrantTests {
+struct VoiceLineGrantTests {
     @Test func decodesTheHostAnswer() throws {
         let body = Data(#"{"url":"wss://voice.example.com","token":"jwt","callId":"id1","agent":"Dan","silenceMs":2500,"limit":{"ms":1800000,"kind":"duration"}}"#.utf8)
-        let grant = try CallGrant(status: 200, body: body)
+        let grant = try VoiceLineGrant(status: 200, body: body)
         #expect(grant.url == "wss://voice.example.com")
         #expect(grant.callId == "id1")
         #expect(grant.agent == "Dan")
     }
 
     @Test func aHostNamingNoProtocolSpeaks4() throws {
-        let grant = try CallGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id1","agent":"Dan"}"#.utf8))
+        let grant = try VoiceLineGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id1","agent":"Dan"}"#.utf8))
         #expect(grant.protocolVersion == 4)
         #expect(grant.names == VoiceProtocol.Names(version: 4))
     }
 
     @Test func aProtocol6HostSaysSo() throws {
         let body = Data(#"{"url":"wss://h","token":"jwt","callId":"id1","agent":"Dan","silenceMs":2500,"protocol":6}"#.utf8)
-        let grant = try CallGrant(status: 200, body: body)
+        let grant = try VoiceLineGrant(status: 200, body: body)
         #expect(grant.protocolVersion == 6)
         #expect(grant.names?.turnTopic == "nanoclaw.voice-mode.turn")
     }
 
     @Test(arguments: [5, 7, 0])
     func anUnknownProtocolHasNoNamesButKeepsItsCall(version: Int) throws {
-        let grant = try CallGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id9","protocol":\#(version)}"#.utf8))
+        let grant = try VoiceLineGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id9","protocol":\#(version)}"#.utf8))
         #expect(grant.protocolVersion == version)
         #expect(grant.names == nil)
         #expect(grant.callId == "id9")
@@ -79,15 +79,15 @@ struct CallGrantTests {
 
     @Test func aProtocolThatIsNoNumberIsMalformed() {
         #expect(throws: CallFailure.malformedGrant) {
-            try CallGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id1","protocol":"6"}"#.utf8))
+            try VoiceLineGrant(status: 200, body: Data(#"{"url":"wss://h","token":"jwt","callId":"id1","protocol":"6"}"#.utf8))
         }
     }
 
     @Test func refusalKeepsTheHostsWords() {
         #expect(throws: CallFailure.refused(status: 429, body: "Daily minutes used")) {
-            try CallGrant(status: 429, body: Data(" Daily minutes used\n".utf8))
+            try VoiceLineGrant(status: 429, body: Data(" Daily minutes used\n".utf8))
         }
-        #expect(throws: CallFailure.refused(status: 500, body: "")) { try CallGrant(status: 500, body: Data()) }
+        #expect(throws: CallFailure.refused(status: 500, body: "")) { try VoiceLineGrant(status: 500, body: Data()) }
     }
 
     @Test(arguments: [
@@ -119,7 +119,7 @@ struct CallGrantTests {
     }
 
     @Test func garbageIsMalformed() {
-        #expect(throws: CallFailure.malformedGrant) { try CallGrant(status: 200, body: Data("<html>".utf8)) }
+        #expect(throws: CallFailure.malformedGrant) { try VoiceLineGrant(status: 200, body: Data("<html>".utf8)) }
     }
 
     @Test func logNamesCarryNoWording() {
