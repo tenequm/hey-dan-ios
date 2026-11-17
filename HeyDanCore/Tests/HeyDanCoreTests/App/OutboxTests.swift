@@ -19,9 +19,9 @@ private func pending() -> Outbox.Entry {
     entry = Outbox.applying(.ticket(uploadKey: "upload", ticket), to: entry, now: now)
     let upload = Outbox.step(entry, now: now)
     entry = Outbox.applying(.transportFailure, to: entry, now: now)
-    #expect(Outbox.step(entry, now: now.addingTimeInterval(1)) == upload)
+    #expect(Outbox.step(entry, now: now.addingTimeInterval(2)) == upload)
     entry = Outbox.applying(.serverError(status: 401, body: ErrorBody(error: "ticket_expired", message: "")), to: entry, now: now)
-    if case .renewTicket(let attachment) = Outbox.step(entry, now: now) { #expect(attachment.uploadKey == "upload") }
+    if case .renewTicket(let attachment) = Outbox.step(entry, now: now.addingTimeInterval(10)) { #expect(attachment.uploadKey == "upload") }
     else { Issue.record("Expected renewal") }
     entry = Outbox.applying(.ticket(uploadKey: "upload", ticket), to: entry, now: now)
     entry = Outbox.applying(.uploaded(uploadKey: "upload"), to: entry, now: now)
@@ -86,7 +86,7 @@ private func pending() -> Outbox.Entry {
     var entry = pending()
     entry.attachments[0].fileId = "file"; entry.attachments[0].ticket = "opaque"
     entry.attachments[0].expiresAt = 100_000
-    if case .renewTicket = Outbox.step(entry, now: now) {} else { Issue.record("Expiry boundary must renew") }
+    if case .upload = Outbox.step(entry, now: now.addingTimeInterval(7200)) {} else { Issue.record("Device clock must not expire a server ticket") }
     let oversized = Outbox.Entry(host: entry.host, conversationId: entry.conversationId,
         request: SendRequest(clientId: "large", text: String(repeating: "é", count: 16_385), fileIds: []))
     #expect(Outbox.step(oversized, now: now) == .held)
@@ -95,4 +95,34 @@ private func pending() -> Outbox.Entry {
     if case .send = Outbox.step(boundary, now: now) {} else { Issue.record("Text at limit should send") }
     entry.attachments = Array(repeating: pending().attachments[0], count: 11)
     #expect(Outbox.step(entry, now: now) == .held)
+}
+
+@Test func correctionRetriesAreBoundedAndResendsResetIdentity() {
+    let now = Date(timeIntervalSince1970: 100)
+    for code in ["stale_timestamp", "ticket_expired"] {
+        var entry = pending()
+        for attempt in 1...4 {
+            entry = Outbox.applying(.serverError(status: 401, body: ErrorBody(error: code, message: "")), to: entry, now: now)
+            #expect(entry.attempts == attempt)
+            if attempt > 1 { #expect(entry.nextAttemptAt! > now) }
+            if code == "ticket_expired" {
+                entry = Outbox.applying(.ticket(uploadKey: "upload", FileInitResponse(fileId: "file", ticket: "opaque", expiresAt: 1, uploadPath: "", uploaded: false)), to: entry, now: now)
+            }
+        }
+    }
+    var old = pending()
+    old.attachments[0].fileId = "consumed"; old.attachments[0].ticket = "old"
+    old.attachments[0].uploaded = true; old.attachments[0].expiresAt = 1
+    old.state = .failed; old.serverSeq = 5
+    let fresh = old.resend(clientId: "new")
+    #expect(fresh.request.clientId != old.request.clientId)
+    #expect(fresh.attachments[0].uploadKey != old.attachments[0].uploadKey)
+    #expect(fresh.attachments[0].fileId == nil && fresh.attachments[0].ticket == nil)
+    #expect(fresh.attachments[0].expiresAt == nil && !fresh.attachments[0].uploaded)
+    if case .mint = Outbox.step(fresh, now: now) {} else { Issue.record("Resend must mint") }
+    #expect(ThreadReducer().rows(conversationId: old.conversationId, outbox: [old]).isEmpty)
+    var box = Outbox(); box.enqueue(old)
+    box.apply(.serverError(status: 401, body: ErrorBody(error: "device_revoked", message: "")), clientId: old.request.clientId, now: now)
+    box.remove(clientId: old.request.clientId); box.enqueue(fresh)
+    #expect(box.entries.count == 1 && box.entries[0].state == .held)
 }

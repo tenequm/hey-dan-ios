@@ -32,6 +32,12 @@ import Testing
     checkCore(reducer.statuses["conv_stan01"]?.state.rawValue == status["state"] as? String)
     checkCore(reducer.badge?.rev == Int64(badge["rev"] as! Int))
     checkCore(reducer.badge?.unreadTotal == badge["unreadTotal"] as? Int)
+    let ordered = reducer.thread(conversationId: "conv_stan01").map(id)
+    if case .message(var first) = reducer.thread(conversationId: "conv_stan01").first! {
+        first.seq = reducer.cursor + 1000
+        reducer.upsert(.message(first))
+        checkCore(reducer.thread(conversationId: "conv_stan01").map(id) == ordered)
+    } else { Issue.record("Expected first message") }
     let before = reducer.cursor
     reducer.upsert(try fixtureDecode(ConversationsResponse.self, f["conversations"]!))
     #expect(reducer.cursor == before)

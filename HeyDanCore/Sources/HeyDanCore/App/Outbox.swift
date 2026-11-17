@@ -56,6 +56,14 @@ public struct Outbox: Sendable {
             self.attachments = attachments; self.attempts = attempts; self.nextAttemptAt = nextAttemptAt
             self.lastServerError = lastServerError; self.serverSeq = serverSeq
         }
+        public func resend(clientId: String) -> Entry {
+            Entry(host: host, conversationId: conversationId,
+                request: SendRequest(clientId: clientId, text: request.text, fileIds: []),
+                attachments: attachments.map {
+                    Attachment(localFileName: $0.localFileName, name: $0.name,
+                        mimeType: $0.mimeType, size: $0.size, sha256: $0.sha256)
+                })
+        }
     }
     public enum Action: Sendable, Equatable {
         case mint(Attachment), renewTicket(Attachment), upload(Attachment), send(SendRequest)
@@ -77,6 +85,9 @@ public struct Outbox: Sendable {
         if let heldError { entry.state = .held; entry.lastServerError = heldError }
         entries.append(entry)
     }
+    public mutating func remove(clientId: String) {
+        entries.removeAll { $0.request.clientId == clientId }
+    }
     public mutating func reconcile(_ message: Message) {
         for index in entries.indices where entries[index].conversationId == message.conversationId && entries[index].request.clientId == message.clientId {
             Self.reconcile(message, entry: &entries[index])
@@ -97,8 +108,7 @@ public struct Outbox: Sendable {
               entry.attachments.allSatisfy({ $0.size >= 0 && $0.size <= maximumFileBytes }) else { return .held }
         for attachment in entry.attachments where !attachment.uploaded {
             guard attachment.fileId != nil else { return .mint(attachment) }
-            guard attachment.ticket != nil, let expiry = attachment.expiresAt,
-                  Double(expiry) / 1000 > now.timeIntervalSince1970 else { return .renewTicket(attachment) }
+            guard attachment.ticket != nil else { return .renewTicket(attachment) }
             return .upload(attachment)
         }
         var request = entry.request
@@ -123,7 +133,7 @@ public struct Outbox: Sendable {
             entry.attachments[i].ticket = response.ticket
             entry.attachments[i].expiresAt = response.expiresAt
             entry.attachments[i].uploaded = response.uploaded
-            entry.state = .queued; entry.attempts = 0; entry.nextAttemptAt = nil; entry.lastServerError = nil
+            entry.state = .queued; entry.nextAttemptAt = nil; entry.lastServerError = nil
         case .uploaded(let key):
             guard let i = entry.attachments.firstIndex(where: { $0.uploadKey == key }) else { return entry }
             entry.attachments[i].uploaded = true
@@ -134,13 +144,13 @@ public struct Outbox: Sendable {
             entry.lastServerError = body
             switch body.error {
             case "device_revoked", "unknown_device": entry.state = .held; entry.nextAttemptAt = nil
-            case "stale_timestamp": entry.state = .queued; entry.nextAttemptAt = nil
+            case "stale_timestamp": retryCorrection(&entry, now: now, jitter: jitter)
             case "ticket_expired":
                 for i in entry.attachments.indices where !entry.attachments[i].uploaded &&
                     (body.fileId == nil || body.fileId == entry.attachments[i].fileId) {
                     entry.attachments[i].ticket = nil; entry.attachments[i].expiresAt = nil
                 }
-                entry.state = .queued; entry.nextAttemptAt = nil
+                retryCorrection(&entry, now: now, jitter: jitter)
             default:
                 if status == 429 || (500...599).contains(status) {
                     retry(&entry, now: now, retryAfter: status == 429 ? retryAfter ?? body.retryAfter.map(Double.init) : nil, jitter: jitter)
@@ -161,6 +171,11 @@ public struct Outbox: Sendable {
         for i in entries.indices where entries[i].request.clientId == clientId {
             entries[i] = Self.applying(result, to: entries[i], now: now, jitter: jitter)
         }
+    }
+    private static func retryCorrection(_ entry: inout Entry, now: Date, jitter: TimeInterval) {
+        if entry.attempts == 0 {
+            entry.attempts = 1; entry.state = .queued; entry.nextAttemptAt = nil
+        } else { retry(&entry, now: now, retryAfter: nil, jitter: jitter) }
     }
     private static func retry(_ entry: inout Entry, now: Date, retryAfter: TimeInterval?, jitter: TimeInterval) {
         entry.attempts = min(entry.attempts, 1_000_000) + 1

@@ -4,6 +4,7 @@ public struct PairingLink: Sendable, Equatable {
     public let baseURL: URL
     public let code: String
     public init?(_ text: String, allowsLocalNetworking: Bool = false) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),
               var parts = URLComponents(string: text),
               parts.user == nil, parts.password == nil, parts.query == nil,

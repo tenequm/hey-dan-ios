@@ -27,9 +27,12 @@ func checkCore(_ condition: Bool) { #expect(condition) }
     let fixture = try coreFixtures()["stream"] as! [String: Any]
     let raw = Data((fixture["raw"] as! String).utf8)
     let expected = (fixture["expect"] as! [String: Any])["kindsInOrder"] as! [String]
+    var baseline = EventStreamParser()
+    let whole = try baseline.feed(raw)
     for split in 0...raw.count {
         var parser = EventStreamParser()
         let events = try parser.feed(raw.prefix(split)) + parser.feed(raw.suffix(raw.count - split))
+        checkCore(events == whole)
         checkCore(events.map { $0.kind.rawValue } == expected)
     }
 }

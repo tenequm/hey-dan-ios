@@ -81,7 +81,7 @@ public struct ThreadReducer: Sendable {
             return nil
         })
         return thread.filter(\.isRenderable).map(ThreadRow.entity) + outbox.filter {
-            $0.conversationId == conversationId && !confirmed.contains($0.request.clientId)
+            $0.conversationId == conversationId && $0.serverSeq == nil && !confirmed.contains($0.request.clientId)
         }.map(ThreadRow.outbox)
     }
 }

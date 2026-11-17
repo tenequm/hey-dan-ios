@@ -17,7 +17,7 @@ test:
 
 # Compile-check for a device without signing.
 build: gen
-    xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build -disableAutomaticPackageResolution -skipPackageUpdates CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
 
 # HEYDAN_SIM picks another Simulator and HEYDAN_DERIVED_DATA its build folder, so two runs can share the Mac.
 sim_name := env("HEYDAN_SIM", "Hey Dan iPhone")
@@ -240,7 +240,7 @@ sim-checks check="LiveActivityOnLockScreen": gen
         | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}
     exit "$status"
 
-# App-hosted unit tests, with the contract fixture bundled directly from HeyDanCore.
+# App-hosted tests use resolved dependencies to avoid package updates during the Simulator gate.
 app-test: gen
     #!/usr/bin/env bash
     set -euo pipefail

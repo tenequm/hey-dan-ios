@@ -11,7 +11,8 @@ import Testing
     for v in vectors {
         let ts = (v["ts"] as! NSNumber).doubleValue
         let nonce = decode64(v["nonce"] as! String), signature = decode64(v["signature"] as! String)
-        let signer = RequestSigner(clock: { Date(timeIntervalSince1970: ts) }, nonce: { nonce }, signer: { _ in signature })
+        var signer = RequestSigner(clock: { Date(timeIntervalSince1970: ts - 300) }, nonce: { nonce }, signer: { _ in signature })
+        signer.adjustClock(from: ErrorBody(error: "stale_timestamp", message: "", serverTime: Int64(ts * 1000)))
         let parts = URLComponents(string: v["target"] as! String)!
         let signed = try signer.sign(method: v["method"] as! String,
             path: parts.path.split(separator: "/").dropFirst().map(String.init),
