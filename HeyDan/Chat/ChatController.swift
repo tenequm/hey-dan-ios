@@ -41,6 +41,8 @@ import UIKit
     @ObservationIgnored var generation = UUID()
     @ObservationIgnored var offlineUntil: Date?
     @ObservationIgnored var active = true
+    @ObservationIgnored var networkAvailable = true
+    @ObservationIgnored var runnerSleep: Task<Void, any Error>?
     @ObservationIgnored var ready = false
     @ObservationIgnored var hasCursor = false
     @ObservationIgnored var paused = false
@@ -71,8 +73,9 @@ import UIKit
         monitor.pathUpdateHandler = { [weak self] path in
             let available = path.status == .satisfied
             Task { @MainActor [weak self] in
-                guard let self, self.active else { return }
-                self.restart(available: available)
+                guard let self, self.networkAvailable != available else { return }
+                self.networkAvailable = available
+                self.restart()
             }
         }
         monitor.start(queue: DispatchQueue(label: "chat.path"))
@@ -130,13 +133,29 @@ import UIKit
         Task { await loadHistory() }
     }
     func closeConversation() { openConversationId = nil; readTask?.cancel(); readOrder = 0 }
-    func setActive(_ active: Bool) { self.active = active; restart() }
-    func restart(available: Bool = true) {
-        streamTask?.cancel(); streamTask = nil
-        runner?.cancel(); runner = nil
-        guard active, available, ready, !paused, pairing != nil else { connectionState = .disconnected; return }
-        let token = generation
-        streamTask = Task { await stream(token: token) }
+    func setActive(_ active: Bool) {
+        guard self.active != active else { return }
+        self.active = active
+        restart()
+    }
+    func restart() {
+        guard active, networkAvailable, ready, !paused, pairing != nil else {
+            streamTask?.cancel(); streamTask = nil
+            runnerSleep?.cancel()
+            connectionState = .disconnected
+            return
+        }
+        if connectionState != .connected {
+            streamTask?.cancel()
+            let token = generation
+            streamTask = Task { await stream(token: token) }
+        }
+        var resumed = Outbox()
+        for var entry in outbox.entries {
+            entry.nextAttemptAt = nil
+            resumed.enqueue(entry)
+        }
+        outbox = resumed
         runOutbox()
     }
     func waitForNetwork() async throws {

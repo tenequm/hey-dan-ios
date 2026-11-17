@@ -1,5 +1,6 @@
 import Foundation
 import HeyDanCore
+import UIKit
 
 extension ChatController {
     @discardableResult func send(text: String, attachments: [StagedAttachment] = []) async -> Bool {
@@ -49,7 +50,8 @@ extension ChatController {
         try await files.removeCopies(removed, host: host, deviceId: pairing.deviceId)
     }
     func runOutbox() {
-        guard runner == nil, ready, active, !paused, let host, let pairing else { return }
+        runnerSleep?.cancel()
+        guard runner == nil, ready, active, networkAvailable, !paused, let host, let pairing else { return }
         let token = generation
         let runID = UUID()
         runnerID = runID
@@ -59,7 +61,7 @@ extension ChatController {
         }
     }
     private func deliver(token: UUID, host: URL, deviceId: String) async {
-        while token == generation, active, !paused, !Task.isCancelled {
+        while token == generation, active, networkAvailable, !paused, !Task.isCancelled {
             do { try await waitForNetwork() } catch { return }
             guard token == generation else { return }
             var wake: Date?
@@ -79,9 +81,17 @@ extension ChatController {
             }
             guard let (entry, action) = selected else {
                 guard let wake else { return }
-                do { try await Task.sleep(for: .seconds(max(0.01, wake.timeIntervalSinceNow))) } catch { return }
+                let sleeper = Task { try await Task.sleep(for: .seconds(max(0.01, wake.timeIntervalSinceNow))) }
+                runnerSleep = sleeper
+                _ = try? await sleeper.value
+                runnerSleep = nil
+                if Task.isCancelled { return }
                 continue
             }
+            let background = UIApplication.shared.beginBackgroundTask(withName: "Chat delivery") { [weak self] in
+                self?.runner?.cancel()
+            }
+            defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
             let result: Outbox.Result
             do {
                 switch action {
