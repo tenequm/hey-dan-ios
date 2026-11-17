@@ -33,7 +33,7 @@ struct ThreadView: View {
             .id(conversation.id)
         }
         .navigationTitle(conversation.agent.name)
-        .toolbar { PairedCallButton(conversation: conversation) }
+        .toolbar { ThreadCallButton(conversation: conversation) }
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
 }
