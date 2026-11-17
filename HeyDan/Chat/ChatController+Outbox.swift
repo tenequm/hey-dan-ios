@@ -50,11 +50,15 @@ extension ChatController {
             guard token == generation else { return }
             var wake: Date?
             var selected: (Outbox.Entry, Outbox.Action)?
+            var blocked: Set<String> = []
             for entry in outbox.entries where durableIDs.contains(entry.request.clientId) {
+                guard !blocked.contains(entry.conversationId) else { continue }
                 let action = Outbox.step(entry, now: .now)
                 switch action {
                 case .done, .held: continue
-                case .waitUntil(let date): wake = min(wake ?? date, date)
+                case .waitUntil(let date):
+                    blocked.insert(entry.conversationId)
+                    wake = min(wake ?? date, date)
                 default: selected = (entry, action)
                 }
                 if selected != nil { break }
