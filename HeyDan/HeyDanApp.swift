@@ -53,6 +53,10 @@ extension HeyDanApp {
     @MainActor
     static func debugScript() async {
         let env = ProcessInfo.processInfo.environment
+        if env["HEYDAN_E2E_MIC_PERMISSION"] == "1" {
+            _ = await AVAudioApplication.requestRecordPermission()
+            return
+        }
         #if targetEnvironment(simulator)
         let launched = ContinuousClock.now
         // Read here, not in App.init: before a scene connects the content size category is still unspecified.
@@ -63,6 +67,12 @@ extension HeyDanApp {
         #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
         guard env["HEYDAN_AUTOCALL"] == "1" else { return }
+        if let link = env["HEYDAN_CALL_LINK"] {
+            guard let requested = VoiceLine(callLink: link), CallController.shared.line == requested else {
+                CallLog.log(.call, "debug autocall refused: supplied line invalid or not selected", level: .error)
+                return
+            }
+        }
         if let steps = env["HEYDAN_STEPS"], !steps.isEmpty { DebugStep.schedule(steps) }
         var feed: Task<Void, Never>?
         defer { feed?.cancel() }
