@@ -16,7 +16,7 @@ test:
 
 # Compile-check for a device without signing.
 build: gen
-    xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build -disableAutomaticPackageResolution -skipPackageUpdates CODE_SIGNING_ALLOWED=NO build
 
 # HEYDAN_SIM picks another Simulator and HEYDAN_DERIVED_DATA its build folder, so two runs can share the Mac.
 sim_name := env("HEYDAN_SIM", "Hey Dan iPhone")
@@ -233,3 +233,11 @@ sim-checks check="LiveActivityOnLockScreen": gen
         -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -only-testing "HeyDanChecks/HeyDanChecks/test{{check}}" 2>&1 \
         | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}
     exit "$status"
+
+# App-hosted unit tests, with the contract fixture bundled directly from HeyDanCore.
+app-test: gen
+    #!/usr/bin/env bash
+    set -euo pipefail
+    udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
+    [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
+    timeout 600 xcodebuild test -project HeyDan.xcodeproj -scheme HeyDanTests -destination "id=$udid" -derivedDataPath "{{sim_build}}" -disableAutomaticPackageResolution -skipPackageUpdates -test-timeouts-enabled YES -default-test-execution-time-allowance 180

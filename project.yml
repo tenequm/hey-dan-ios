@@ -146,6 +146,25 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).NotificationService
         TARGETED_DEVICE_FAMILY: "1"
   # Simulator checks of what used to need the phone (`just sim-checks`); never part of the app's build.
+  HeyDanTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: HeyDanTests
+      - path: HeyDanCore/Tests/HeyDanCoreTests/Resources/app-contract.fixtures.json
+        buildPhase: resources
+    dependencies:
+      - target: HeyDan
+      - package: HeyDanCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Tests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
+        INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/HeyDan.app/HeyDan
+        BUNDLE_LOADER: $(TEST_HOST)
   HeyDanChecks:
     type: bundle.ui-testing
     platform: iOS
@@ -162,6 +181,13 @@ targets:
         INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TEST_TARGET_NAME: HeyDan
 schemes:
+  HeyDanTests:
+    build:
+      targets:
+        HeyDanTests: [test]
+    test:
+      config: Debug
+      targets: [HeyDanTests]
   HeyDanChecks:
     build:
       targets:
