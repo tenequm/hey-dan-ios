@@ -120,7 +120,7 @@ def main():
     sim('privacy', UDID, 'grant', 'microphone', BUNDLE)
     result(CHECK, 'pass', 'SpringBoard Allow tapped on microphone permission alert', ['logs/sim-permission.log'])
     CHECK = 'sim-call'
-    run('say', '-o', BUILD / 'feed.aiff', 'What is two plus two? Please answer briefly.')
+    run('say', '-o', BUILD / 'feed.aiff', os.environ.get('HEYDAN_E2E_SAY', 'What is two plus two? Please answer briefly.'))
     run('afconvert', '-f', 'WAVE', '-d', 'LEF32@48000', '-c', '1', BUILD / 'feed.aiff', BUILD / 'feed.wav')
     container = Path(sim('get_app_container', UDID, BUNDLE, 'data'))
     logfile = container / 'Library/Caches/heydan.log'
@@ -129,7 +129,10 @@ def main():
         'HEYDAN_FEED_WAV': str(BUILD / 'feed.wav'), 'HEYDAN_FEED_AFTER': '12',
         'HEYDAN_TURN_MODE': 'auto',
     }.items()}
-    for attempt in (1, 2):
+    attempts = int(os.environ.get('HEYDAN_E2E_ATTEMPTS', '2'))
+    if attempts not in (1, 2):
+        raise RuntimeError('HEYDAN_E2E_ATTEMPTS must be 1 or 2')
+    for attempt in range(1, attempts + 1):
         sim('terminate', UDID, BUNDLE, check=False)
         logfile.unlink(missing_ok=True)
         sim('launch', '--terminate-running-process', UDID, BUNDLE, env=call_env)
@@ -154,7 +157,7 @@ def main():
             result(CHECK, 'pass', f'Attempt {attempt}: connected, caller and reply transcribed, clean hangup acknowledged', [evidence])
             return
         connect_timeout = not connected and re.search(r'connect failed .*([Tt]imed?[Oo]ut|[Tt]imeout)', text)
-        if attempt == 1 and connect_timeout:
+        if attempt < attempts and connect_timeout:
             result(CHECK, 'skip', 'Connect timeout; retrying once', [evidence])
             continue
         raise RuntimeError(f'Attempt {attempt}: connected={bool(connected)}, reply={reply}, clean={bool(clean)}, endAcknowledged={bool(ended)}, WAV={bool(fed)}; see {evidence}')

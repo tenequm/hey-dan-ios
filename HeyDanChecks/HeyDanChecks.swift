@@ -25,8 +25,11 @@ final class HeyDanChecks: XCTestCase {
         guard alert.waitForExistence(timeout: timeout) else { return false }
         let allow = alert.buttons["Allow"].firstMatch
         guard allow.waitForExistence(timeout: 2) else { return false }
+        let identifier = allow.identifier
+        guard !identifier.isEmpty else { return false }
+        let permissionButton = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons[identifier].firstMatch
         allow.tap()
-        return alert.waitForNonExistence(timeout: 5)
+        return permissionButton.waitForNonExistence(timeout: 5)
     }
 
     /// A stand-in call's Live Activity in the Dynamic Island (expanded by the sample's alert), then on the Lock Screen,
