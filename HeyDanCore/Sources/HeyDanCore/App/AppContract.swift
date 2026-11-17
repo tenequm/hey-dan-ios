@@ -700,10 +700,12 @@ nonisolated public struct SavedVoiceSelection: Sendable, Equatable, Codable {
 }
 
 nonisolated public struct VoicePatchRequest: Sendable, Equatable, Codable {
+    public var reset: Bool?
     public var `provider`: String?
     public var `model`: String?
     public var `voice`: String?
-    public init(`provider`: String? = nil, `model`: String? = nil, `voice`: String? = nil) {
+    public init(reset: Bool? = nil, `provider`: String? = nil, `model`: String? = nil, `voice`: String? = nil) {
+        self.reset = reset
         self.`provider` = `provider`
         self.`model` = `model`
         self.`voice` = `voice`

@@ -18,7 +18,7 @@ struct ContentView: View {
 
     private struct VoiceTarget: Identifiable {
         let id = UUID()
-        let line: VoiceLine
+        let service: any VoicePickerService
         let agentName: String
         let callID: UUID?
     }
@@ -50,10 +50,10 @@ struct ContentView: View {
             voiceTarget = target
         }) { optionsSheet }
         .sheet(item: $voiceTarget) { target in
-            VoicePickerSheet(line: target.line, agentName: target.agentName, callID: target.callID)
+            VoicePickerSheet(service: target.service, agentName: target.agentName, callID: target.callID)
         }
         .onAppear {
-            if preview == nil, call.line == nil {
+            if preview == nil, call.line == nil, !call.isCallActive {
                 showsSettings = true
             }
             #if DEBUG && targetEnvironment(simulator)
@@ -388,8 +388,8 @@ struct ContentView: View {
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
 
         Button {
-            guard let line = voiceLine else { return }
-            let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
+            guard let service = voiceLine else { return }
+            let target = VoiceTarget(service: service, agentName: call.agentName, callID: call.liveCallID)
             if showsOptions {
                 pendingVoiceTarget = target
                 showsOptions = false
@@ -426,7 +426,9 @@ struct ContentView: View {
 
     /// The line the screen is about, as the Call key and the agent name: after a call to another line ends, that
     /// line stays shown until the pick changes.
-    private var voiceLine: VoiceLine? { call.liveLine ?? call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line }
+    private var voiceLine: (any VoicePickerService)? {
+        call.liveVoiceService ?? (call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line).map(VoiceSettingsModel.lineService)
+    }
 
     private var modeDisabled: Bool {
         phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))

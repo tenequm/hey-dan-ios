@@ -6,7 +6,7 @@ import SwiftUI
 
 @MainActor @Observable
 final class VoiceSettingsModel {
-    let line: VoiceLine
+    let service: any VoicePickerService
     private(set) var view: TTSView?
     var draft: TTSChoice?
     private(set) var applied: TTSChoice?
@@ -25,7 +25,6 @@ final class VoiceSettingsModel {
     var gender = ""
     /// The catalog row the caller tapped: its own name labels the draft until the server answers the save.
     private var pickedVoice: VoiceLineCatalogVoice?
-    @ObservationIgnored private let session: URLSession
     @ObservationIgnored private var catalogTask: Task<Void, Never>?
     private var catalogGeneration = UUID()
     private var usedCursors: Set<String> = []
@@ -42,13 +41,8 @@ final class VoiceSettingsModel {
         draft.map { CatalogKey(provider: $0.provider, query: query, language: language, gender: gender) }
     }
 
-    private struct LineKey: Hashable {
-        let origin: URL
-        let credential: String
-        init(_ line: VoiceLine) { origin = line.origin; credential = line.token }
-    }
-    private static var writes: [LineKey: (id: UUID, task: Task<Void, Never>)] = [:]
-    private static var results: [LineKey: String] = [:]
+    private static var writes: [VoicePickerIdentity: (id: UUID, task: Task<Void, Never>)] = [:]
+    private static var results: [VoicePickerIdentity: String] = [:]
     private static let defaultSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 12
@@ -60,10 +54,17 @@ final class VoiceSettingsModel {
         return URLSession(configuration: config)
     }()
 
-    init(line: VoiceLine, session: URLSession? = nil) {
-        self.line = line
-        self.session = session ?? Self.defaultSession
-        saveResult = Self.results[LineKey(line)]
+    convenience init(line: VoiceLine, session: URLSession? = nil) {
+        self.init(service: LineVoicePickerService(savedLine: line, session: session ?? Self.defaultSession))
+    }
+
+    init(service: any VoicePickerService) {
+        self.service = service
+        saveResult = Self.results[service.identity]
+    }
+
+    static func lineService(_ line: VoiceLine) -> any VoicePickerService {
+        LineVoicePickerService(savedLine: line, session: defaultSession)
     }
 
     var provider: TTSProvider? { draft.flatMap { provider($0.provider) } }
@@ -126,12 +127,12 @@ final class VoiceSettingsModel {
         loading = true
         loadFailure = nil
         let captured = revision
-        if let write = Self.writes[LineKey(line)] { await write.task.value }
+        if let write = Self.writes[service.identity] { await write.task.value }
         do {
-            let loaded: TTSView = try await fetch(line.ttsRequest)
+            let loaded: TTSView = try await service.voice()
             guard captured == revision else { loading = false; return }
             adopt(loaded, replaceDraft: draft == nil)
-            saveResult = Self.results[LineKey(line)] ?? saveResult
+            saveResult = Self.results[service.identity] ?? saveResult
         } catch {
             if captured == revision { loadFailure = failure(error) }
         }
@@ -181,7 +182,7 @@ final class VoiceSettingsModel {
         invalidated = true
         revision = UUID()
         resetCatalog()
-        Self.results[LineKey(line)] = nil
+        Self.results[service.identity] = nil
         saveResult = saving
             ? "This line was removed or its access changed. A save already sent may still apply; reopen Voice from Settings to check."
             : "This line was removed or its access changed. Reopen Voice from Settings."
@@ -205,8 +206,7 @@ final class VoiceSettingsModel {
     func save(reset: Bool = false) async {
         guard !saving, !invalidated, let draft, view != nil, reset || provider?.available == true else { return }
         let patch = reset ? TTSPatch.reset : .choice(draft)
-        let request: URLRequest
-        do { request = try line.ttsPatchRequest(patch) } catch {
+        guard (try? JSONEncoder().encode(patch).count) ?? Int.max <= 1024 else {
             saveResult = "That voice id is too long to save"
             return
         }
@@ -214,7 +214,7 @@ final class VoiceSettingsModel {
         revision = UUID()
         saveFailure = nil
         saveResult = "Saving..."
-        let key = LineKey(line)
+        let key = service.identity
         let previous = Self.writes[key]?.task
         let id = UUID()
         let task = Task { [self] in
@@ -226,7 +226,7 @@ final class VoiceSettingsModel {
             await previous?.value
             guard !invalidated else { return }
             do {
-                let loaded: TTSView = try await fetch(request)
+                let loaded: TTSView = try await service.updateVoice(patch)
                 guard !invalidated else { return }
                 adopt(loaded, replaceDraft: true)
                 saveResult = reset ? "Saved voice reset to server default" : "Saved for next calls"
@@ -237,9 +237,9 @@ final class VoiceSettingsModel {
                 saveFailure = failed
                 saveResult = failed.message
                 switch failed {
-                case .unreachable, .transport, .malformed, .upstream, .refused(status: 500...599, body: _):
+                case .unreachable, .transport, .pairedTransport, .malformed, .upstream, .refused(status: 500...599, body: _), .server(status: 500...599, code: _, message: _):
                     do {
-                        let loaded: TTSView = try await fetch(line.ttsRequest)
+                        let loaded: TTSView = try await service.voice()
                         guard !invalidated else { return }
                         let matches = loaded.confirms(patch)
                         adopt(loaded, replaceDraft: matches)
@@ -255,7 +255,7 @@ final class VoiceSettingsModel {
                         saveResult = "Save not confirmed. \(failure(error).message)"
                     }
                 default:
-                    if let loaded: TTSView = try? await fetch(line.ttsRequest), !invalidated { adopt(loaded, replaceDraft: false) }
+                    if let loaded: TTSView = try? await service.voice(), !invalidated { adopt(loaded, replaceDraft: false) }
                 }
             }
         }
@@ -286,11 +286,11 @@ final class VoiceSettingsModel {
 
     private func catalogPage(cursor: String?, generation: UUID, key: CatalogKey) async {
         let provider = key.provider
-        let request = line.voicesRequest(provider: provider, q: key.query.isEmpty ? nil : key.query,
+        let request = VoiceCatalogQuery(provider: provider, q: key.query.isEmpty ? nil : key.query,
                                         language: key.language.isEmpty ? nil : key.language,
                                         gender: key.gender.isEmpty ? nil : key.gender, cursor: cursor, limit: 50)
         do {
-            let page: CatalogPage = try await fetch(request)
+            let page: CatalogPage = try await service.voices(request)
             guard generation == catalogGeneration, key == catalogKey, !Task.isCancelled else { return }
             guard page.provider == provider else { throw TTSServiceFailure.malformed }
             if let cursor { usedCursors.insert(cursor) }
@@ -303,18 +303,6 @@ final class VoiceSettingsModel {
             catalogFailure = failure(error)
         }
         catalogLoading = false
-    }
-
-    private func fetch<Value: Decodable>(_ input: URLRequest) async throws -> Value {
-        var request = input
-        request.timeoutInterval = 12
-        let data: Data
-        let response: URLResponse
-        do { (data, response) = try await session.data(for: request) } catch { throw TTSServiceFailure(transportError: error) }
-        guard let response = response as? HTTPURLResponse else { throw TTSServiceFailure.malformed }
-        CallLog.log(.net, "picker method=\(request.httpMethod ?? "GET") status=\(response.statusCode)")
-        guard (200..<300).contains(response.statusCode) else { throw TTSServiceFailure(status: response.statusCode, body: data) }
-        do { return try JSONDecoder().decode(Value.self, from: data) } catch { throw TTSServiceFailure.malformed }
     }
 
     private func failure(_ error: any Error) -> TTSServiceFailure { (error as? TTSServiceFailure) ?? TTSServiceFailure(transportError: error) }
@@ -454,7 +442,7 @@ enum VoiceSample {
 }
 
 struct VoicePickerSheet: View {
-    let line: VoiceLine
+    let service: any VoicePickerService
     let agentName: String
     let callID: UUID?
     @Environment(\.dismiss) private var dismiss
@@ -481,11 +469,15 @@ struct VoicePickerSheet: View {
     private var liveAvailable: Bool { !model.invalidated && callID != nil && callID == call.liveCallID && call.liveVoice != nil }
 
     init(line: VoiceLine, agentName: String, callID: UUID?) {
-        self.line = line
+        self.init(service: VoiceSettingsModel.lineService(line), agentName: agentName, callID: callID)
+    }
+
+    init(service: any VoicePickerService, agentName: String, callID: UUID?) {
+        self.service = service
         self.agentName = agentName
         self.callID = callID
-        storedLineID = CallController.shared.lines.entries.first { $0.line == line }?.id
-        model = VoiceSettingsModel(line: line)
+        storedLineID = service.line.flatMap { line in CallController.shared.lines.entries.first { $0.line == line }?.id }
+        model = VoiceSettingsModel(service: service)
         sample = SamplePlayback()
     }
 
@@ -517,7 +509,7 @@ struct VoicePickerSheet: View {
         .onChange(of: scenePhase) { _, phase in if phase != .active { VoiceSample.release(sample) } }
         .onChange(of: call.isCallActive) { _, active in if active { VoiceSample.release(sample) } }
         .onChange(of: call.lines) { _, lines in
-            if let storedLineID, lines.entry(storedLineID)?.line != model.line {
+            if let storedLineID, lines.entry(storedLineID)?.line != model.service.line {
                 model.invalidate()
                 VoiceSample.release(sample)
             }
