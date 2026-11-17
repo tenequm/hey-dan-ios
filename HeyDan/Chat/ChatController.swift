@@ -200,6 +200,7 @@ import UIKit
         let allowed = Set(list.conversations.map(\.id))
         var snapshot = ThreadSnapshot(cursor: cursor, conversations: list.conversations)
         snapshot.allowedConversations = allowed
+        snapshot.historyFloors = historyFloors
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
         guard token == generation, !Task.isCancelled else { return }
         reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
