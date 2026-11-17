@@ -12,7 +12,10 @@ struct PairingView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .accessibilityIdentifier("pairing.link")
-                PasteButton(payloadType: String.self) { strings in link = strings.first ?? "" }
+                PasteButton(payloadType: String.self) { @Sendable strings in
+                    Task { @MainActor in link = strings.first ?? "" }
+                }
+                .accessibilityIdentifier("pairing.paste")
                 Button("Pair") {
                     working = true
                     message = nil
@@ -29,7 +32,7 @@ struct PairingView: View {
                 .disabled(working || link.isEmpty)
                 .accessibilityIdentifier("pairing.submit")
                 if working { ProgressView() }
-                if let message { Text(message).accessibilityIdentifier("pairing.message") }
+                if let message = message ?? Pairings.shared.error?.message { Text(message).accessibilityIdentifier("pairing.message") }
             }
         }
         .navigationTitle("Pair device")

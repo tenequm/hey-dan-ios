@@ -5,6 +5,7 @@ enum AppError: Error, Sendable {
     case server(status: Int, body: ErrorBody)
     case transport(TransportFailure)
     case keyUnavailable, notPaired
+    case pairing(PairingFailure)
     enum TransportFailure: String, Sendable { case unavailable, offline, timeout, tls, cancelled, invalidResponse }
 }
 
@@ -34,6 +35,7 @@ protocol AppService: Sendable {
 extension AppError {
     static func map(_ error: any Error) -> AppError {
         if let error = error as? AppError { return error }
+        if let error = error as? PairingFailure { return .pairing(error) }
         if error is CancellationError { return .transport(.cancelled) }
         guard let error = error as? URLError else { return .transport(.invalidResponse) }
         switch error.code {
@@ -51,14 +53,16 @@ extension AppError {
     }
     var logName: String {
         switch self {
-        case .server(let status, _): "http_\(status)"
+        case .server(let status, let body): "http_\(status)_\(body.error)"
         case .transport(let failure): failure.rawValue
         case .keyUnavailable: "key_unavailable"
         case .notPaired: "not_paired"
+        case .pairing: "pairing_failed"
         }
     }
     var message: String {
         switch self {
+        case .pairing(let failure): failure.localizedDescription
         case .server(_, let body): body.message
         case .keyUnavailable: "Unlock your device and try again."
         case .notPaired: "Pair this device to continue."

@@ -76,7 +76,9 @@ final class SignedClient: AppService {
     private func validate(_ data: Data, _ response: URLResponse) throws {
         guard let response = response as? HTTPURLResponse else { throw AppError.transport(.invalidResponse) }
         guard (200..<300).contains(response.statusCode) else {
-            let body = try JSONDecoder().decode(ErrorBody.self, from: data)
+            guard let body = try? JSONDecoder().decode(ErrorBody.self, from: data) else {
+                throw AppError.transport([502, 503, 504].contains(response.statusCode) ? .unavailable : .invalidResponse)
+            }
             throw AppError.server(status: response.statusCode, body: body)
         }
     }
@@ -88,15 +90,29 @@ final class SignedClient: AppService {
         return true
     }
 
+    private func routeTemplate(_ path: [String]) -> String {
+        var template = path
+        if path.count > 1, ["conversations", "questions", "files", "calls"].contains(path[0]) {
+            if path[0] == "calls", path[1] == "attempts", path.count > 2 { template[2] = ":id" }
+            else { template[1] = ":id" }
+        }
+        return "/app/" + template.joined(separator: "/")
+    }
+
     private func data(_ method: String, _ path: [String], query: [(String, String)] = [],
                       body: Data = Data(), signed: Bool = true) async throws(AppError) -> Data {
         for attempt in 0...1 {
+            let start = Date()
+            var outcome = "cancelled"
+            defer { CallLog.log(.net, "\(method) \(routeTemplate(path)) \(outcome) \(Int(Date().timeIntervalSince(start) * 1000))ms") }
             do {
                 let request = try makeRequest(method, path, query: query, body: body, signed: signed)
                 let (data, response) = try await api.data(for: request)
+                outcome = "http_\((response as? HTTPURLResponse)?.statusCode ?? 0)"
                 try validate(data, response)
                 return data
             } catch {
+                outcome = AppError.map(error).logName
                 if signed && adjustClock(error, attempt: attempt) { continue }
                 throw AppError.map(error)
             }
@@ -114,6 +130,9 @@ final class SignedClient: AppService {
 
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> {
         for attempt in 0...1 {
+            let start = Date()
+            var outcome = "cancelled"
+            defer { CallLog.log(.net, "GET /app/events \(outcome) \(Int(Date().timeIntervalSince(start) * 1000))ms") }
             do {
                 var request = try makeRequest("GET", ["events"], query: [("after", String(query.after))])
                 request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -127,6 +146,7 @@ final class SignedClient: AppService {
                     }
                     try validate(body, response)
                 }
+                outcome = "http_\(http.statusCode)"
                 let lastByte = Mutex(ContinuousClock.now)
                 let pair = AsyncThrowingStream<AppEvent, any Error>.makeStream()
                 let reader = Task {
@@ -153,6 +173,7 @@ final class SignedClient: AppService {
                 pair.continuation.onTermination = { _ in reader.cancel(); watchdog.cancel() }
                 return pair.stream
             } catch {
+                outcome = AppError.map(error).logName
                 if adjustClock(error, attempt: attempt) { continue }
                 throw AppError.map(error)
             }
@@ -162,6 +183,9 @@ final class SignedClient: AppService {
 
     func upload(fileId: String, ticket: String, bytes: Data,
                 progress: (@Sendable (Double) -> Void)? = nil) async throws(AppError) {
+        let start = Date()
+        var outcome = "cancelled"
+        defer { CallLog.log(.net, "PUT /app/files/:id \(outcome) \(Int(Date().timeIntervalSince(start) * 1000))ms") }
         do {
             var request = try makeRequest("PUT", ["files", fileId], signed: false)
             request.setValue("HeyDan-Ticket " + ticket, forHTTPHeaderField: "Authorization")
@@ -171,8 +195,9 @@ final class SignedClient: AppService {
             let (data, response) = try await uploadSession.upload(for: request, from: bytes,
                 delegate: TransferDelegate(progress: progress))
             try validate(data, response)
+            outcome = "http_\((response as? HTTPURLResponse)?.statusCode ?? 0)"
             progress?(1)
-        } catch { throw AppError.map(error) }
+        } catch { outcome = AppError.map(error).logName; throw AppError.map(error) }
     }
     func hello() async throws(AppError) -> HelloResponse {
         return try await json("GET", ["hello"], signed: false)

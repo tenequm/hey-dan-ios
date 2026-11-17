@@ -56,13 +56,16 @@ final class SignedClientTests: XCTestCase {
         XCTAssertEqual(values.count, 2)
         let nonce: (String) -> Substring? = { $0.split(separator: ",").first { $0.hasPrefix("n=") } }
         XCTAssertNotEqual(nonce(values[0]), nonce(values[1]))
+        let timestamp: (String) -> Int64 = { Int64($0.split(separator: ",").first { $0.hasPrefix("t=") }!.dropFirst(2))! }
+        XCTAssertEqual(Double(timestamp(values[1]) - timestamp(values[0])), 300, accuracy: 3)
         try await client.upload(fileId: "file_test", ticket: "fixture", bytes: Data([1, 2, 3]))
     }
 
     func testServerErrorsPreserveBody() async throws {
         struct Refusal: Decodable { let status: Int; let body: ErrorBody }
-        let fixture = #"[{"status":426,"body":{"error":"protocol","protocol":1,"message":"Update Hey Dan to keep chatting."}},{"status":401,"body":{"error":"bad_signature","message":"The request signature is not valid."}},{"status":401,"body":{"error":"unknown_device","message":"This device is not paired."}},{"status":401,"body":{"error":"device_revoked","message":"This device was unpaired."}},{"status":401,"body":{"error":"stale_timestamp","message":"The request is too old or too new.","serverTime":1794943562000}},{"status":401,"body":{"error":"replayed","message":"This request was already used."}},{"status":400,"body":{"error":"bad_body","message":"The request body does not match its signature."}},{"status":400,"body":{"error":"bad_request","message":"The request is malformed."}},{"status":403,"body":{"error":"forbidden","message":"This device cannot reach that agent."}},{"status":400,"body":{"error":"bad_proof","message":"The pairing proof is not valid."}},{"status":502,"body":{"error":"answer_not_delivered","message":"The answer did not reach the agent. Try again."}},{"status":403,"body":{"error":"invalid_code","message":"This pairing link is used or expired. Send /pair again."}},{"status":404,"body":{"error":"not_found","message":"Not found."}},{"status":409,"body":{"error":"use_call_screen","message":"Start a call with the call button."}},{"status":409,"body":{"error":"use_pairing_screen","message":"Add agents from Telegram with /pair."}},{"status":409,"body":{"error":"client_id_conflict","message":"This message was already sent with different content."}},{"status":400,"body":{"error":"bad_file","message":"An attachment is missing or was already sent.","fileId":"file_7hT2pQ9a"}},{"status":413,"body":{"error":"too_large","message":"A file can be at most 25 MB.","maxBytes":26214400}},{"status":411,"body":{"error":"length_required","message":"The upload needs a Content-Length."}},{"status":401,"body":{"error":"ticket_expired","message":"The upload link expired."}},{"status":409,"body":{"error":"upload_key_conflict","message":"This upload key was already used for another file."}},{"status":409,"body":{"error":"attempt_conflict","message":"This call attempt was already used for another conversation."}},{"status":409,"body":{"error":"conflict","message":"Different bytes were already uploaded for this file."}},{"status":429,"headers":{"Retry-After":"30"},"body":{"error":"rate_limited","message":"Too many requests. Try again shortly.","retryAfter":30}},{"status":418,"body":{"error":"teapot_from_a_later_server","message":"Shown as written.","extra":{"any":"thing"}}}]"#
-        let bodies = try JSONDecoder().decode([Refusal].self, from: Data(fixture.utf8))
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "app-contract.fixtures", withExtension: "json"))
+        struct Fixtures: Decodable { let errors: [String: Refusal] }
+        let bodies = try JSONDecoder().decode(Fixtures.self, from: Data(contentsOf: url)).errors.values
         for refusal in bodies {
             let status = refusal.status
             let body = refusal.body
@@ -74,9 +77,110 @@ final class SignedClientTests: XCTestCase {
             catch AppError.server(let actualStatus, let actualBody) {
                 XCTAssertEqual(actualStatus, status)
                 XCTAssertEqual(actualBody, body)
+                XCTAssertEqual(actualBody.retryAfter, body.retryAfter)
             }
         }
     }
+    func testSignedPostBodyAndGatewayFailures() async throws {
+        let key = P256.Signing.PrivateKey()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [Stub.self]
+        let client = SignedClient(host: URL(string: "https://post.invalid")!, deviceId: "dev_test",
+            configuration: config, signer: { bytes, _ in try key.signature(for: bytes).derRepresentation })
+        Stub.handler.withLock { $0 = { request in
+            let bytes: Data
+            if let body = request.httpBody { bytes = body }
+            else if let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var data = Data(), buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; data.append(contentsOf: buffer.prefix(count))
+                }
+                bytes = data
+            } else { bytes = Data() }
+            XCTAssertFalse(bytes.isEmpty)
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")!.contains("bh=" + SigningText.bodyHash(bytes) + ","))
+            return (204, Data())
+        } }
+        try await client.cancelCall(attemptId: "attempt", request: CallCancelRequest(reason: "test"))
+        for status in [502, 503, 504] {
+            Stub.handler.withLock { $0 = { _ in (status, Data("gateway".utf8)) } }
+            do { _ = try await client.hello(); XCTFail("Expected failure") }
+            catch AppError.transport(let failure) { XCTAssertEqual(failure, .unavailable) }
+        }
+    }
+
+    @MainActor func testPairingFlowPreservesOldKeyOnRefusalAndReplacesOnSuccess() async throws {
+        let host = URL(string: "https://pair-\(UUID().uuidString.lowercased()).invalid")!
+        let account = "test-pairings-" + UUID().uuidString
+        let pending = URL(string: host.absoluteString + "#pending")!
+        let key = DeviceKey()
+        defer {
+            try? key.remove(host: host); try? key.remove(host: pending)
+            try? IdentityKeychain.remove(account: account)
+        }
+        try key.create(host: host)
+        let old = try key.publicKey(host: host)
+        let pairings = Pairings(account: account, publishes: false)
+        while pairings.state == .unreadable { await Task.yield() }
+        try pairings.add(PairResponse(deviceId: "dev_old", userName: "Old", agents: [], protocol: 1, serverTime: 0), host: host, features: [])
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [Stub.self]
+        for (status, code) in [(400, "bad_proof"), (403, "invalid_code"), (429, "rate_limited"), (200, "ok")] {
+            Stub.handler.withLock { $0 = { request in
+                if request.url!.path == "/app/hello" {
+                    return (200, Data(#"{"protocol":1,"minProtocol":1,"voiceProtocol":6,"features":["files"],"serverTime":0}"#.utf8))
+                }
+                if status == 200 {
+                    return (200, try JSONEncoder().encode(PairResponse(deviceId: "dev_new", userName: "Test", agents: [], protocol: 1, serverTime: 0)))
+                }
+                return (status, try JSONEncoder().encode(ErrorBody(error: code, message: "verbatim " + code, retryAfter: status == 429 ? 30 : nil)))
+            } }
+            do {
+                try await pairings.pair(host.absoluteString + "/app/pair#synthetic", configuration: config)
+                XCTAssertEqual(status, 200)
+                XCTAssertEqual(pairings.active?.pairing.deviceId, "dev_new")
+                XCTAssertNotEqual(try key.publicKey(host: host), old)
+                let reloaded = Pairings(account: account, publishes: false)
+                while reloaded.state == .unreadable { await Task.yield() }
+                XCTAssertEqual(reloaded.active?.pairing.deviceId, "dev_new")
+            } catch AppError.server(let actual, let body) {
+                XCTAssertEqual(actual, status); XCTAssertEqual(body.message, "verbatim " + code)
+                XCTAssertEqual(try key.publicKey(host: host), old)
+                XCTAssertEqual(pairings.active?.pairing.deviceId, "dev_old")
+            }
+            XCTAssertNil(try IdentityKeychain.load(account: pending.absoluteString))
+        }
+    }
+
+    @MainActor func testStackPairAndRejectReusedLink() async throws {
+        guard let link = ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] else {
+            throw XCTSkip("No local stack pairing link supplied")
+        }
+        let account = "test-stack-" + UUID().uuidString
+        let pairings = Pairings(account: account, publishes: false)
+        while pairings.state == .unreadable { await Task.yield() }
+        defer { try? IdentityKeychain.remove(account: account) }
+        try await pairings.pair(link)
+        XCTAssertEqual(pairings.state, .paired)
+        do { try await pairings.pair(link); XCTFail("Reused code accepted") }
+        catch AppError.server(_, let body) { XCTAssertEqual(body.error, "invalid_code") }
+        if let host = pairings.active?.host { try pairings.remove(host: host) }
+    }
+
+    @MainActor func testCorruptSavedPairingsCanRecover() async throws {
+        let account = "test-corrupt-" + UUID().uuidString
+        try IdentityKeychain.save(Data("invalid".utf8), account: account)
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        while pairings.state == .unreadable { await Task.yield() }
+        XCTAssertEqual(pairings.state, .none)
+        try pairings.add(PairResponse(deviceId: "d", userName: "u", agents: [], protocol: 1, serverTime: 0),
+            host: URL(string: "https://recover.invalid")!, features: [])
+        XCTAssertEqual(pairings.state, .paired)
+    }
+
 }
 
 private final class Stub: URLProtocol, @unchecked Sendable {
