@@ -1,16 +1,21 @@
 import Foundation
 import HeyDanCore
 
-/// H6 owns the paired call identity without changing saved line links.
 struct PairedCallTarget: Sendable, Equatable {
     let host: URL
     let deviceId: String
     let conversation: Conversation
 }
 
-/// H6 adapts the picker to paired and saved-link transports.
+enum VoicePickerIdentity: Hashable, Sendable {
+    case line(origin: URL, credential: String)
+    case paired(host: URL, deviceId: String, conversationId: String)
+}
+
 protocol VoicePickerService: Sendable {
-    func voice() async throws(AppError) -> VoiceView
-    func updateVoice(_ request: VoicePatchRequest) async throws(AppError) -> VoiceView
-    func voices(_ query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog
+    var identity: VoicePickerIdentity { get }
+    var line: VoiceLine? { get }
+    func voice() async throws(TTSServiceFailure) -> TTSView
+    func updateVoice(_ request: TTSPatch) async throws(TTSServiceFailure) -> TTSView
+    func voices(_ query: VoiceCatalogQuery) async throws(TTSServiceFailure) -> CatalogPage
 }

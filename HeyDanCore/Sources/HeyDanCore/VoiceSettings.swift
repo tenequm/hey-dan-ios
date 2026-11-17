@@ -242,6 +242,8 @@ public enum TTSPatchError: Error, Sendable, Equatable {
 }
 
 public enum TTSServiceFailure: Error, Sendable, Equatable {
+    case server(status: Int, code: String, message: String)
+    case pairedTransport
     case invalid(field: String)
     case providerUnavailable(provider: String)
     case badRequest
@@ -288,6 +290,8 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
 
     public var message: String {
         switch self {
+        case .server(_, _, let message): message
+        case .pairedTransport: "Could not reach the voice service. Check your internet connection and try again."
         case let .invalid(field) where ["provider", "model", "voice"].contains(field):
             "The selected \(field) is not valid. Choose another and try again."
         case .invalid: "The selected voice setting is not valid. Choose another and try again."

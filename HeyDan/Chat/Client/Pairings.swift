@@ -1,3 +1,4 @@
+import AppIntents
 import Foundation
 import HeyDanCore
 import Observation
@@ -97,6 +98,7 @@ import UIKit
         } catch { state = .unreadable; self.error = .keyUnavailable }
     }
     private func publish() {
+        if publishes { HeyDanShortcuts.updateAppShortcutParameters() }
         state = active == nil ? .none : .paired
         let identity = active.map { $0.host.absoluteString + "|" + $0.pairing.deviceId }
         guard publishes, identity != publishedIdentity else { return }

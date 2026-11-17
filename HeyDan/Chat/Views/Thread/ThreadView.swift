@@ -5,7 +5,6 @@ struct ThreadView: View {
     let conversation: Conversation
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
-    @State private var showsCall = false
     @State private var answeredQuestionID: String?
 
     var body: some View {
@@ -17,7 +16,7 @@ struct ThreadView: View {
             hasMoreBefore: chat.hasMoreBefore,
             errorMessage: chat.error?.message,
             errorQuestionID: answeredQuestionID,
-            active: scenePhase == .active && !showsCall,
+            active: scenePhase == .active && !CallController.shared.showsPairedCall,
             answer: { id, value in
                 answeredQuestionID = id
                 Task { await chat.answer(questionId: id, value: value) }
@@ -34,8 +33,7 @@ struct ThreadView: View {
             .id(conversation.id)
         }
         .navigationTitle(conversation.agent.name)
-        .toolbar { Button("Call") { showsCall = true }.disabled(!conversation.canCall) }
-        .fullScreenCover(isPresented: $showsCall) { ContentView() }
+        .toolbar { PairedCallButton(conversation: conversation) }
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
 }

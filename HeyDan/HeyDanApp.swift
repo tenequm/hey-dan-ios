@@ -44,6 +44,12 @@ struct HeyDanApp: App {
                 }
             }
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
+                .fullScreenCover(isPresented: Binding(
+                    get: { CallController.shared.showsPairedCall },
+                    set: { CallController.shared.showsPairedCall = $0 }
+                )) {
+                    if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
+                }
                 .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG
@@ -562,13 +568,25 @@ enum IntentCall {
         let controller = CallController.shared
         // A process launched before the first unlock after a restart could not read the lines; unlocked, it can.
         controller.readLinesIfNeeded()
+        if lineID == nil || !controller.lines.entries.contains(where: { $0.id == lineID }) {
+            try await readyPairings()
+        }
         CallLog.log(.intent, "start line=\(lineID.map(CallController.short) ?? "picked") lines=\(controller.lines.entries.count)")
-        if controller.lines.entries.isEmpty {
+        if controller.lines.entries.isEmpty && Pairings.shared.entries.isEmpty {
             CallLog.log(.intent, "no line: \(inBackground ? "failed" : "the app shows its settings")")
             if inBackground { throw CallNotStarted(message: CallFailure.noLine.message) }
             return
         }
-        guard let id = await controller.start(lineID: lineID) else {
+        let started: UUID?
+        if let target = try await pairedTarget(id: lineID) {
+            started = await controller.start(target: target)
+        } else {
+            if let lineID, !controller.lines.entries.contains(where: { $0.id == lineID }) {
+                throw CallNotStarted(message: "This agent is no longer saved. Choose an agent again.")
+            }
+            started = await controller.start(lineID: lineID)
+        }
+        guard let id = started else {
             if case let .ended(ending) = controller.phase, ending.cause == .failure { throw notStarted(ending, inBackground) }
             CallLog.log(.intent, "a call is on already: not started")
             return
@@ -582,6 +600,40 @@ enum IntentCall {
             .intent, "wait done phase=\(controller.phase.logName) ms=\(CallLog.ms(since: began))", level: failed == nil ? .default : .error
         )
         if let failed { throw notStarted(failed, inBackground) }
+    }
+
+    static func readyPairings() async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while Pairings.shared.state == .unreadable, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        if Pairings.shared.state == .unreadable {
+            throw CallNotStarted(message: AppError.keyUnavailable.message)
+        }
+    }
+
+    static func pairedTarget(id: UUID?) async throws -> CallTarget? {
+        let pairings = Pairings.shared
+        let selected = pairings.entries.lazy.compactMap { entry -> (Pairings.Entry, HeyDanCore.Agent)? in
+            guard let agent = entry.agents.first(where: {
+                PairedAgentID.make(host: entry.host, agentId: $0.id) == id
+            }) else { return nil }
+            return (entry, agent)
+        }.first
+        let fallback = pairings.active.flatMap { entry in entry.agents.first.map { (entry, $0) } }
+        guard let (entry, agent) = selected ?? (id == nil ? fallback : nil) else { return nil }
+        let chat = ChatController.shared
+        guard let conversation = await chat.conversation(forAgent: agent.id, host: entry.host) else {
+            throw CallNotStarted(message: chat.error?.message ?? "This agent has no conversation yet.")
+        }
+        guard conversation.canCall else {
+            throw CallNotStarted(message: conversation.callRefusal?.message ?? "Calling is unavailable.")
+        }
+        guard chat.host == entry.host, chat.pairing?.deviceId == entry.deviceId else {
+            throw CallNotStarted(message: "The pairing changed. Try again.")
+        }
+        return CallTarget(paired: PairedCallTarget(host: entry.host, deviceId: entry.deviceId,
+            conversation: conversation), service: chat.service)
     }
 
     /// A CallKit refusal in the background is no fault of the line: the caller needs the way that works, not a retry.
@@ -624,8 +676,12 @@ struct VoiceLineEntity {
 
 struct VoiceLineQuery: EntityStringQuery {
     func suggestedEntities() async -> [VoiceLineEntity] {
-        await MainActor.run {
+        try? await IntentCall.readyPairings()
+        return await MainActor.run {
             CallController.shared.lines.entries.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
+                + Pairings.shared.entries.flatMap { entry in
+                    entry.agents.map { VoiceLineEntity(id: PairedAgentID.make(host: entry.host, agentId: $0.id), agent: $0.name) }
+                }
         }
     }
 
@@ -639,8 +695,12 @@ struct VoiceLineQuery: EntityStringQuery {
 
     /// The line picked in the app, so a new shortcut starts with it filled in.
     func defaultResult() async -> VoiceLineEntity? {
-        await MainActor.run {
-            CallController.shared.lines.selected.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
+        try? await IntentCall.readyPairings()
+        return await MainActor.run {
+            if let entry = Pairings.shared.active, let agent = entry.agents.first {
+                return VoiceLineEntity(id: PairedAgentID.make(host: entry.host, agentId: agent.id), agent: agent.name)
+            }
+            return CallController.shared.lines.selected.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
         }
     }
 }

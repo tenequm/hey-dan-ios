@@ -2,6 +2,7 @@ import HeyDanCore
 import SwiftUI
 
 struct ContentView: View {
+    var pairedTarget: CallTarget? = nil
     @Environment(CallController.self) private var call
     @State private var showsSettings = false
     @State private var showsOptions = false
@@ -18,7 +19,7 @@ struct ContentView: View {
 
     private struct VoiceTarget: Identifiable {
         let id = UUID()
-        let line: VoiceLine
+        let service: any VoicePickerService
         let agentName: String
         let callID: UUID?
     }
@@ -50,10 +51,10 @@ struct ContentView: View {
             voiceTarget = target
         }) { optionsSheet }
         .sheet(item: $voiceTarget) { target in
-            VoicePickerSheet(line: target.line, agentName: target.agentName, callID: target.callID)
+            VoicePickerSheet(service: target.service, agentName: target.agentName, callID: target.callID)
         }
         .onAppear {
-            if preview == nil, call.line == nil {
+            if preview == nil, call.line == nil, !call.isCallActive {
                 showsSettings = true
             }
             #if DEBUG && targetEnvironment(simulator)
@@ -388,8 +389,8 @@ struct ContentView: View {
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
 
         Button {
-            guard let line = voiceLine else { return }
-            let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
+            guard let service = voiceLine else { return }
+            let target = VoiceTarget(service: service, agentName: call.agentName, callID: call.liveCallID)
             if showsOptions {
                 pendingVoiceTarget = target
                 showsOptions = false
@@ -424,9 +425,19 @@ struct ContentView: View {
     /// The control row capitalizes hands-free, which `Review.modeName` writes lowercase.
     private func modeTitle(_ mode: TurnMode) -> String { mode == .auto ? "Hands-free" : Review.modeName(mode) }
 
-    /// The line the screen is about, as the Call key and the agent name: after a call to another line ends, that
-    /// line stays shown until the pick changes.
-    private var voiceLine: VoiceLine? { call.liveLine ?? call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line }
+    private func startDisplayedCall() async {
+        if let target = pairedTarget, let paired = target.paired, let service = target.service {
+            _ = await call.start(target: CallTarget(paired: paired, service: service))
+        } else { _ = await call.start(lineID: call.shownLineID) }
+    }
+
+    private var voiceLine: (any VoicePickerService)? {
+        if let service = call.liveVoiceService { return service }
+        if let target = pairedTarget, let paired = target.paired, let service = target.service {
+            return PairedVoicePickerService(target: paired, service: service)
+        }
+        return (call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line).map(VoiceSettingsModel.lineService)
+    }
 
     private var modeDisabled: Bool {
         phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
@@ -580,7 +591,7 @@ struct ContentView: View {
 
     private func run(_ action: ReviewView.Action) {
         switch action {
-        case .call: Task { await call.start(lineID: call.shownLineID) }
+        case .call: Task { await startDisplayedCall() }
         case .cancel, .end: call.hangUp()
         case .discard: Task { await call.discard() }
         case .talk: Task { await call.talk() }
@@ -592,7 +603,7 @@ struct ContentView: View {
     @ViewBuilder private var autoKeys: some View {
         VStack(spacing: 6) {
             Button(callKey.title) {
-                if isCallActive { call.hangUp() } else { Task { await call.start(lineID: call.shownLineID) } }
+                if isCallActive { call.hangUp() } else { Task { await startDisplayedCall() } }
             }
             .buttonStyle(KeyCapStyle(finish: .orange))
             .accessibilityIdentifier(AXID.keysCall)
@@ -712,7 +723,7 @@ struct ContentView: View {
     // MARK: State
 
     private var name: String { call.agentName.lowercased() }
-    private var hasLine: Bool { call.line != nil || preview != nil }
+    private var hasLine: Bool { pairedTarget != nil || call.line != nil || preview != nil }
     private var phase: CallController.Phase { preview?.phase ?? call.phase }
     private var isMuted: Bool { preview?.muted ?? call.isMuted }
     private var liveSince: Date? { preview.map(\.liveSince) ?? call.liveSince }
@@ -1495,6 +1506,7 @@ private struct SettingsView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    PairedSettingsSection()
                     linesSection
                     addSection
                 }
