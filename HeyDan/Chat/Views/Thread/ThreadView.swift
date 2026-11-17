@@ -28,7 +28,10 @@ struct ThreadView: View {
             loadHistory: { await chat.loadHistory(before: $0) }
         )
         .safeAreaBar(edge: .bottom) {
-            ComposerView { request in Task { await chat.send(text: request.text) } }
+            ComposerView { text, attachments in
+                await chat.send(text: text, attachments: attachments)
+            }
+            .id(conversation.id)
         }
         .navigationTitle(conversation.agent.name)
         .toolbar { Button("Call") { showsCall = true }.disabled(!conversation.canCall) }
