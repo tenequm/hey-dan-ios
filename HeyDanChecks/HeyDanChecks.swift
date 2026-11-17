@@ -12,6 +12,28 @@ final class HeyDanChecks: XCTestCase {
     /// Hooks that start calls or change the line's saved voice: a check passes them itself, never inherits them.
     private static let scriptedEnv: Set = ["HEYDAN_AUTOCALL", "HEYDAN_START_ON_SAMPLE", "HEYDAN_TTS_PATCH", "HEYDAN_VOICE_STEPS"]
 
+    func testE2EMicrophonePermission() {
+        continueAfterFailure = false
+        app.launchEnvironment = ["HEYDAN_E2E_MIC_PERMISSION": "1"]
+        app.launch()
+        XCTAssertTrue(allowSpringBoardPermission(), "Microphone permission alert must be accepted")
+        app.terminate()
+    }
+
+    private func allowSpringBoardPermission() -> Bool {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        guard alert.waitForExistence(timeout: 15) else { return false }
+        let allow = alert.buttons["Allow"].firstMatch
+        guard allow.waitForExistence(timeout: 2) else { return false }
+        // Waited on by identifier: `alert` is whichever SpringBoard alert shows, so one that follows this prompt matches it too.
+        let identifier = allow.identifier
+        guard !identifier.isEmpty else { return false }
+        let permissionButton = springboard.buttons[identifier].firstMatch
+        allow.tap()
+        return permissionButton.waitForNonExistence(timeout: 5)
+    }
+
     /// A stand-in call's Live Activity in the Dynamic Island (expanded by the sample's alert), then on the Lock Screen,
     /// with the system's "Allow Live Activities from Hey Dan?" choice under it when it asks.
     func testLiveActivityOnLockScreen() async throws {
@@ -528,7 +550,7 @@ final class HeyDanChecks: XCTestCase {
     /// The call link never goes through here: `just sim-checks` seeds it into the Simulator's keychain, and a result
     /// bundle records every launch environment.
     private func launch(_ extra: [String: String] = [:], excluding: Set<String> = []) {
-        let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK"])
+        let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK", "HEYDAN_E2E_CALL_LINK"])
         app.launchEnvironment = env.filter { $0.key.hasPrefix("HEYDAN_") && !withheld.contains($0.key) && !excluding.contains($0.key) }
             .merging(extra) { $1 }
         app.launch()
