@@ -404,7 +404,7 @@ struct ContentView: View {
             Form {
                 if hintIsError { HStack { modeControl; voiceControl } }
                 if !isCallActive {
-                    NavigationLink("Voice lines and paired hosts") { SettingsView() }
+                    NavigationLink("Voice lines and paired hosts") { VoiceLinesSettings() }
                 }
                 if let shown = shownSettings {
                     let enabled = shown.enabled && !settingsBusy
