@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: &docs
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - "*.example"
+  push:
+    branches: [main, "ci/**"]
+    paths-ignore: *docs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # One of the paths the xcode-27 image lists (actions/runner-images, images/macos/xcode-27-arm64-Readme.md).
+  DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+  JUST_VERSION: 1.59.0
+  JUST_SHA256: 6574cea774ed4cae12e24b6aa11857de33e80dab4667cf628fd5840df96a2a9d
+  XCODEGEN_VERSION: 2.46.0
+  XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+
+jobs:
+  core:
+    name: Core tests
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - &tools
+        name: Install just and XcodeGen
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools/bin" && cd "$RUNNER_TEMP/tools"
+          curl -fsSL --retry 3 -o just.tar.gz "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-aarch64-apple-darwin.tar.gz"
+          curl -fsSL --retry 3 -o xcodegen.zip "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          printf '%s  %s\n' "$JUST_SHA256" just.tar.gz "$XCODEGEN_SHA256" xcodegen.zip | shasum -a 256 -c
+          tar -xzf just.tar.gz -C bin just
+          unzip -q xcodegen.zip
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+          echo "$PWD/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Probe the image
+        run: |
+          xcodebuild -version
+          swift --version
+          command -v timeout python3 jq just xcodegen
+          xcrun simctl list runtimes
+          xcrun simctl list devicetypes | grep -i iphone
+          sysctl -n hw.ncpu hw.memsize
+          df -h /
+      - run: just test
+
+  build:
+    name: Device build
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - *checkout
+      - *tools
+      - &packages
+        name: Cache Swift packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/SourcePackages
+          key: packages-${{ hashFiles('HeyDan.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      - run: just build
+
+  simulator:
+    name: Simulator tests
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - *checkout
+      - *tools
+      - *packages
+      - name: Create the Simulator
+        run: |
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          xcrun simctl create "Hey Dan iPhone" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}"
+      - name: App tests
+        run: time just app-test
+      - name: ChatChecks
+        if: ${{ !cancelled() }}
+        run: time just sim-checks ChatChecks
+      - name: ChatThreadChecks
+        if: ${{ !cancelled() }}
+        run: time just sim-checks ChatThreadChecks
+      - name: ChatComposerChecks
+        if: ${{ !cancelled() }}
+        run: time just sim-checks ChatComposerChecks
+      - name: ChatCallChecks
+        if: ${{ !cancelled() }}
+        run: time just sim-checks ChatCallChecks
+      - name: ChatPairingChecks
+        if: ${{ !cancelled() }}
+        run: time just sim-checks ChatPairingChecks
