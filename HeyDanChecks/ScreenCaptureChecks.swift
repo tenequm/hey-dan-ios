@@ -1,3 +1,4 @@
+import Vision
 import XCTest
 
 @MainActor final class ScreenCaptureChecks: XCTestCase {
@@ -111,7 +112,7 @@ import XCTest
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appending(path: "backup.toml")
-        try Data("[backup]\n".utf8).write(to: file)
+        try Data(("[backup]\n" + String(repeating: " ", count: 2039)).utf8).write(to: file)
         let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_ATTACHMENT": file.path])
         defer { session.finish() }
         session.openThread("composer")
@@ -121,12 +122,27 @@ import XCTest
         remove.tap()
         let field = app.descendants(matching: .any)["composer.text"].firstMatch
         capture("composer-empty", showing: field)
+        app.buttons["composer.attach"].tap()
+        let photos = app.buttons["composer.photos"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 5))
+        // UIKit exposes the menu to accessibility before SpringBoard's screenshot contains it.
+        let deadline = Date.now.addingTimeInterval(6)
+        var menuImage: XCUIScreenshot?
+        repeat {
+            let screenshot = XCUIScreen.main.screenshot()
+            let recognize = VNRecognizeTextRequest()
+            if let image = screenshot.image.cgImage {
+                try VNImageRequestHandler(cgImage: image).perform([recognize])
+                let labels = recognize.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
+                if labels.contains("Photos"), labels.contains("Files") { menuImage = screenshot }
+            }
+        } while menuImage == nil && Date.now < deadline
+        shot("thread-attachment-menu", screenshot: try XCTUnwrap(menuImage, "Menu choices were not visible in the screenshot"))
+        app.navigationBars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         field.tap()
         field.typeText("Also send me the backup log from last night, and tell Stan the key is rotated.")
         XCTAssertTrue(app.buttons["composer.send"].isEnabled)
         capture("thread-composing", showing: field)
-        app.buttons["composer.attach"].tap()
-        capture("thread-attachment-menu", showing: app.buttons["composer.photos"])
     }
 
     func testCallCover() {
