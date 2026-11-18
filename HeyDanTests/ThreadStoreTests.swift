@@ -179,6 +179,26 @@ struct ThreadStoreTests {
         chat.setActive(false)
     }
 
+    @Test func picksRespectFileSizeAndTrayCapacity() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(count: Int(Outbox.maximumFileBytes)).write(to: root)
+        let accepted = try await AttachmentStaging.document(root)
+        defer { AttachmentStaging.remove(accepted) }
+        let file = try FileHandle(forWritingTo: root)
+        try file.truncate(atOffset: UInt64(Outbox.maximumFileBytes + 1))
+        try file.close()
+        for photo in [false, true] {
+            do {
+                _ = try await photo ? AttachmentStaging.photo(root) : AttachmentStaging.document(root)
+                Issue.record("Accepted an oversized pick")
+            } catch AppError.limit(let message) {
+                #expect(message == Outbox.fileLimitMessage)
+            }
+        }
+        try AttachmentStaging.checkCapacity(Outbox.maximumFiles - 1)
+        #expect(throws: AppError.self) { try AttachmentStaging.checkCapacity(Outbox.maximumFiles) }
+    }
+
     @MainActor @Test func closeFlushesReadAndOversizedDraftIsRejected() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = await paired(ScriptedAppService(), files: OutboxFile(root: root))

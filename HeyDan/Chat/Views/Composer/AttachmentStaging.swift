@@ -6,16 +6,28 @@ import CoreTransferable
 import HeyDanCore
 
 nonisolated struct PickedPhoto: Transferable {
-    let attachment: StagedAttachment
+    let result: Result<StagedAttachment, AppError>
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .image) { received in
-            PickedPhoto(attachment: try await AttachmentStaging.photo(received.file))
+            do { return PickedPhoto(result: .success(try await AttachmentStaging.photo(received.file))) }
+            catch let error as AppError { return PickedPhoto(result: .failure(error)) }
         }
     }
 }
 
 nonisolated enum AttachmentStaging {
-    static func destination(extension suffix: String) throws -> URL {
+    static func checkCapacity(_ stagedCount: Int) throws {
+        guard stagedCount < Outbox.maximumFiles else {
+            throw AppError.limit("Use at most \(Outbox.maximumFiles) files per message.")
+        }
+    }
+
+    private static func checkSize(_ url: URL) throws {
+        guard let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { throw CocoaError(.fileReadUnknown) }
+        guard size <= Outbox.maximumFileBytes else { throw AppError.limit(Outbox.fileLimitMessage) }
+    }
+
+    private static func destination(extension suffix: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ChatAttachments", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(suffix)
@@ -25,14 +37,22 @@ nonisolated enum AttachmentStaging {
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
+        try checkSize(source)
         let target = try destination(extension: source.pathExtension)
-        try FileManager.default.copyItem(at: source, to: target)
+        do {
+            try FileManager.default.copyItem(at: source, to: target)
+            try checkSize(target)
+        } catch {
+            try? FileManager.default.removeItem(at: target)
+            throw error
+        }
         return StagedAttachment(fileURL: target, name: source.lastPathComponent,
                                 mimeType: UTType(filenameExtension: source.pathExtension)?.preferredMIMEType ?? "application/octet-stream")
     }
 
     @concurrent static func photo(_ source: URL) async throws -> StagedAttachment {
         try Task.checkCancellation()
+        try checkSize(source)
         guard let imageSource = CGImageSourceCreateWithURL(source as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let image = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -44,7 +64,13 @@ nonisolated enum AttachmentStaging {
         guard let destination = CGImageDestinationCreateWithURL(target as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
         else { throw CocoaError(.fileWriteUnknown) }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+        do {
+            guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+            try checkSize(target)
+        } catch {
+            try? FileManager.default.removeItem(at: target)
+            throw error
+        }
         return StagedAttachment(fileURL: target, name: "Photo.jpg", mimeType: "image/jpeg")
     }
 
