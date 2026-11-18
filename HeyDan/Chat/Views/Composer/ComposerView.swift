@@ -127,11 +127,7 @@ struct ComposerView: View {
                     if Task.isCancelled { AttachmentStaging.remove(attachment); return }
                     draftFiles.urls.insert(attachment.fileURL)
                     attachments.append(attachment)
-                } catch {
-                    if !Task.isCancelled {
-                        if case AppError.limit(let message) = error { importFailure = message } else { importFailure = Self.unreadable }
-                    }
-                }
+                } catch { if !Task.isCancelled { importFailure = Self.unreadable } }
             }
             importURLs = []
         }

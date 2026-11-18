@@ -25,10 +25,6 @@ nonisolated enum AttachmentStaging {
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
-        // Before the copy: a file over the limit would be copied whole only to be refused at send.
-        if let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > Outbox.maximumFileBytes {
-            throw AppError.limit(Outbox.fileLimitMessage)
-        }
         let target = try destination(extension: source.pathExtension)
         try FileManager.default.copyItem(at: source, to: target)
         return StagedAttachment(fileURL: target, name: source.lastPathComponent,
