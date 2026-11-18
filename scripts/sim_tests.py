@@ -13,6 +13,7 @@ import time
 
 
 TEST_SECONDS = 180
+START = time.monotonic()
 TEST_FLAGS = ['-collect-test-diagnostics', 'never', '-enableCodeCoverage', 'NO',
               '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
               '-default-test-execution-time-allowance', str(TEST_SECONDS),
@@ -61,6 +62,11 @@ def test_products(build, destination, env):
     manifest, = products.glob(pattern)
     stamp.write_text(key)
     return manifest
+
+
+def mark(stage):
+    # One line per stage, so a slow CI run shows whether the build, the boot, the install or the tests took the time.
+    print(f'sim_tests: {stage} at {time.monotonic() - START:.1f}s', flush=True)
 
 
 def ui_selector(check):
@@ -114,7 +120,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
         # Build before booting: beside a booted Simulator the build takes two to three times as long on CI.
         manifest = test_products(build, destination, env)
         build_seconds = time.monotonic() - started
+        mark('built')
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)
+        mark('booted')
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
                         f'user/{os.getuid()}/com.apple.dasd'], check=True)
         started = time.monotonic()
@@ -133,6 +141,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                                 '-test-enumeration-format', 'text', '-test-enumeration-output-path', inventory],
                                check=True, env=runner, stdout=subprocess.DEVNULL)
                 count = max(1, selected_tests(inventory.read_text(), selector))
+                mark('enumerated')
             # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
             deadline = str(240 + TEST_SECONDS * count)
             proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', deadline, *command,
@@ -145,6 +154,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 elif 'error:' in line:
                     print(re.search(r'[^ /]+\.swift:\d+: error:', line)[0] if re.search(r'[^ /]+\.swift:\d+: error:', line)
                           else 'xcodebuild reported an error')
+            mark('tested')
             proc.check_returncode()
             summary = json.loads(subprocess.check_output(['xcrun', 'xcresulttool', 'get', 'test-results',
                                                           'summary', '--path', result]))
@@ -157,6 +167,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 raise RuntimeError(f'No test passed for {selector} ({summary.get("skippedTests", 0)} skipped)')
 
         subprocess.run([*sim, 'install', udid, build / 'Build/Products/Debug-iphonesimulator/HeyDan.app'], check=True)
+        mark('installed')
         selector = 'HeyDanTests' if mode == 'app-test' else ui_selector(check)
         if 'Push' in selector and bundle == 'com.example.HeyDan':
             raise RuntimeError('Simulator push checks need HEYDAN_BUNDLE_ID in Local.xcconfig')
