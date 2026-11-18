@@ -30,7 +30,7 @@ targets:
       - path: HeyDan
         excludes: [Fonts]
       # A folder reference keeps each font's OFL.txt beside it in the bundle.
-      - path: HeyDan/Fonts
+      - path: HeyDan/Fonts/DMSans
         type: folder
         buildPhase: resources
       - path: HeyDanActivity/CallActivityAttributes.swift
@@ -83,12 +83,10 @@ targets:
         NSSupportsLiveActivities: true
         NSUserActivityTypes: [INSendMessageIntent]
         UIAppFonts:
-          - Fonts/DMSans/DMSans-Regular.ttf
-          - Fonts/DMSans/DMSans-Medium.ttf
-          - Fonts/DMSans/DMSans-SemiBold.ttf
-          - Fonts/DMSans/DMSans-Bold.ttf
-          - Fonts/IBMPlexMono/IBMPlexMono-Regular.ttf
-          - Fonts/IBMPlexMono/IBMPlexMono-Medium.ttf
+          - DMSans/DMSans-Regular.ttf
+          - DMSans/DMSans-Medium.ttf
+          - DMSans/DMSans-SemiBold.ttf
+          - DMSans/DMSans-Bold.ttf
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID)
