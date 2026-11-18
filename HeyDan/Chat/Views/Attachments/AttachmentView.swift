@@ -16,7 +16,10 @@ struct AttachmentView: View {
     @State private var failure: String?
     @State private var attempt = 0
     @State private var requested = false
-    @State private var openWhenLoaded = false
+    @State private var destination: Destination?
+    @State private var sharing = false
+
+    private enum Destination { case preview, share }
 
     init(file: FileAttachment, download: @escaping (FileAttachment) async throws -> URL = { file in
         try await ChatController.shared.download(file)
@@ -54,10 +57,7 @@ struct AttachmentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: theme.space.s1) {
             HStack(spacing: theme.space.s2) {
-                Button {
-                    if let loadedURL { previewURL = loadedURL }
-                    else { openWhenLoaded = true; requested = true; attempt += 1 }
-                } label: {
+                Button { open(.preview) } label: {
                     if file.kind == .image {
                         Rectangle().fill(theme.color.surfaceSubtle)
                             .aspectRatio(localURL == nil ? 240 / imageHeight : 1, contentMode: .fit)
@@ -86,12 +86,14 @@ struct AttachmentView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(AXID.attachmentOpen)
-                if let loadedURL {
-                    ShareLink(item: loadedURL) { Image(systemName: "square.and.arrow.up") }
-                        .accessibilityLabel("Share").foregroundStyle(theme.color.iconMuted)
-                        .padding(.trailing, theme.space.s3)
+                if file.kind != .image || loadedURL != nil {
+                    if file.kind != .image { Spacer(minLength: 0) }
+                    Button("Share", systemImage: "square.and.arrow.up") { open(.share) }
+                        .labelStyle(.iconOnly).foregroundStyle(theme.color.iconMuted)
+                        .frame(minWidth: theme.control.touchTarget, minHeight: theme.control.touchTarget)
                 }
             }
+            .frame(maxWidth: file.kind == .image ? nil : 280, alignment: .leading)
             .foregroundStyle(theme.color.textPrimary)
             .background(file.kind == .image ? .clear : theme.color.surfaceCard, in: RoundedRectangle(cornerRadius: theme.radius.l))
             .overlay {
@@ -106,6 +108,9 @@ struct AttachmentView: View {
             }
         }
         .quickLookPreview($previewURL)
+        .sheet(isPresented: $sharing) {
+            if let loadedURL { AttachmentShareSheet(url: loadedURL).presentationDetents([.medium, .large]) }
+        }
         .task(id: "\(file.id):\(attempt):\(displayScale)") {
             guard file.kind == .image || localURL != nil || requested else { return }
             failure = nil
@@ -121,7 +126,7 @@ struct AttachmentView: View {
                 }
                 try Task.checkCancellation()
                 loadedURL = url
-                if openWhenLoaded { previewURL = url; openWhenLoaded = false }
+                if let destination { present(destination, url: url); self.destination = nil }
             } catch {
                 guard !Task.isCancelled else { return }
                 if case let AppError.server(_, body) = error {
@@ -132,6 +137,31 @@ struct AttachmentView: View {
             }
         }
     }
+    private func open(_ target: Destination) {
+        if let loadedURL { present(target, url: loadedURL) }
+        else {
+            destination = target
+            if !requested || failure != nil { requested = true; attempt += 1 }
+        }
+    }
+
+    private func present(_ target: Destination, url: URL) {
+        switch target {
+        case .preview: previewURL = url
+        case .share: sharing = true
+        }
+    }
+}
+
+private struct AttachmentShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+
 }
 
 private actor AttachmentThumbnails {
