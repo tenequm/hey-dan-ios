@@ -93,13 +93,5 @@ struct PairedVoicePickerService: VoicePickerService {
         try JSONDecoder().decode(TTSView.self, from: JSONEncoder().encode(view))
     }
 
-    private func failure(_ error: any Error) -> TTSServiceFailure {
-        if let error = error as? AppError {
-            if case let .server(status, body) = error {
-                return .server(status: status, code: body.error, message: body.message)
-            }
-            return .pairedTransport
-        }
-        return .malformed
-    }
+    private func failure(_ error: any Error) -> TTSServiceFailure { (error as? AppError)?.voiceFailure ?? .malformed }
 }

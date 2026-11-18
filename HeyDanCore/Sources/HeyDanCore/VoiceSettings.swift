@@ -243,6 +243,8 @@ public enum TTSPatchError: Error, Sendable, Equatable {
 
 public enum TTSServiceFailure: Error, Sendable, Equatable {
     case server(status: Int, code: String, message: String)
+    /// Stopped on this phone before any request: the device key is locked or the host is unpaired.
+    case local(code: String, message: String)
     case pairedTransport
     case invalid(field: String)
     case providerUnavailable(provider: String)
@@ -290,7 +292,7 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
 
     public var message: String {
         switch self {
-        case .server(_, _, let message): message
+        case .server(_, _, let message), .local(_, let message): message
         case .pairedTransport: "Could not reach the voice service. Check your internet connection and try again."
         case let .invalid(field) where ["provider", "model", "voice"].contains(field):
             "The selected \(field) is not valid. Choose another and try again."

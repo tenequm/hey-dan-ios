@@ -1,19 +1,15 @@
 import Foundation
 
 public struct SignedRequest: Sendable {
-    public let method: String
-    public let target: String
-    public let body: Data
     public let canonical: String
     public let authorization: Authorization
-    public init(method: String, target: String, body: Data, canonical: String, authorization: Authorization) {
-        self.method = method; self.target = target; self.body = body
+    public init(canonical: String, authorization: Authorization) {
         self.canonical = canonical; self.authorization = authorization
     }
 }
 
 public struct RequestSigner: Sendable {
-    public private(set) var offset: TimeInterval
+    public let offset: TimeInterval
     private let clock: @Sendable () -> Date
     private let nonce: @Sendable () throws -> Data
     private let signer: @Sendable (Data) throws -> Data
@@ -21,10 +17,6 @@ public struct RequestSigner: Sendable {
                 nonce: @escaping @Sendable () throws -> Data,
                 signer: @escaping @Sendable (Data) throws -> Data) {
         self.offset = offset; self.clock = clock; self.nonce = nonce; self.signer = signer
-    }
-    public mutating func adjustClock(from error: ErrorBody) {
-        guard error.error == "stale_timestamp", let serverTime = error.serverTime else { return }
-        offset = Double(serverTime) / 1000 - clock().timeIntervalSince1970
     }
     public func sign(method: String, path: [String], query: [(String, String)] = [], body: Data = Data(),
                      deviceId: String, protocol version: Int = 1) throws -> SignedRequest {
@@ -38,6 +30,6 @@ public struct RequestSigner: Sendable {
                                              nonce: SigningText.base64url(bytes), bodyHash: hash, deviceId: deviceId)
         let authorization = try Authorization(protocol: version, deviceId: deviceId, ts: ts, nonce: bytes,
                                                bodyHash: hash, signature: signer(Data(canonical.utf8)))
-        return SignedRequest(method: method, target: target, body: body, canonical: canonical, authorization: authorization)
+        return SignedRequest(canonical: canonical, authorization: authorization)
     }
 }

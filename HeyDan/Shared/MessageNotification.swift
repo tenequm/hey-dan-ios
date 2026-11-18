@@ -10,7 +10,8 @@ enum MessageNotification {
         .replacing(/\.NotificationService$/, with: ""), category: "notification")
 
     static func payload(from userInfo: [AnyHashable: Any]) -> PushPayload? {
-        guard let data = try? JSONSerialization.data(withJSONObject: userInfo),
+        // A non-JSON value (a local notification's Date) would raise an Objective-C exception, not a Swift error.
+        guard JSONSerialization.isValidJSONObject(userInfo), let data = try? JSONSerialization.data(withJSONObject: userInfo),
               let payload = try? JSONDecoder().decode(PushPayload.self, from: data),
               payload.hd.v == 1, !payload.hd.h.isEmpty else { return nil }
         return payload
@@ -39,7 +40,7 @@ enum MessageNotification {
             try await interaction.donate()
             return try original.updating(from: intent)
         } catch {
-            logger.error("communication_update_failed")
+            logger.error("communication_update_failed \(describe(error), privacy: .public)")
             return original
         }
     }
@@ -68,11 +69,31 @@ enum MessageNotification {
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .outgoing
         do { try await interaction.donate() }
-        catch { logger.error("outgoing_donation_failed") }
+        catch { logger.error("outgoing_donation_failed \(describe(error), privacy: .public)") }
     }
+
+    private static func describe(_ error: any Error) -> String {
+        "\((error as NSError).domain)(\((error as NSError).code))"
+    }
+
+    @MainActor private static var avatars: [String: Data] = [:]
 
     @MainActor
     private static func person(for agent: Agent) -> INPerson {
+        INPerson(
+            personHandle: INPersonHandle(value: agent.id, type: .unknown),
+            nameComponents: nil,
+            displayName: agent.name,
+            image: avatar(for: agent).map { INImage(imageData: $0) },
+            contactIdentifier: nil,
+            customIdentifier: agent.id
+        )
+    }
+
+    @MainActor
+    private static func avatar(for agent: Agent) -> Data? {
+        let cacheKey = agent.id + "|" + agent.name
+        if let cached = avatars[cacheKey] { return cached }
         let size = CGSize(width: 96, height: 96)
         let avatar = UIGraphicsImageRenderer(size: size).image { context in
             UIColor.systemIndigo.setFill()
@@ -88,13 +109,29 @@ enum MessageNotification {
             text.draw(at: CGPoint(x: (size.width - bounds.width) / 2,
                                  y: (size.height - bounds.height) / 2), withAttributes: attributes)
         }
-        return INPerson(
-            personHandle: INPersonHandle(value: agent.id, type: .unknown),
-            nameComponents: nil,
-            displayName: agent.name,
-            image: avatar.pngData().map { INImage(imageData: $0) },
-            contactIdentifier: nil,
-            customIdentifier: agent.id
-        )
+        let data = avatar.pngData()
+        avatars[cacheKey] = data
+        return data
+    }
+}
+
+// The lock claims the handler once, including when expiry races the donation callback.
+final class NotificationDelivery: @unchecked Sendable {
+    let original: UNNotificationContent
+    private let lock = NSLock()
+    private var handler: ((UNNotificationContent) -> Void)?
+
+    init(original: UNNotificationContent, handler: @escaping (UNNotificationContent) -> Void) {
+        self.original = original
+        self.handler = handler
+    }
+
+    func finish(_ content: UNNotificationContent? = nil) {
+        let callback = lock.withLock {
+            let callback = handler
+            handler = nil
+            return callback
+        }
+        callback?(content ?? original)
     }
 }

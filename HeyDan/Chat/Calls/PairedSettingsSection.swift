@@ -27,19 +27,7 @@ struct PairedSettingsSection: View {
                     .disabled(pairings.active?.host == entry.host)
                     ForEach(entry.agents, id: \.id) { agent in
                         if entry.features.contains("voice-picker") {
-                            Button("Voice: \(agent.name)") {
-                                Task {
-                                    let chat = ChatController.shared
-                                    guard let conversation = await chat.conversation(forAgent: agent.id, host: entry.host),
-                                          chat.host == entry.host, chat.pairing?.deviceId == entry.deviceId else {
-                                        error = chat.error?.message ?? "This agent has no conversation yet."
-                                        return
-                                    }
-                                    voice = Selection(service: PairedVoicePickerService(target:
-                                        PairedCallTarget(host: entry.host, deviceId: entry.deviceId, conversation: conversation),
-                                        service: chat.service), name: agent.name)
-                                }
-                            }
+                            Button("Voice: \(agent.name)") { Task { await openVoice(agent, on: entry) } }
                         } else { Text(agent.name) }
                     }
                     Button("Unpair", role: .destructive) { removing = entry.host }
@@ -47,8 +35,9 @@ struct PairedSettingsSection: View {
             }
             Button("Pair a host") { showsPairing = true }
             if let error { Text(error) }
-            if let error = ChatController.shared.error { Text(error.message) }
         }
+        // In a Form the section is one row: default-style buttons there would all fire on any tap in it.
+        .buttonStyle(.borderless)
         .accessibilityIdentifier("chat.settings.pairings")
         .sheet(isPresented: $showsPairing) { PairingView() }
         .sheet(item: $voice) { selection in
@@ -58,9 +47,28 @@ struct PairedSettingsSection: View {
             get: { removing != nil }, set: { if !$0 { removing = nil } }
         ), titleVisibility: .visible) {
             Button("Unpair", role: .destructive) {
-                if let host = removing { Task { await ChatController.shared.unpair(host: host) } }
+                if let host = removing {
+                    error = nil
+                    Task {
+                        await ChatController.shared.unpair(host: host)
+                        if pairings.entries.contains(where: { $0.host == host }) {
+                            error = ChatController.shared.error?.message ?? "Could not unpair this host."
+                        }
+                    }
+                }
                 removing = nil
             }
         }
+    }
+
+    private func openVoice(_ agent: Agent, on entry: Pairings.Entry) async {
+        error = nil
+        do {
+            let found = try await ChatController.shared.pairedConversation(agentId: agent.id, entry: entry)
+            guard let conversation = found.conversation else { error = "This agent has no conversation yet."; return }
+            voice = Selection(service: PairedVoicePickerService(target:
+                PairedCallTarget(host: entry.host, deviceId: entry.deviceId, conversation: conversation),
+                service: found.service), name: agent.name)
+        } catch { self.error = error.message }
     }
 }

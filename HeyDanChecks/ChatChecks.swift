@@ -32,9 +32,7 @@ final class ChatChecks: XCTestCase {
 
     private func send(_ command: String) throws {
         let text = app.textFields["composer.text"]
-        guard text.waitForExistence(timeout: 5) else {
-            throw XCTSkip("H4b composer is not on this branch yet")
-        }
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
         text.tap()
         text.typeText(command)
         let send = app.buttons["composer.send"]
@@ -70,7 +68,7 @@ final class ChatChecks: XCTestCase {
         launch()
         openThread()
         let settings = app.buttons["Settings"]
-        guard settings.waitForExistence(timeout: 5) else { throw XCTSkip("H6 Settings lane is not on this branch yet") }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
         settings.tap()
         app.buttons["Pair a host"].tap()
         let paste = app.buttons["pairing.paste"]

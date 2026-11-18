@@ -15,28 +15,11 @@ import UIKit
         var pairing: PairResponse {
             PairResponse(deviceId: deviceId, userName: userName, agents: agents, protocol: 1, serverTime: 0)
         }
+        /// The host's `hello` features as last seen: refreshed on each connect, so every gate follows the server.
+        var features: [String]
         init(host: URL, pairing: PairResponse, features: [String]) {
             self.host = host; self.deviceId = pairing.deviceId; self.userName = pairing.userName
             self.agents = pairing.agents; self.features = features
-        }
-        let features: [String]
-        private enum CodingKeys: String, CodingKey { case host, deviceId, userName, agents, features, pairing }
-        init(from decoder: any Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            host = try values.decode(URL.self, forKey: .host)
-            features = try values.decode([String].self, forKey: .features)
-            let identity = values.contains(.pairing) ? try values.nestedContainer(keyedBy: CodingKeys.self, forKey: .pairing) : values
-            deviceId = try identity.decode(String.self, forKey: .deviceId)
-            userName = try identity.decode(String.self, forKey: .userName)
-            agents = try identity.decode([Agent].self, forKey: .agents)
-        }
-        func encode(to encoder: any Encoder) throws {
-            var values = encoder.container(keyedBy: CodingKeys.self)
-            try values.encode(host, forKey: .host)
-            try values.encode(features, forKey: .features)
-            try values.encode(deviceId, forKey: .deviceId)
-            try values.encode(userName, forKey: .userName)
-            try values.encode(agents, forKey: .agents)
         }
     }
     private struct Saved: Codable {
@@ -121,13 +104,22 @@ import UIKit
         next.active = host.absoluteString
         try commit(next)
     }
+    func refreshFeatures(_ features: [String], host: URL) {
+        guard var entry = saved.entries[host.absoluteString], entry.features != features else { return }
+        entry.features = features
+        var next = saved
+        next.entries[host.absoluteString] = entry
+        do { try commit(next) } catch { CallLog.log(.store, "pairings features_failed \(error.logName)") }
+    }
     func setActive(host: URL) throws(AppError) {
         guard saved.entries[host.absoluteString] != nil else { throw .notPaired }
         var next = saved
         next.active = host.absoluteString
         try commit(next)
     }
-    func remove(host: URL) throws(AppError) {
+    /// Removes the pairing only while it is still this device's: a host paired again meanwhile keeps its new pairing.
+    func remove(host: URL, deviceId: String) throws(AppError) {
+        guard saved.entries[host.absoluteString]?.deviceId == deviceId else { return }
         var next = saved
         next.entries.removeValue(forKey: host.absoluteString)
         if next.active == host.absoluteString { next.active = next.entries.keys.sorted().first }
@@ -162,13 +154,20 @@ import UIKit
                     build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
                     os: UIDevice.current.systemVersion))
             let pairing = try await client.pair(request)
-            let previous = try IdentityKeychain.load(account: link.baseURL.absoluteString)
-            guard let blob = try IdentityKeychain.load(account: pending.absoluteString) else { throw AppError.keyUnavailable }
-            try IdentityKeychain.save(blob, account: link.baseURL.absoluteString)
-            do { try add(pairing, host: link.baseURL, features: hello.features) }
-            catch {
-                if let previous { try? IdentityKeychain.save(previous, account: link.baseURL.absoluteString) }
-                else { try? key.remove(host: link.baseURL) }
+            do {
+                let previous = try IdentityKeychain.load(account: link.baseURL.absoluteString)
+                guard let blob = try IdentityKeychain.load(account: pending.absoluteString) else { throw AppError.keyUnavailable }
+                try IdentityKeychain.save(blob, account: link.baseURL.absoluteString)
+                do { try add(pairing, host: link.baseURL, features: hello.features) }
+                catch {
+                    if let previous { try? IdentityKeychain.save(previous, account: link.baseURL.absoluteString) }
+                    else { try? key.remove(host: link.baseURL) }
+                    throw error
+                }
+            } catch {
+                // The host already made the device: unpair it with the pending key, or nothing could ever remove it.
+                try? await SignedClient(host: link.baseURL, deviceId: pairing.deviceId, configuration: configuration,
+                    signer: { bytes, _ in try key.sign(bytes, host: pending) }).unpair()
                 throw error
             }
             try? key.remove(host: pending)

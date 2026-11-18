@@ -31,7 +31,7 @@ private func pending() -> Outbox.Entry {
     entry = Outbox.applying(.transportFailure, to: entry, now: now)
     #expect(Outbox.step(entry, now: now.addingTimeInterval(1)) == send)
     let encoded = try JSONEncoder().encode(entry)
-    checkCore(try JSONDecoder().decode(Outbox.Entry.self, from: encoded) == entry)
+    #expect(try JSONDecoder().decode(Outbox.Entry.self, from: encoded) == entry)
 }
 
 @Test func retryAndContractErrors() throws {
@@ -45,7 +45,7 @@ private func pending() -> Outbox.Entry {
         case "stale_timestamp", "ticket_expired": #expect(entry.state == .queued)
         default:
             if status == 429 || status >= 500 { #expect(entry.state == .waiting) }
-            else { #expect(entry.state == .held); checkCore(entry.lastServerError == body) }
+            else { #expect(entry.state == .held); #expect(entry.lastServerError == body) }
         }
     }
     let rate = Outbox.applying(.serverError(status: 429, body: ErrorBody(error: "rate_limited", message: "", retryAfter: 2), retryAfter: 120), to: pending(), now: now)
@@ -114,15 +114,11 @@ private func pending() -> Outbox.Entry {
     old.attachments[0].fileId = "consumed"; old.attachments[0].ticket = "old"
     old.attachments[0].uploaded = true; old.attachments[0].expiresAt = 1
     old.state = .failed; old.serverSeq = 5
-    let fresh = old.resend(clientId: "new")
-    #expect(fresh.request.clientId != old.request.clientId)
-    #expect(fresh.attachments[0].uploadKey != old.attachments[0].uploadKey)
-    #expect(fresh.attachments[0].fileId == nil && fresh.attachments[0].ticket == nil)
-    #expect(fresh.attachments[0].expiresAt == nil && !fresh.attachments[0].uploaded)
-    if case .mint = Outbox.step(fresh, now: now) {} else { Issue.record("Resend must mint") }
     #expect(ThreadReducer().rows(conversationId: old.conversationId, outbox: [old]).isEmpty)
     var box = Outbox(); box.enqueue(old)
     box.apply(.serverError(status: 401, body: ErrorBody(error: "device_revoked", message: "")), clientId: old.request.clientId, now: now)
-    box.remove(clientId: old.request.clientId); box.enqueue(fresh)
+    box.remove(clientId: old.request.clientId)
+    box.enqueue(Outbox.Entry(host: old.host, conversationId: old.conversationId,
+        request: SendRequest(clientId: "new", text: old.request.text, fileIds: [])))
     #expect(box.entries.count == 1 && box.entries[0].state == .held)
 }

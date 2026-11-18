@@ -42,6 +42,8 @@ struct CallTarget {
         return true
     }
 
+    /// The host's grant and the names of the protocol it speaks. A grant on a protocol this app does not speak is never
+    /// joined: its call ends on the host right away.
     func grant(over http: URLSession, endingOver endHTTP: URLSession? = nil) async throws(CallFailure) -> Grant {
         if let line {
             let data: Data
@@ -61,10 +63,12 @@ struct CallTarget {
         let grant: CallGrant
         do {
             grant = try await service.startCall(CallRequest(conversationId: paired.conversation.id,
-                attemptId: attemptId, voiceProtocol: 6, jev: nil))
-        } catch { throw Self.failure(error) }
+                attemptId: attemptId, voiceProtocol: VoiceProtocol.requestedVersion, jev: nil))
+        } catch { throw error.callFailure }
         guard grant.attemptId == attemptId else {
-            try? await cancel(over: http)
+            // The host started a call this app cannot match to its attempt: end that call, then the attempt.
+            try? await end(callId: grant.callId, reason: .updating, over: endHTTP ?? http)
+            try? await cancel()
             throw .malformedGrant
         }
         guard let names = VoiceProtocol.Names(version: grant.protocol) else {
@@ -93,16 +97,17 @@ struct CallTarget {
         }
     }
 
-    func cancel(over http: URLSession) async throws {
+    func cancel() async throws {
         if let service {
             try await service.cancelCall(attemptId: attemptId, request: CallCancelRequest(reason: "hangup"))
         }
     }
 
-    private static func failure(_ error: AppError) -> CallFailure {
-        if case let .server(status, body) = error {
-            return .server(status: status, code: body.error, message: body.message)
-        }
-        return .pairedTransport
+    @MainActor var voicePickerService: (any VoicePickerService)? {
+        if let line { return VoiceSettingsModel.lineService(line) }
+        guard let paired, let service,
+              Pairings.shared.entries.first(where: { $0.host == paired.host })?.features.contains("voice-picker") == true
+        else { return nil }
+        return PairedVoicePickerService(target: paired, service: service)
     }
 }

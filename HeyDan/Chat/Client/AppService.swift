@@ -6,6 +6,8 @@ enum AppError: Error, Sendable {
     case transport(TransportFailure)
     case keyUnavailable, notPaired
     case pairing(PairingFailure)
+    /// Refused on this phone before any request: a message or file over the contract's limits.
+    case limit(String)
     enum TransportFailure: String, Sendable { case unavailable, offline, timeout, tls, cancelled, invalidResponse }
 }
 
@@ -58,11 +60,13 @@ extension AppError {
         case .keyUnavailable: "key_unavailable"
         case .notPaired: "not_paired"
         case .pairing: "pairing_failed"
+        case .limit: "local_limit"
         }
     }
     var message: String {
         switch self {
         case .pairing(let failure): failure.localizedDescription
+        case .limit(let message): message
         case .server(_, let body): body.message
         case .keyUnavailable: "Unlock your device and try again."
         case .notPaired: "Pair this device to continue."
@@ -72,6 +76,29 @@ extension AppError {
         case .transport(.cancelled): "The request was cancelled."
         case .transport(.invalidResponse): "The host sent an invalid response."
         case .transport(.unavailable): "The host could not be reached. Try again."
+        }
+    }
+}
+
+extension AppError {
+    /// A paired call's failure: the host's refusal in its own words, a response that does not decode as a bad grant,
+    /// a locked key or a lost pairing in this app's words, and only a real transport failure as one.
+    var callFailure: CallFailure {
+        switch self {
+        case let .server(status, body): .server(status: status, code: body.error, message: body.message)
+        case .transport(.invalidResponse): .malformedGrant
+        case .transport: .pairedTransport
+        case .keyUnavailable, .notPaired, .pairing, .limit: .local(code: logName, message: message)
+        }
+    }
+
+    /// The same mapping for the paired voice picker.
+    var voiceFailure: TTSServiceFailure {
+        switch self {
+        case let .server(status, body): .server(status: status, code: body.error, message: body.message)
+        case .transport(.invalidResponse): .malformed
+        case .transport: .pairedTransport
+        case .keyUnavailable, .notPaired, .pairing, .limit: .local(code: logName, message: message)
         }
     }
 }

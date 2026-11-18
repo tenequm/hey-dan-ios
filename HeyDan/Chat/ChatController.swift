@@ -68,6 +68,7 @@ import UIKit
     @ObservationIgnored var readFlushTask: Task<Void, Never>?
     @ObservationIgnored var readTask: Task<Void, Never>?
     @ObservationIgnored var readOrder: Int64 = 0
+    @ObservationIgnored var retrying: Set<String> = []
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var protectedTask: Task<Void, Never>?
 
@@ -82,17 +83,17 @@ import UIKit
         }
         #endif
         if monitorsNetwork {
-        let monitor = NWPathMonitor()
-        self.monitor = monitor
-        monitor.pathUpdateHandler = { [weak self] path in
-            let available = path.status == .satisfied
-            Task { @MainActor [weak self] in
-                guard let self, self.networkAvailable != available else { return }
-                self.networkAvailable = available
-                self.restart()
+            let monitor = NWPathMonitor()
+            self.monitor = monitor
+            monitor.pathUpdateHandler = { [weak self] path in
+                let available = path.status == .satisfied
+                Task { @MainActor [weak self] in
+                    guard let self, self.networkAvailable != available else { return }
+                    self.networkAvailable = available
+                    self.restart()
+                }
             }
-        }
-        monitor.start(queue: DispatchQueue(label: "chat.path"))
+            monitor.start(queue: DispatchQueue(label: "chat.path"))
         }
         protectedTask = Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: UIApplication.protectedDataDidBecomeAvailableNotification) {
@@ -107,7 +108,12 @@ import UIKit
     }
     deinit { monitor?.cancel(); protectedTask?.cancel(); streamTask?.cancel(); runner?.cancel(); loadTask?.cancel(); readTask?.cancel() }
 
-    func setProgress(_ value: Double, key: String) { uploadProgress[key] = value }
+    /// Whole percents only: every sent chunk would otherwise re-render the open thread.
+    func setProgress(_ value: Double, key: String) {
+        guard uploadProgress[key].map({ Int($0 * 100) != Int(value * 100) }) ?? true else { return }
+        uploadProgress[key] = value
+    }
+    func clearProgress(key: String) { uploadProgress[key] = nil }
 
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }
@@ -119,7 +125,8 @@ import UIKit
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); openConversationId = pairing == nil ? nil : pendingOpen
         historyFloors = [:]
-        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; features = []; error = nil; uploadProgress = [:]
+        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; error = nil; uploadProgress = [:]
+        features = pairing == nil ? [] : Pairings.shared.entries.first { $0.host == host }?.features ?? []
         connectionState = .disconnected
         guard let pairing else { return }
         if !fixedService { service = SignedClient(host: host, deviceId: pairing.deviceId) }
@@ -170,12 +177,15 @@ import UIKit
             let token = generation
             streamTask = Task { await stream(token: token) }
         }
-        var resumed = Outbox()
-        for var entry in outbox.entries {
-            entry.nextAttemptAt = nil
-            resumed.enqueue(entry)
+        // A transport wait ends when the network is back; a host's Retry-After or 5xx backoff stands.
+        if outbox.entries.contains(where: { $0.nextAttemptAt != nil && $0.lastServerError == nil }) {
+            var resumed = Outbox()
+            for var entry in outbox.entries {
+                if entry.lastServerError == nil { entry.nextAttemptAt = nil }
+                resumed.enqueue(entry)
+            }
+            outbox = resumed
         }
-        outbox = resumed
         runOutbox()
     }
     func waitForNetwork() async throws {
@@ -259,7 +269,7 @@ import UIKit
         } catch { if !Task.isCancelled { await handle(error, token: token) } }
     }
     func markRead(order: Int64) async {
-        guard let id = openConversationId else { return }
+        guard let id = openConversationId, order > max(readOrder, reducer.conversations[id]?.readOrder ?? 0) else { return }
         readOrder = max(readOrder, order)
         readTask?.cancel()
         let token = generation, pending = readOrder
@@ -269,28 +279,37 @@ import UIKit
             await sendRead(id: id, order: pending, token: token)
         }
     }
-    func conversation(forAgent agent: String, host: URL) async -> Conversation? {
-        if self.host != host {
-            do { try Pairings.shared.setActive(host: host) } catch { self.error = AppError.map(error); return nil }
+    /// An agent's conversation and the client that reaches its host. Another host is read on a client of its own,
+    /// so a lookup never switches the active pairing; the active host answers from its list while the stream is live.
+    func pairedConversation(agentId: String, entry: Pairings.Entry) async throws(AppError) -> (conversation: Conversation?, service: any AppService) {
+        guard host == entry.host, pairing?.deviceId == entry.deviceId else {
+            let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
+            return (try await client.conversations().conversations.first { $0.agent.id == agentId }, client)
         }
+        let client = service
         await loadTask?.value
-        await refresh()
-        guard self.host == host else { return nil }
-        return conversations.first { $0.agent.id == agent }
+        if connectionState != .connected || !conversations.contains(where: { $0.agent.id == agentId }) {
+            await refresh()
+            if let error, !conversations.contains(where: { $0.agent.id == agentId }) { throw error }
+        }
+        guard host == entry.host else { throw .notPaired }
+        return (conversations.first { $0.agent.id == agentId }, client)
     }
-    func unpair(host: URL, localOnly: Bool = false) async {
+    func unpair(host: URL) async {
         guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return }
         do {
-            let client: any AppService = self.host == host ? service : SignedClient(host: host, deviceId: entry.pairing.deviceId)
-            if !localOnly {
-                do { try await client.unpair() }
-                catch AppError.server(401, let body) where ["device_revoked", "unknown_device"].contains(body.error) {}
-            }
-            try await store.clear(host: host, deviceId: entry.pairing.deviceId)
-            try await files.clear(host: host, deviceId: entry.pairing.deviceId)
-            try Pairings.shared.remove(host: host)
-            CallLog.log(.store, "unpaired")
+            let client: any AppService = self.host == host ? service : SignedClient(host: host, deviceId: entry.deviceId)
+            do { try await client.unpair() }
+            catch AppError.server(401, let body) where Outbox.revokedCodes.contains(body.error) {}
+            try await forget(host: host, deviceId: entry.deviceId)
         } catch { self.error = AppError.map(error) }
+    }
+    /// The pairing goes first, which stops this controller's writers for that device, then its thread and outbox.
+    private func forget(host: URL, deviceId: String) async throws {
+        try Pairings.shared.remove(host: host, deviceId: deviceId)
+        try await store.clear(host: host, deviceId: deviceId)
+        try await files.clear(host: host, deviceId: deviceId)
+        CallLog.log(.store, "unpaired")
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }
@@ -308,15 +327,10 @@ import UIKit
         switch mapped {
         case .keyUnavailable: paused = true
         case .server(let status, let body):
-            if ["device_revoked", "unknown_device"].contains(body.error), let host, let pairing {
+            if Outbox.revokedCodes.contains(body.error), let host, let pairing {
                 CallLog.log(.store, "revoke")
                 selectPairing(nil, host: host)
-                do {
-                    try await store.clear(host: host, deviceId: pairing.deviceId)
-                    try await files.clear(host: host, deviceId: pairing.deviceId)
-                    try Pairings.shared.remove(host: host)
-            CallLog.log(.store, "unpaired")
-                } catch { self.error = AppError.map(error) }
+                do { try await forget(host: host, deviceId: pairing.deviceId) } catch { self.error = AppError.map(error) }
                 return
             }
             if status == 426 { paused = true }

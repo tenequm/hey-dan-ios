@@ -41,6 +41,8 @@ final class VoiceSettingsModel {
         draft.map { CatalogKey(provider: $0.provider, query: query, language: language, gender: gender) }
     }
 
+    /// Paired 5xx codes that refuse the save outright, so the host's words stand instead of an outcome-unknown re-read.
+    private static let definiteRefusals: Set<String> = ["voice_offline", "provider_unavailable"]
     private static var writes: [VoicePickerIdentity: (id: UUID, task: Task<Void, Never>)] = [:]
     private static var results: [VoicePickerIdentity: String] = [:]
     private static let defaultSession: URLSession = {
@@ -53,10 +55,6 @@ final class VoiceSettingsModel {
         #endif
         return URLSession(configuration: config)
     }()
-
-    convenience init(line: VoiceLine, session: URLSession? = nil) {
-        self.init(service: LineVoicePickerService(savedLine: line, session: session ?? Self.defaultSession))
-    }
 
     init(service: any VoicePickerService) {
         self.service = service
@@ -237,6 +235,8 @@ final class VoiceSettingsModel {
                 saveFailure = failed
                 saveResult = failed.message
                 switch failed {
+                case .server(status: 500...599, code: let code, message: _) where Self.definiteRefusals.contains(code):
+                    if let loaded: TTSView = try? await service.voice(), !invalidated { adopt(loaded, replaceDraft: false) }
                 case .unreachable, .transport, .pairedTransport, .malformed, .upstream, .refused(status: 500...599, body: _), .server(status: 500...599, code: _, message: _):
                     do {
                         let loaded: TTSView = try await service.voice()

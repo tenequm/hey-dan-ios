@@ -6,6 +6,7 @@ struct ThreadView: View {
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
     @State private var answeredQuestionID: String?
+    private var live: Conversation { chat.conversations.first { $0.id == conversation.id } ?? conversation }
 
     var body: some View {
         ThreadContent(
@@ -31,6 +32,16 @@ struct ThreadView: View {
                 await chat.send(text: text, attachments: attachments)
             }
             .id(conversation.id)
+        }
+        .safeAreaBar(edge: .top) {
+            if chat.features.contains("calls"), !live.canCall, let refusal = live.callRefusal {
+                Text(refusal.message)
+                    .font(Theme.sans(13))
+                    .foregroundStyle(Theme.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .accessibilityIdentifier("chat.call.refusal")
+            }
         }
         .navigationTitle(conversation.agent.name)
         .toolbar { ThreadCallButton(conversation: conversation) }
@@ -58,7 +69,7 @@ struct ThreadContent: View {
 
     private var entities: [ThreadEntity] { rows.compactMap { if case .entity(let entity) = $0 { return entity }; return nil } }
     private var firstOrder: Int64? { entities.compactMap { order($0) }.min() }
-    private var newestOrder: Int64? { entities.compactMap(item).compactMap { order($0.entity) }.max() }
+    private var newestOrder: Int64? { entities.filter(readable).compactMap(order).max() }
 
     var body: some View {
         ScrollView {
@@ -122,15 +133,12 @@ struct ThreadContent: View {
         }
     }
 
-    private func item(_ entity: ThreadEntity) -> (id: String, entity: ThreadEntity)? {
+    /// The rows a read counts: the reducer already dropped roles it cannot render, and only live questions count.
+    private func readable(_ entity: ThreadEntity) -> Bool {
         switch entity {
-        case .message(let message):
-            guard message.role == .user || message.role == .agent || message.role == .host else { return nil }
-            return (message.id, entity)
-        case .question(let question):
-            guard [.open, .answered, .expired].contains(question.state) else { return nil }
-            return (question.id, entity)
-        case .unknown: return nil
+        case .message: true
+        case .question(let question): [.open, .answered, .expired].contains(question.state)
+        case .unknown: false
         }
     }
 }

@@ -9,7 +9,6 @@ func coreFixtures() throws -> [String: Any] {
 func fixtureDecode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
     try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: value))
 }
-func checkCore(_ condition: Bool) { #expect(condition) }
 
 @Test func foundationLinesDropsEventSeparators() async throws {
     let raw = (try coreFixtures()["stream"] as! [String: Any])["raw"] as! String
@@ -27,12 +26,12 @@ func checkCore(_ condition: Bool) { #expect(condition) }
     let fixture = try coreFixtures()["stream"] as! [String: Any]
     let raw = Data((fixture["raw"] as! String).utf8)
     let expected = (fixture["expect"] as! [String: Any])["kindsInOrder"] as! [String]
-    var baseline = EventStreamParser()
+    var baseline = SSEParser()
     let whole = try baseline.feed(raw)
     for split in 0...raw.count {
-        var parser = EventStreamParser()
+        var parser = SSEParser()
         let events = try parser.feed(raw.prefix(split)) + parser.feed(raw.suffix(raw.count - split))
-        checkCore(events == whole)
-        checkCore(events.map { $0.kind.rawValue } == expected)
+        #expect(events == whole)
+        #expect(events.map { $0.kind.rawValue } == expected)
     }
 }

@@ -2,8 +2,9 @@ import CryptoKit
 import Foundation
 
 public enum PairedAgentID {
+    /// Saved shortcuts name an agent by this id, so it hashes the host's key: a respelled host keeps its ids.
     public static func make(host: URL, agentId: String) -> UUID {
-        let host = host.absoluteString
+        let host = PairedHost.key(host)
         // Length-prefix the host so boundaries cannot alias agent ids containing separators.
         let digest = SHA256.hash(data: Data("\(host.utf8.count):\(host)\(agentId)".utf8))
         var bytes = Array(digest.prefix(16))

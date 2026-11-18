@@ -217,9 +217,11 @@ server-logs cid:
 sim-checks check="LiveActivityOnLockScreen": gen
     #!/usr/bin/env bash
     set -euo pipefail
-    [ "{{bundle_id}}" != com.example.HeyDan ] || { echo "Simulator push checks need your own HEYDAN_BUNDLE_ID in gitignored Local.xcconfig, not the placeholder {{bundle_id}}" >&2; exit 1; }
     selector={{quote(check)}}
     case "$selector" in */*) ;; *) selector="HeyDanChecks/test$selector" ;; esac
+    case "$selector" in *Push*)
+        [ "{{bundle_id}}" != com.example.HeyDan ] || { echo "Simulator push checks need your own HEYDAN_BUNDLE_ID in gitignored Local.xcconfig, not the placeholder {{bundle_id}}" >&2; exit 1; } ;;
+    esac
     udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
     [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
     xcrun simctl bootstatus "$udid" -b >/dev/null
@@ -254,4 +256,7 @@ app-test: gen
     set -euo pipefail
     udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
     [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
+    xcrun simctl bootstatus "$udid" -b >/dev/null
+    # The notification tests call notificationSettings(), which can wait on a stuck dasd forever.
+    xcrun simctl spawn "$udid" launchctl kickstart -k "user/$(id -u)/com.apple.dasd"
     timeout 600 xcodebuild test -project HeyDan.xcodeproj -scheme HeyDanTests -destination "id=$udid" -derivedDataPath "{{sim_build}}" -disableAutomaticPackageResolution -skipPackageUpdates -test-timeouts-enabled YES -default-test-execution-time-allowance 180

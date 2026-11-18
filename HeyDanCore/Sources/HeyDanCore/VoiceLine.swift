@@ -97,6 +97,8 @@ public enum CallFailure: Error, Equatable, Sendable {
     case unreachable
     case pairedTransport
     case server(status: Int, code: String, message: String)
+    /// A paired call stopped on this phone before any request: the device key is locked or the host is unpaired.
+    case local(code: String, message: String)
     /// Found before the call starts: no tailnet interface on the phone, and the line's host is tailnet-only.
     case tailscaleOff
     case noLine
@@ -122,6 +124,7 @@ public enum CallFailure: Error, Equatable, Sendable {
         switch self {
         case let .refused(status, _): "refused-\(status)"
         case .server(let status, _, _): "server-\(status)"
+        case .local(let code, _): "local-\(code)"
         case .transport: "transport"
         case .callKitRefused: "callKitRefused"
         default: "\(self)"
@@ -130,7 +133,7 @@ public enum CallFailure: Error, Equatable, Sendable {
 
     public var message: String {
         switch self {
-        case .server(_, _, let message): message
+        case .server(_, _, let message), .local(_, let message): message
         case .pairedTransport: "Could not reach the call service. Check your internet connection and try again."
         case .unreachable: "Can't reach the voice line. Check that Tailscale is connected, then try again."
         case .tailscaleOff: "Tailscale looks off. Turn it on, then call again."

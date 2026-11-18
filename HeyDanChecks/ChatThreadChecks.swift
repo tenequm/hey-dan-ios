@@ -10,7 +10,7 @@ final class ChatThreadChecks: XCTestCase {
         let conversation = app.buttons["chat.conversation.conv_taylor01"]
         XCTAssertTrue(conversation.waitForExistence(timeout: 15))
         XCTAssertTrue(conversation.label.contains("2 unread"))
-        shot(app, "h4a-list")
+        shot(app, "thread-list")
         conversation.tap()
         XCTAssertTrue(app.navigationBars["Taylor"].waitForExistence(timeout: 15))
         let status = app.descendants(matching: .any)["chat.status"].firstMatch
@@ -20,18 +20,10 @@ final class ChatThreadChecks: XCTestCase {
         XCTAssertTrue(answer.waitForExistence(timeout: 10))
         answer.tap()
         XCTAssertTrue(app.staticTexts["chat.answer.q_0123"].waitForExistence(timeout: 10))
-        shot(app, "h4a-answered")
+        shot(app, "thread-answered")
         app.scrollViews["chat.thread"].swipeDown()
         XCTAssertTrue(app.descendants(matching: .any)["chat.message.msg_2101"].firstMatch.waitForExistence(timeout: 10))
-        shot(app, "h4a-markdown")
-    }
-
-    func testFixtureTable() throws {
-        throw XCTSkip("FixtureAppService contains no markdown table; no local stack is running.")
-    }
-
-    func testFixtureHistoryPrepend() throws {
-        throw XCTSkip("FixtureAppService returns hasMoreBefore=false; no local stack is running.")
+        shot(app, "thread-markdown")
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
