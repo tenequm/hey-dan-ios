@@ -29,7 +29,11 @@ import UIKit
         reducer.thread(conversationId: id).filter { ($0.order ?? 0) >= (historyFloors[id] ?? 0) }
     }
     private func visibleRows(_ id: String) -> [ThreadRow] {
-        reducer.rows(conversationId: id, outbox: outbox.entries).filter {
+        var entries = outbox.entries
+        #if DEBUG
+        if let fixture = service as? FixtureAppService { entries += fixture.previewOutbox }
+        #endif
+        return reducer.rows(conversationId: id, outbox: entries).filter {
             if case .entity(let entity) = $0 { return (entity.order ?? 0) >= (historyFloors[id] ?? 0) }
             return true
         }
@@ -101,6 +105,19 @@ import UIKit
         }
     }
     deinit { monitor?.cancel(); protectedTask?.cancel(); streamTask?.cancel(); runner?.cancel(); loadTask?.cancel(); readTask?.cancel() }
+
+    #if DEBUG && targetEnvironment(simulator)
+    func selectCaptureFixture(_ scenario: String?, id: String) {
+        precondition(service is FixtureAppService && Pairings.shared.isFixture)
+        let host = FixtureAppService.host
+        selectPairing(nil, host: host)
+        service = FixtureAppService(scenario: scenario)
+        offlineUntil = scenario == "offline" ? Date.now.addingTimeInterval(120) : nil
+        var pairing = FixtureAppService.pairing
+        pairing.deviceId = id
+        try! Pairings.shared.add(pairing, host: host, features: ["files", "calls", "push", "voice-picker"])
+    }
+    #endif
 
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }

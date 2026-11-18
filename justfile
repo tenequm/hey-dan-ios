@@ -232,3 +232,8 @@ lane-ready:
     for f in Local.xcconfig local.just; do
         if [ -f "$main/$f" ]; then cp -p "$main/$f" "$f"; fi
     done
+
+# Capture the fixture gallery for the current commit on an existing Simulator.
+[positional-arguments]
+screens *args:
+    @python3 -B scripts/screens.py {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}} "$@"

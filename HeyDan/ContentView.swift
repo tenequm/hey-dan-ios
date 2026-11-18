@@ -1274,9 +1274,9 @@ private struct Preview {
     var endedAt: Date? { wasLive ? shownAt : nil }
     var thinkingSince: Date? { phase == .live(.thinking) ? start.addingTimeInterval(71) : nil }
 
-    static func fromEnvironment() -> Preview? {
+    @MainActor static func fromEnvironment() -> Preview? {
         #if DEBUG && targetEnvironment(simulator)
-            guard var name = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_PHASE"] else { return nil }
+            guard var name = ScreenCaptureFixture.phase ?? ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_PHASE"] else { return nil }
             // "thinking-muted", "speaking-muted": the same stage with the microphone muted.
             let mutedVariant = name.hasSuffix("-muted")
             if mutedVariant { name.removeLast("-muted".count) }
@@ -1391,6 +1391,13 @@ private struct Preview {
             }
             func spoke(_ segment: String, _ text: String, at seconds: TimeInterval) {
                 transcript.caption(segment: segment, text: text, isFinal: true, fromCaller: false, at: at(seconds))
+            }
+            if FixtureContent.capturing {
+                said("caller", FixtureContent.caller, at: 5)
+                transcript.apply(.status(TurnStatus(turn: 1, status: .sent, text: FixtureContent.caller)), at: at(6))
+                transcript.apply(ReplyInfo(reply: 1, turn: 1), at: at(9))
+                spoke("reply", FixtureContent.reply, at: 9)
+                return transcript
             }
             let backup = "Can you check whether the backup ran last night?"
             said("SG_1", backup, at: 5)
