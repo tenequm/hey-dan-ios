@@ -66,6 +66,8 @@ struct HeyDanApp: App {
     @ViewBuilder private var root: some View {
         if let pairedHost {
             PairingView(paired: pairedHost)
+        } else if showsPairingForChecks {
+            PairingView()
         } else if ChatController.shared.pairing != nil {
             ConversationList()
         } else {
@@ -79,6 +81,15 @@ struct HeyDanApp: App {
             ContentView()
             #endif
         }
+    }
+
+    /// Pairing checks open the pairing screen even on a Simulator an earlier check left paired.
+    private var showsPairingForChecks: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
+        #else
+        false
+        #endif
     }
 }
 
