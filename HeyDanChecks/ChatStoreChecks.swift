@@ -5,10 +5,10 @@ final class ChatStoreChecks: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_FIXTURE_CHAT"] = "1"
         app.launch()
-        XCTAssertTrue(app.buttons["Stan"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.buttons["Stan"].waitForExistence(timeout: 15))
-        XCTAssertEqual(app.buttons.matching(identifier: "Stan").count, 1)
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.buttons.matching(identifier: "chat.conversation.conv_taylor01").count, 1)
     }
 }

@@ -31,9 +31,10 @@ struct DeviceKey: Sendable {
 }
 
 enum IdentityKeychain {
+    private static let service = (Bundle.main.bundleIdentifier ?? "HeyDan") + ".identity"
     private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "com.tenequm.HeyDan.identity",
+         kSecAttrService as String: service,
          kSecAttrAccount as String: account, kSecUseDataProtectionKeychain as String: true]
     }
     static func load(account: String) throws(AppError) -> Data? {

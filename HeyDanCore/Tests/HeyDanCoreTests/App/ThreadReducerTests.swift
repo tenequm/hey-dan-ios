@@ -14,8 +14,8 @@ import Testing
     func id(_ entity: ThreadEntity) -> String {
         switch entity { case .message(let m): m.id; case .question(let q): q.id; default: "" }
     }
-    checkCore(reducer.thread(conversationId: "conv_stan01").map(id) == expect["finalThreadOrder"] as! [String])
-    let rows = reducer.rows(conversationId: "conv_stan01").compactMap { row -> String? in
+    checkCore(reducer.thread(conversationId: "conv_taylor01").map(id) == expect["finalThreadOrder"] as! [String])
+    let rows = reducer.rows(conversationId: "conv_taylor01").compactMap { row -> String? in
         if case .entity(let entity) = row { return id(entity) }; return nil
     }
     checkCore(rows == expect["renderedThreadOrder"] as! [String])
@@ -28,15 +28,15 @@ import Testing
         }
     }
     let status = expect["finalStatus"] as! [String: Any], badge = expect["finalBadge"] as! [String: Any]
-    checkCore(reducer.statuses["conv_stan01"]?.rev == Int64(status["rev"] as! Int))
-    checkCore(reducer.statuses["conv_stan01"]?.state.rawValue == status["state"] as? String)
+    checkCore(reducer.statuses["conv_taylor01"]?.rev == Int64(status["rev"] as! Int))
+    checkCore(reducer.statuses["conv_taylor01"]?.state.rawValue == status["state"] as? String)
     checkCore(reducer.badge?.rev == Int64(badge["rev"] as! Int))
     checkCore(reducer.badge?.unreadTotal == badge["unreadTotal"] as? Int)
-    let ordered = reducer.thread(conversationId: "conv_stan01").map(id)
-    if case .message(var first) = reducer.thread(conversationId: "conv_stan01").first! {
+    let ordered = reducer.thread(conversationId: "conv_taylor01").map(id)
+    if case .message(var first) = reducer.thread(conversationId: "conv_taylor01").first! {
         first.seq = reducer.cursor + 1000
         reducer.upsert(.message(first))
-        checkCore(reducer.thread(conversationId: "conv_stan01").map(id) == ordered)
+        checkCore(reducer.thread(conversationId: "conv_taylor01").map(id) == ordered)
     } else { Issue.record("Expected first message") }
     let before = reducer.cursor
     reducer.upsert(try fixtureDecode(ConversationsResponse.self, f["conversations"]!))
@@ -55,16 +55,16 @@ import Testing
     checkCore(reducer.upsert(.message(edits[0])).isEmpty)
     checkCore(reducer.entities[edits[0].id] == .message(edits.last!))
     let page = try fixtureDecode(HistoryPage.self, f["historyPage"]!)
-    reducer.upsert(page, conversationId: "conv_stan01")
-    #expect(reducer.hasMoreBefore["conv_stan01"] == page.hasMoreBefore)
+    reducer.upsert(page, conversationId: "conv_taylor01")
+    #expect(reducer.hasMoreBefore["conv_taylor01"] == page.hasMoreBefore)
     #expect(reducer.cursor == list.seq)
     let request = SendRequest(clientId: "pending", text: "", fileIds: [])
-    let pending = Outbox.Entry(host: URL(string: "https://example.com")!, conversationId: "conv_stan01", request: request)
-    let count = reducer.rows(conversationId: "conv_stan01").count
-    #expect(reducer.rows(conversationId: "conv_stan01", outbox: [pending]).count == count + 1)
+    let pending = Outbox.Entry(host: URL(string: "https://example.com")!, conversationId: "conv_taylor01", request: request)
+    let count = reducer.rows(conversationId: "conv_taylor01").count
+    #expect(reducer.rows(conversationId: "conv_taylor01", outbox: [pending]).count == count + 1)
     var confirmed = edits.last!; confirmed.clientId = "pending"; confirmed.seq += 100
     reducer.upsert(.message(confirmed))
-    #expect(reducer.rows(conversationId: "conv_stan01", outbox: [pending]).count == count)
+    #expect(reducer.rows(conversationId: "conv_taylor01", outbox: [pending]).count == count)
     let event = AppEvent(kind: .message, id: 999, data: Data("{}".utf8))
     do { try reducer.apply(event); Issue.record("Malformed event accepted") } catch {}
     #expect(reducer.cursor == list.seq)

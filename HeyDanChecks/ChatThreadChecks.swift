@@ -7,12 +7,12 @@ final class ChatThreadChecks: XCTestCase {
         app.launch()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        let conversation = app.buttons["chat.conversation.conv_stan01"]
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
         XCTAssertTrue(conversation.waitForExistence(timeout: 15))
         XCTAssertTrue(conversation.label.contains("2 unread"))
         shot(app, "h4a-list")
         conversation.tap()
-        XCTAssertTrue(app.navigationBars["Stan"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.navigationBars["Taylor"].waitForExistence(timeout: 15))
         let status = app.descendants(matching: .any)["chat.status"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         XCTAssertEqual(status.label, "Working")

@@ -4,8 +4,8 @@ import Foundation
 import HeyDanCore
 
 actor FixtureAppService: AppService {
-    static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Stan tester",
-        agents: [Agent(id: "ag_stan", name: "Stan")], protocol: 1, serverTime: 0)
+    static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Taylor tester",
+        agents: [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
     init() {
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CALL_REFUSAL"] == "1" {
             conversation.canCall = false
@@ -16,17 +16,17 @@ actor FixtureAppService: AppService {
     private var uploaded: [String: Data] = [:]
     private var sequence: Int64 = 10
     private var listeners: [UUID: AsyncThrowingStream<AppEvent, any Error>.Continuation] = [:]
-    private var conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-        agent: Agent(id: "ag_stan", name: "Stan"), unread: 2, readOrder: 0, canCall: true, createdAt: 0)
-    private var question = Question(kind: .question, id: "q_0123", conversationId: "conv_stan01",
+    private var conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
+        agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 2, readOrder: 0, canCall: true, createdAt: 0)
+    private var question = Question(kind: .question, id: "q_0123", conversationId: "conv_taylor01",
         order: 4, seq: 4, title: "Choose an option", text: "Which option do you prefer?",
         options: [QuestionOption(label: "Continue", selectedLabel: "Continued", value: "continue", style: "primary")],
         state: .open, createdAt: 0)
     private var messages: [Message] = [
-        Message(kind: .message, id: "msg_2101", conversationId: "conv_stan01", order: 2, seq: 2,
-            role: .agent, text: "## Hello\n\nThis is **Stan**.\n\n- One\n- Two\n\n```swift\nprint(42)\n```",
+        Message(kind: .message, id: "msg_2101", conversationId: "conv_taylor01", order: 2, seq: 2,
+            role: .agent, text: "## Hello\n\nThis is **Taylor**.\n\n- One\n- Two\n\n```swift\nprint(42)\n```",
             files: [], reactions: [], createdAt: 0),
-        Message(kind: .message, id: "msg_2102", conversationId: "conv_stan01", order: 3, seq: 3,
+        Message(kind: .message, id: "msg_2102", conversationId: "conv_taylor01", order: 3, seq: 3,
             role: .agent, text: "Attachments", files: [
                 FileAttachment(id: "file_img01", name: "Image.png", mimeType: "image/png", size: 68,
                     kind: .image, width: 1, height: 1),

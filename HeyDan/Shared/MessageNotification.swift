@@ -5,7 +5,9 @@ import UIKit
 import UserNotifications
 
 enum MessageNotification {
-    private static let logger = Logger(subsystem: "com.tenequm.HeyDan", category: "notification")
+    // The extension logs under the app's subsystem, so `just logs` shows both.
+    private static let logger = Logger(subsystem: (Bundle.main.bundleIdentifier ?? "HeyDan")
+        .replacing(/\.NotificationService$/, with: ""), category: "notification")
 
     static func payload(from userInfo: [AnyHashable: Any]) -> PushPayload? {
         guard let data = try? JSONSerialization.data(withJSONObject: userInfo),

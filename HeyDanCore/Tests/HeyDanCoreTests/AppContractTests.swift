@@ -20,9 +20,9 @@ private struct CheckFailure: Error { let label: String }
     _ = try decode(PairRequest.self, f["pairRequest"]!)
     _ = try decode(PairResponse.self, f["pairResponse"]!)
     let conversations = try decode(ConversationsResponse.self, f["conversations"]!)
-    try ensure(conversations.conversations.map(\.id) == ["conv_stan01"], "conversation list contains only Stan")
+    try ensure(conversations.conversations.map(\.id) == ["conv_taylor01"], "conversation list contains only Taylor")
     let refused = try decode(Conversation.self, f["conversationCallRefused"]!)
-    try ensure(refused.id == "conv_dan01" && !refused.canCall && refused.callRefusal?.error == "no_line", "separate call refusal")
+    try ensure(refused.id == "conv_sam01" && !refused.canCall && refused.callRefusal?.error == "no_line", "separate call refusal")
     _ = try decode(HistoryPage.self, f["historyPage"]!)
     let messages = f["messages"] as! [String: Any]
     for (name, value) in messages {
@@ -65,7 +65,7 @@ private struct CheckFailure: Error { let label: String }
     }
     _ = try decode(PushTokenRequest.self, f["pushTokenRequest"]!)
     let push = try decode(PushPayload.self, (f["pushPayload"] as! [String: Any])["body"]!)
-    try ensure(push.hd.h == "https://app.opx.one", "push host decoded")
+    try ensure(push.hd.h == "https://app.example.com", "push host decoded")
     let roundTrip = try JSONSerialization.jsonObject(with: JSONEncoder().encode(push)) as! [String: Any]
     try ensure((roundTrip["aps"] as! [String: Any])["thread-id"] != nil, "push coding keys")
     try ensure((roundTrip["hd"] as! [String: Any])["h"] as? String == push.hd.h, "push host encoded")
@@ -111,7 +111,7 @@ private struct CheckFailure: Error { let label: String }
 @Test func targetBuilder() throws {
     let f = try fixtures(), vectors = (f["signing"] as! [String: Any])["vectors"] as! [[String: Any]]
     let v = vectors.first { $0["name"] as? String == "get-encoded-query" }!
-    let target = try RequestTarget.build(path: ["conversations", "conv_stan01", "voices"], query: [("provider", "gemini"), ("q", "кіт cat"), ("limit", "20")])
+    let target = try RequestTarget.build(path: ["conversations", "conv_taylor01", "voices"], query: [("provider", "gemini"), ("q", "кіт cat"), ("limit", "20")])
     try ensure(target == v["target"] as! String, "encoded query target")
     for path in [[""], ["."], [".."], ["a;b"], ["a/b"], ["a\\b"]] {
         do { _ = try RequestTarget.build(path: path); throw CheckFailure(label: "accepted invalid path") }
@@ -178,7 +178,7 @@ private struct Reducer {
         }
         try ensure(rendered == expected["renderedThreadOrder"] as! [String], "rendered thread order")
         let finalStatus = expected["finalStatus"] as! [String: Any]
-        let status = reducer.statuses["conv_stan01"]!
+        let status = reducer.statuses["conv_taylor01"]!
         try ensure(status.rev == (finalStatus["rev"] as! NSNumber).int64Value && status.state.rawValue == finalStatus["state"] as! String, "final status")
         let finalBadge = expected["finalBadge"] as! [String: Any]
         try ensure(reducer.badge?.rev == (finalBadge["rev"] as! NSNumber).int64Value && reducer.badge?.unreadTotal == finalBadge["unreadTotal"] as? Int, "final badge")

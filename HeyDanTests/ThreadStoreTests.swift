@@ -4,11 +4,11 @@ import Testing
 @testable import HeyDan
 
 struct ThreadStoreTests {
-    private let host = URL(string: "https://app.opx.one")!
+    private let host = URL(string: "https://app.example.com")!
 
     private func conversation(seq: Int64, unread: Int = 2) -> Conversation {
-        Conversation(kind: .conversation, id: "conv_stan01", seq: seq,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: unread,
+        Conversation(kind: .conversation, id: "conv_taylor01", seq: seq,
+            agent: Agent(id: "ag_taylor", name: "Taylor"), unread: unread,
             readOrder: 0, canCall: false, createdAt: 0)
     }
 
@@ -31,7 +31,7 @@ struct ThreadStoreTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let outbox = OutboxFile(root: root)
-        let entry = Outbox.Entry(host: host, conversationId: "conv_stan01",
+        let entry = Outbox.Entry(host: host, conversationId: "conv_taylor01",
             request: SendRequest(clientId: UUID().uuidString, text: "test", fileIds: []))
         try await outbox.save([entry], host: host, deviceId: "device")
         try await populate(root: root)
@@ -56,7 +56,7 @@ struct ThreadStoreTests {
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
         await chat.refresh()
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         await chat.loadHistory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appending(path: "source")
@@ -82,7 +82,7 @@ struct ThreadStoreTests {
         #expect(restored.reducer.cursor == cursor)
         #expect(restored.conversations.first?.unread == 2)
         #expect(restored.outbox.entries.isEmpty)
-        restored.openConversation("conv_stan01")
+        restored.openConversation("conv_taylor01")
         restored.setActive(true)
         try await waitUntil { restored.connectionState == .connected }
         #expect(restored.thread.filter { if case .message(let m) = $0 { return m.clientId == clientId }; return false }.count == 1)
@@ -97,7 +97,7 @@ struct ThreadStoreTests {
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
         await chat.refresh()
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         await chat.loadHistory()
         await chat.answer(questionId: "q_0123", value: "continue")
         #expect(chat.thread.contains { if case .question(let q) = $0 { return q.state == .answered }; return false })
@@ -118,10 +118,10 @@ struct ThreadStoreTests {
         try await store.save(ThreadSnapshot(cursor: 7), host: host, deviceId: "dev_fixture")
         let chat = ChatController(service: service, store: store, files: OutboxFile(root: root), monitorsNetwork: false)
         chat.setActive(false)
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
-        #expect(chat.openConversationId == "conv_stan01")
+        #expect(chat.openConversationId == "conv_taylor01")
         #expect(await chat.send(text: "first"))
         #expect(await chat.send(text: "second"))
         let ids = chat.outbox.entries.map { $0.request.clientId }
@@ -162,7 +162,7 @@ struct ThreadStoreTests {
         chat.setActive(false)
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         #expect(await chat.send(text: "file", attachments: [StagedAttachment(fileURL: source, name: "file.txt", mimeType: "text/plain")]))
         chat.setActive(true)
         try await waitUntil { chat.outbox.entries.isEmpty }
@@ -180,7 +180,7 @@ struct ThreadStoreTests {
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
         await chat.refresh()
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         #expect(await !chat.send(text: String(repeating: "a", count: Outbox.maximumTextBytes + 1)))
         #expect(chat.outbox.entries.isEmpty)
         await chat.markRead(order: 4)
@@ -210,7 +210,7 @@ struct ThreadStoreTests {
         chat.setActive(false)
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         await chat.loadHistory()
         await service.fail("answer", with: [.server(status: 502, body: ErrorBody(error: "answer_not_delivered", message: "Try again"))])
         await chat.answer(questionId: "q_0123", value: "continue")
@@ -220,7 +220,7 @@ struct ThreadStoreTests {
         await service.fail("answer", with: [.server(status: 409, body: ErrorBody(error: "not_open", message: "Answered", question: q))])
         await chat.answer(questionId: q.id, value: "continue")
         #expect(chat.thread.contains { if case .question(let q) = $0 { return q.state == .answered }; return false })
-        let old = Outbox.Entry(host: host, conversationId: "conv_stan01", request: SendRequest(clientId: "old", text: "retry", fileIds: []), state: .outcomeUnknown)
+        let old = Outbox.Entry(host: host, conversationId: "conv_taylor01", request: SendRequest(clientId: "old", text: "retry", fileIds: []), state: .outcomeUnknown)
         chat.outbox.enqueue(old)
         try await chat.saveOutbox()
         await chat.retry(clientId: "old")
@@ -262,7 +262,7 @@ struct ThreadStoreTests {
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
         await chat.refresh()
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         #expect(await chat.send(text: "pending"))
         chat.setActive(true)
         try await waitUntil { chat.pairing == nil }
@@ -280,9 +280,9 @@ struct ThreadStoreTests {
         chat.setActive(false)
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         await chat.loadHistory()
-        let old = Message(kind: .message, id: "old", conversationId: "conv_stan01", order: 1, seq: 100,
+        let old = Message(kind: .message, id: "old", conversationId: "conv_taylor01", order: 1, seq: 100,
             role: .agent, text: "edit", files: [], reactions: [], createdAt: 0)
         chat.reducer.upsert(.message(old))
         #expect(!chat.thread.contains(.message(old)))
@@ -316,7 +316,7 @@ struct ThreadStoreTests {
         chat.setActive(false)
         chat.selectPairing(FixtureAppService.pairing, host: host)
         await chat.loadTask?.value
-        chat.openConversation("conv_stan01")
+        chat.openConversation("conv_taylor01")
         #expect(await chat.send(text: "lost response"))
         chat.setActive(true)
         try await waitUntil { chat.outbox.entries.isEmpty }

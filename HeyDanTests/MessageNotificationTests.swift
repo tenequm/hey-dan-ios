@@ -7,11 +7,11 @@ import UserNotifications
 struct MessageNotificationTests {
     private var payload: PushPayload {
         PushPayload(
-            aps: PushAPS(alert: PushAlert(title: "Stan", body: "A reply"),
-                         threadId: "conv_stan01", mutableContent: 1, badge: 2,
+            aps: PushAPS(alert: PushAlert(title: "Taylor", body: "A reply"),
+                         threadId: "conv_taylor01", mutableContent: 1, badge: 2,
                          sound: "default", category: "message"),
-            hd: PushData(h: "https://app.opx.one", v: 1, c: "conv_stan01",
-                         m: "msg_test", k: .message, a: Agent(id: "ag_stan", name: "Stan"))
+            hd: PushData(h: "https://app.example.com", v: 1, c: "conv_taylor01",
+                         m: "msg_test", k: .message, a: Agent(id: "ag_taylor", name: "Taylor"))
         )
     }
 
@@ -40,11 +40,11 @@ struct MessageNotificationTests {
     }
 
     @Test func contractFixtureDecodes() throws {
-        let data = Data(#"{"aps":{"alert":{"title":"Stan","body":"Done. The report is attached."},"thread-id":"conv_stan01","mutable-content":1,"badge":3,"sound":"default","category":"message"},"hd":{"v":1,"h":"https://app.opx.one","c":"conv_stan01","m":"msg_2102","k":"message","a":{"id":"ag_stan","name":"Stan"}}}"#.utf8)
+        let data = Data(#"{"aps":{"alert":{"title":"Taylor","body":"Done. The report is attached."},"thread-id":"conv_taylor01","mutable-content":1,"badge":3,"sound":"default","category":"message"},"hd":{"v":1,"h":"https://app.example.com","c":"conv_taylor01","m":"msg_2102","k":"message","a":{"id":"ag_taylor","name":"Taylor"}}}"#.utf8)
         let userInfo = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let decoded = try #require(MessageNotification.payload(from: userInfo))
-        #expect(decoded.hd.c == "conv_stan01")
-        #expect(decoded.hd.a.id == "ag_stan")
+        #expect(decoded.hd.c == "conv_taylor01")
+        #expect(decoded.hd.a.id == "ag_taylor")
     }
 
     @Test func missingRoutingDataPreservesOriginal() async throws {

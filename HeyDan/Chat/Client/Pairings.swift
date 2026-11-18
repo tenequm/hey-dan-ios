@@ -63,7 +63,7 @@ import UIKit
         #if DEBUG
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
             fixture = true
-            let host = URL(string: "https://app.opx.one")!
+            let host = URL(string: "https://app.example.com")!
             saved.entries[host.absoluteString] = Entry(host: host, pairing: FixtureAppService.pairing,
                 features: ["files", "calls", "push", "voice-picker"])
             saved.active = host.absoluteString
@@ -104,7 +104,7 @@ import UIKit
         guard publishes, identity != publishedIdentity else { return }
         publishedIdentity = identity
         ChatController.shared.selectPairing(active?.pairing,
-            host: active?.host ?? URL(string: "https://app.opx.one")!)
+            host: active?.host ?? URL(string: "https://app.example.com")!)
     }
     private func commit(_ next: Saved) throws(AppError) {
         guard state != .unreadable else { throw .keyUnavailable }

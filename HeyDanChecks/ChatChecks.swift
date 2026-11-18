@@ -49,14 +49,14 @@ final class ChatChecks: XCTestCase {
 
     func testFixtureUnreadRelaunch() {
         launch(["HEYDAN_FIXTURE_CHAT": "1"])
-        let row = app.buttons["chat.conversation.conv_stan01"]
+        let row = app.buttons["chat.conversation.conv_taylor01"]
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         XCTAssertTrue(row.label.contains("2 unread"))
         app.terminate()
         launch(["HEYDAN_FIXTURE_CHAT": "1"])
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         XCTAssertTrue(row.label.contains("2 unread"))
-        XCTAssertEqual(app.buttons.matching(identifier: "chat.conversation.conv_stan01").count, 1)
+        XCTAssertEqual(app.buttons.matching(identifier: "chat.conversation.conv_taylor01").count, 1)
     }
 
     func testPairedList() throws {

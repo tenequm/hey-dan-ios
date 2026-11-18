@@ -8,31 +8,31 @@ final class ChatPushChecks: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.buttons["chat.conversation.conv_stan01"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
         let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "New message")).firstMatch
         print("h5-ready-list")
         XCTAssertTrue(banner.waitForExistence(timeout: 30))
         banner.tap()
-        XCTAssertTrue(app.navigationBars["Stan"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.navigationBars["Taylor"].waitForExistence(timeout: 15))
         XCTAssertTrue(banner.waitForNonExistence(timeout: 10))
         print("h5-ready-suppressed")
         XCTAssertFalse(banner.waitForExistence(timeout: 8))
         print("h5-ready-unknown")
         XCTAssertTrue(banner.waitForExistence(timeout: 30))
         banner.tap()
-        XCTAssertTrue(app.buttons["chat.conversation.conv_stan01"].waitForExistence(timeout: 15))
-        XCTAssertFalse(app.navigationBars["Stan"].exists)
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.navigationBars["Taylor"].exists)
     }
 
     @MainActor func testCommunicationBannerAndTap() {
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_FIXTURE_CHAT"] = "1"
-        app.launchEnvironment["HEYDAN_DEBUG_NOTIFY"] = "conv_stan01"
+        app.launchEnvironment["HEYDAN_DEBUG_NOTIFY"] = "conv_taylor01"
         app.launch()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.buttons["chat.conversation.conv_stan01"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
         XCUIDevice.shared.press(.home)
         let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "New message")).firstMatch
         XCTAssertTrue(banner.waitForExistence(timeout: 20))
@@ -41,6 +41,6 @@ final class ChatPushChecks: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         banner.tap()
-        XCTAssertTrue(app.navigationBars["Stan"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.navigationBars["Taylor"].waitForExistence(timeout: 15))
     }
 }

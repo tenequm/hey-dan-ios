@@ -15,7 +15,7 @@ final class SignedClient: AppService {
     private static let launched = Date()
     #endif
 
-    init(host: URL = URL(string: "https://app.opx.one")!, deviceId: String? = nil,
+    init(host: URL = URL(string: "https://app.example.com")!, deviceId: String? = nil,
          configuration: URLSessionConfiguration = .ephemeral,
          signer: @escaping @Sendable (Data, URL) throws -> Data = { try DeviceKey().sign($0, host: $1) }) {
         #if DEBUG

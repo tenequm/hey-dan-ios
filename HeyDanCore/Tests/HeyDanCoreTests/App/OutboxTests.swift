@@ -3,7 +3,7 @@ import Testing
 @testable import HeyDanCore
 
 private func pending() -> Outbox.Entry {
-    Outbox.Entry(host: URL(string: "https://example.com")!, conversationId: "conv_stan01",
+    Outbox.Entry(host: URL(string: "https://example.com")!, conversationId: "conv_taylor01",
         request: SendRequest(clientId: "stable", text: "", fileIds: []),
         attachments: [Outbox.Attachment(uploadKey: "upload", localFileName: "local", name: "file", mimeType: "text/plain", size: 4, sha256: String(repeating: "0", count: 64))])
 }

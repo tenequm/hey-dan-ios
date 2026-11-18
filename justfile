@@ -217,7 +217,7 @@ server-logs cid:
 sim-checks check="LiveActivityOnLockScreen": gen
     #!/usr/bin/env bash
     set -euo pipefail
-    [ "{{bundle_id}}" = com.tenequm.HeyDan ] || { echo "Simulator push checks require HEYDAN_BUNDLE_ID = com.tenequm.HeyDan in gitignored Local.xcconfig (current: {{bundle_id}})" >&2; exit 1; }
+    [ "{{bundle_id}}" != com.example.HeyDan ] || { echo "Simulator push checks need your own HEYDAN_BUNDLE_ID in gitignored Local.xcconfig, not the placeholder {{bundle_id}}" >&2; exit 1; }
     selector={{quote(check)}}
     case "$selector" in */*) ;; *) selector="HeyDanChecks/test$selector" ;; esac
     udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)

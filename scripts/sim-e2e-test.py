@@ -102,7 +102,7 @@ class ChatResults(unittest.TestCase):
                 self.assertIn('No local stack is running', (output / 'report.md').read_text())
 
     def test_real_bundle_required(self):
-        self.assertTrue(harness.bundle_ready('com.tenequm.HeyDan'))
+        self.assertTrue(harness.bundle_ready('com.yourname.HeyDan'))
         self.assertFalse(harness.bundle_ready('com.example.HeyDan'))
         self.assertFalse(harness.bundle_ready(''))
 

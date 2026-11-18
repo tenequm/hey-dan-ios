@@ -311,7 +311,7 @@ def report():
 
 
 def bundle_ready(bundle):
-    return bundle == 'com.tenequm.HeyDan'
+    return bool(bundle) and bundle != 'com.example.HeyDan'
 
 
 def main():
@@ -345,7 +345,7 @@ def main():
         if not (ROOT / 'HeyDan/Chat/Calls/PairedCallButton.swift').exists():
             result(name, 'skip', 'H6 calls lane is not on this branch yet' + ('; no local stack is running' if no_stack else ''))
     if not bundle_ready(BUNDLE):
-        raise RuntimeError('Simulator push checks require HEYDAN_BUNDLE_ID = com.tenequm.HeyDan in gitignored Local.xcconfig')
+        raise RuntimeError('Simulator push checks need your own HEYDAN_BUNDLE_ID in gitignored Local.xcconfig, not the placeholder com.example.HeyDan')
 
     attempts = os.environ.get('HEYDAN_E2E_ATTEMPTS', '2')
     if attempts not in ('1', '2'):

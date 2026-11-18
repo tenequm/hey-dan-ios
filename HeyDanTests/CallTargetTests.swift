@@ -12,7 +12,7 @@ import Synchronization
         CallHTTP.handler.withLock { $0 = { request in
             seen.withLock { $0.append(request) }
             if request.url!.path == "/app/calls" {
-                return Data("{\"protocol\":6,\"url\":\"wss://example.invalid\",\"token\":\"fixture\",\"callId\":\"call_fixture\",\"attemptId\":\"\(attempt)\",\"agent\":\"Stan\",\"chat\":\"Stan (app)\",\"silenceMs\":1400,\"limit\":{\"ms\":90000,\"kind\":\"duration\"}}".utf8)
+                return Data("{\"protocol\":6,\"url\":\"wss://example.invalid\",\"token\":\"fixture\",\"callId\":\"call_fixture\",\"attemptId\":\"\(attempt)\",\"agent\":\"Taylor\",\"chat\":\"Taylor (app)\",\"silenceMs\":1400,\"limit\":{\"ms\":90000,\"kind\":\"duration\"}}".utf8)
             }
             return Data()
         } }
@@ -21,15 +21,15 @@ import Synchronization
         let key = P256.Signing.PrivateKey()
         let service = SignedClient(host: URL(string: "https://example.invalid")!, deviceId: "dev_test",
             configuration: configuration, signer: { data, _ in try key.signature(for: data).derRepresentation })
-        let conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
+        let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
+            agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service, attemptId: attempt)
         let http = URLSession(configuration: .ephemeral)
         defer { http.invalidateAndCancel() }
         let grant = try await target.grant(over: http)
         XCTAssertEqual(grant.callId, "call_fixture")
-        XCTAssertEqual(grant.agent, "Stan")
+        XCTAssertEqual(grant.agent, "Taylor")
         try await target.end(callId: grant.callId, reason: .noAgent, over: http)
         try await target.cancel(over: http)
         let requests = seen.withLock { $0 }
@@ -69,8 +69,8 @@ import Synchronization
     func testCancelWhileGrantIsPendingUsesTheSameAttempt() async throws {
         let service = CallServiceSpy()
         service.delaysGrant = true
-        let conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
+        let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
+            agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service)
         let http = URLSession(configuration: .ephemeral)
@@ -90,8 +90,8 @@ import Synchronization
 
     func testPairedAttemptPersistsAcrossRetriesAndCleanup() async throws {
         let service = CallServiceSpy()
-        let conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
+        let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
+            agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
         let identity = PairedCallTarget(host: URL(string: "https://example.com")!, deviceId: "dev_test", conversation: conversation)
         let target = CallTarget(paired: identity, service: service)
         let http = URLSession(configuration: .ephemeral)
@@ -136,7 +136,7 @@ import Synchronization
         starts.append(request)
         if delaysGrant { await withCheckedContinuation { pendingGrant = $0 } }
         return CallGrant(protocol: 6, url: "wss://example.com", token: "test", callId: "call_test",
-            attemptId: request.attemptId, agent: "Stan", chat: "Stan (app)", silenceMs: 1400,
+            attemptId: request.attemptId, agent: "Taylor", chat: "Taylor (app)", silenceMs: 1400,
             limit: CallLimit(ms: 3600000, kind: .duration))
     }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) { ends.append((callId, request)) }
