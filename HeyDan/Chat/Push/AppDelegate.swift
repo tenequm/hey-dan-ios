@@ -13,7 +13,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     private var uploaded: [String: String] = [:]
     private var pendingTap: PushData?
     private var reads: [String: Int64] = [:]
-    private var lastBadge: String?
+    private var lastBadge: Badge?
+    private var lastPairing: String?
+    private var lastHosts: [String: String]?
+    private var pendingClears: Set<String> = []
     private var registered = false
     private var invalidEnvironmentLogged = false
 
@@ -29,7 +32,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         Task {
-            for await _ in Observations({ (ChatController.shared.badge, ChatController.shared.conversations, Pairings.shared.active?.host, Pairings.shared.state) }) {
+            for await _ in Observations({ (ChatController.shared.badge, ChatController.shared.conversations, Pairings.shared.entries, Pairings.shared.active?.host, Pairings.shared.state) }) {
                 await synchronizeReadState()
             }
         }
@@ -97,14 +100,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         let hosts = Set(entries.map { $0.host.absoluteString })
         uploaded = uploaded.filter { hosts.contains($0.key) }
+        #if DEBUG
+        if Pairings.shared.isFixture { return }
+        #endif
+        for entry in entries where entry.host != Pairings.shared.active?.host {
+            let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
+            guard let badge = try? await client.conversations().badge,
+                  Pairings.shared.active?.host != entry.host,
+                  Pairings.shared.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else { continue }
+            let roster = Self.badgeHosts()
+            if let total = try? HostBadges.shared?.update(pairings: roster, host: PairedHost.key(entry.host), count: badge.unreadTotal) {
+                try? await UNUserNotificationCenter.current().setBadgeCount(total)
+            }
+        }
         guard let token else { return }
         guard let environment = Self.environment(Bundle.main.object(forInfoDictionaryKey: Self.apsEnvironmentKey) as? String) else {
             if !invalidEnvironmentLogged { CallLog.log(.net, "push invalid_environment"); invalidEnvironmentLogged = true }
             return
         }
-        #if DEBUG
-        if Pairings.shared.isFixture { return }
-        #endif
         for entry in entries where entry.features.contains("push") {
             let key = entry.host.absoluteString
             let value = entry.deviceId + ":" + environment + ":" + token
@@ -134,9 +147,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return readOrder > previous
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        let data = MessageNotification.payload(from: notification.request.content.userInfo)?.hd
-        return await Self.presentation(for: data, host: Pairings.shared.active?.host, conversationID: ChatController.shared.openConversationId)
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        let payload = MessageNotification.payload(from: notification.request.content.userInfo)
+        var options = Self.presentation(for: payload?.hd, host: Pairings.shared.active?.host, conversationID: ChatController.shared.openConversationId)
+        if let payload, let host = PairedHost.key(payload.hd.h),
+           let total = try? HostBadges.shared?.update(pairings: Self.badgeHosts(), host: host, count: payload.aps.badge) {
+            try? await center.setBadgeCount(total)
+            options.remove(.badge)
+        }
+        return options
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
         let data = MessageNotification.payload(from: response.notification.request.content.userInfo)?.hd
@@ -165,40 +184,60 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         } catch { CallLog.log(.net, "push routing_failed \(AppError.map(error).logName)") }
     }
 
+    private static func badgeHosts() -> [String: String] {
+        Dictionary(Pairings.shared.entries.map { (PairedHost.key($0.host), $0.deviceId) }, uniquingKeysWith: { first, _ in first })
+    }
+
     private func synchronizeReadState() async {
         let center = UNUserNotificationCenter.current()
-        guard let active = Pairings.shared.active else {
-            // Readable and unpaired: no screen is left that could clear what the last pairing delivered.
-            guard Pairings.shared.state == .none, lastBadge != "" else { return }
-            do { try await center.setBadgeCount(0) } catch { CallLog.log(.net, "push badge_failed \(CallLog.describe(error))") }
+        let pairings = Pairings.shared
+        guard pairings.state != .unreadable else { return }
+        let hosts = Self.badgeHosts()
+        let active = pairings.active
+        let chat = ChatController.shared
+        let host = active.map { PairedHost.key($0.host) }
+        let identity = active.map { PairedHost.key($0.host) + ":" + $0.deviceId }
+        let badge = chat.host == active?.host && chat.pairing?.deviceId == active?.deviceId ? chat.badge : nil
+        if hosts != lastHosts || identity != lastPairing || badge != lastBadge {
+            do {
+                let total = try HostBadges.shared?.update(pairings: hosts, host: host, count: badge?.unreadTotal)
+                try await center.setBadgeCount(total ?? badge?.unreadTotal ?? 0)
+                lastBadge = badge
+                lastPairing = identity
+                lastHosts = hosts
+            } catch { CallLog.log(.net, "push badge_failed \(CallLog.describe(error))") }
+        }
+        guard let host, let identity else {
             center.removeAllDeliveredNotifications()
-            lastBadge = ""
-            reads = [:]
+            reads.removeAll()
+            pendingClears.removeAll()
             return
         }
-        let host = PairedHost.key(active.host)
-        let identity = host + ":" + active.deviceId
-        let chat = ChatController.shared
-        if let badge = chat.badge {
-            let value = "\(identity):\(badge.rev):\(badge.unreadTotal)"
-            if lastBadge != value {
-                do { try await center.setBadgeCount(badge.unreadTotal); lastBadge = value }
-                catch { CallLog.log(.net, "push badge_failed \(CallLog.describe(error))") }
-            }
-        }
-        var cleared: Set<String> = []
+        guard chat.host == active?.host, chat.pairing?.deviceId == active?.deviceId else { return }
+        var orders: [String: Int64] = [:]
         for conversation in chat.conversations {
             let key = identity + ":" + conversation.id
-            let previous = reads[key]
-            reads[key] = max(previous ?? conversation.readOrder, conversation.readOrder)
-            if Self.clearsDelivered(previous: previous, readOrder: conversation.readOrder) { cleared.insert(conversation.id) }
+            let previous = reads.updateValue(conversation.readOrder, forKey: key)
+            if Self.clearsDelivered(previous: previous, readOrder: conversation.readOrder) { pendingClears.insert(key) }
+            if pendingClears.contains(key) { orders[conversation.id] = conversation.readOrder }
         }
-        guard !cleared.isEmpty else { return }
-        let ids = await center.deliveredNotifications().filter {
-            cleared.contains($0.request.content.threadIdentifier)
-                && MessageNotification.payload(from: $0.request.content.userInfo).flatMap { PairedHost.key($0.hd.h) } == host
-        }.map { $0.request.identifier }
+        guard !orders.isEmpty else { return }
+        let delivered = await center.deliveredNotifications()
+        guard chat.host == active?.host, chat.pairing?.deviceId == active?.deviceId else { return }
+        var unresolved: Set<String> = []
+        let ids = delivered.compactMap { notification -> String? in
+            guard let data = MessageNotification.payload(from: notification.request.content.userInfo)?.hd,
+                  PairedHost.key(data.h) == host, let order = orders[data.c] else { return nil }
+            if chat.reducer.entities[data.m] == nil { unresolved.insert(data.c) }
+            return Self.isRead(data, through: order, entities: chat.reducer.entities) ? notification.request.identifier : nil
+        }
+        for id in orders.keys where !unresolved.contains(id) { pendingClears.remove(identity + ":" + id) }
         center.removeDeliveredNotifications(withIdentifiers: ids)
+    }
+
+    static func isRead(_ data: PushData, through readOrder: Int64, entities: [String: ThreadEntity]) -> Bool {
+        guard let item = entities[data.m]?.identity, item.conversationId == data.c else { return false }
+        return item.order <= readOrder
     }
 
     #if DEBUG

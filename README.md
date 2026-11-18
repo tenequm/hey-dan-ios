@@ -15,7 +15,8 @@ with the screen locked. Saved voice-line links work without pairing.
   request is signed with it. The conversation list, threads (markdown, images, files, question cards), the outbox
   and unread counts follow one server-sent event stream; the thread cache and outbox stay on this phone and out
   of its backups. Pushes arrive as communication notifications through the `HeyDanNotificationService`
-  extension. A thread's Call button asks the host for a call; paired calls always use relay-only ICE.
+  extension. The app and extension share an App Group (`group.$(HEYDAN_BUNDLE_ID)`) to total the last unread
+  counts from all paired hosts. A thread's Call button asks the host for a call; paired calls always use relay-only ICE.
 
 - **CallKit** owns the call: lock-screen controls, AirPods mute and hangup, interruptions, routing.
 - **NanoClaw** admits it: `POST /voice/livekit/token?t=<token>&v=6` returns the LiveKit URL, room token,

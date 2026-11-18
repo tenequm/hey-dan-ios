@@ -45,6 +45,7 @@ targets:
       properties:
         aps-environment: $(APS_ENVIRONMENT)
         com.apple.developer.usernotifications.communication: true
+        com.apple.security.application-groups: [group.$(HEYDAN_BUNDLE_ID)]
     # The Simulator has no FaceTime app, and callservicesd ends every CallKit call it cannot open
     # `facetime://?showInCallUI=1` for ("no UI to host the call"). Simulator builds (Debug and Release) answer for that
     # scheme themselves, so CallKit keeps the call; no device build ever has it. Signing runs after this phase.
@@ -70,6 +71,7 @@ targets:
       path: HeyDan/Info.plist
       properties:
         CFBundleDisplayName: Hey Dan
+        HeyDanBadgeGroup: group.$(HEYDAN_BUNDLE_ID)
         HeyDanAPSEnvironment: $(APS_ENVIRONMENT)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
@@ -139,10 +141,12 @@ targets:
       path: HeyDanNotificationService/HeyDanNotificationService.entitlements
       properties:
         com.apple.developer.usernotifications.communication: true
+        com.apple.security.application-groups: [group.$(HEYDAN_BUNDLE_ID)]
     info:
       path: HeyDanNotificationService/Info.plist
       properties:
         CFBundleDisplayName: Hey Dan
+        HeyDanBadgeGroup: group.$(HEYDAN_BUNDLE_ID)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:

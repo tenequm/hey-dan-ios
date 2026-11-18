@@ -4,6 +4,54 @@ import OSLog
 import UIKit
 import UserNotifications
 
+// The notification extension and app both replace a host's count. Coordinate the whole read-modify-write.
+nonisolated struct HostBadges {
+    struct Entry: Codable, Equatable {
+        var device: String
+        var count = 0
+    }
+
+    let file: URL
+    static var shared: Self? {
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "HeyDanBadgeGroup") as? String,
+              let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return nil }
+        return Self(file: root.appending(path: "badge-counts.json"))
+    }
+
+    func update(pairings: [String: String]? = nil, host: String? = nil, count: Int? = nil) throws -> Int {
+        var coordinationError: NSError?
+        var result: Result<Int, any Error>?
+        NSFileCoordinator().coordinate(writingItemAt: file, options: [], error: &coordinationError) { url in
+            result = Result {
+                let previous: [String: Entry]
+                do { previous = try JSONDecoder().decode([String: Entry].self, from: Data(contentsOf: url)) }
+                catch CocoaError.fileReadNoSuchFile { previous = [:] }
+                var entries = previous
+                if let pairings {
+                    entries = pairings.mapValues { Entry(device: $0) }
+                    for (key, entry) in previous where pairings[key] == entry.device { entries[key] = entry }
+                }
+                if let host, let count { entries[host]?.count = max(0, count) }
+                if entries != previous {
+                    try JSONEncoder().encode(entries).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                }
+                return entries.values.reduce(0) { sum, entry in sum + min(Int.max - sum, entry.count) }
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        return try result!.get()
+    }
+
+    static func incoming(_ original: UNNotificationContent) -> UNNotificationContent {
+        guard let payload = MessageNotification.payload(from: original.userInfo),
+              let host = PairedHost.key(payload.hd.h), let store = shared,
+              let total = try? store.update(host: host, count: payload.aps.badge),
+              let content = original.mutableCopy() as? UNMutableNotificationContent else { return original }
+        content.badge = NSNumber(value: total)
+        return content
+    }
+}
+
 @MainActor enum MessageNotification {
     // The extension logs under the app's subsystem, so `just logs` shows both.
     private static let logger = Logger(subsystem: (Bundle.main.bundleIdentifier ?? "HeyDan")
