@@ -11,6 +11,18 @@ import XCTest
         return (app, call)
     }
 
+    func testSavedLineOptionsOpenSettings() {
+        let app = XCUIApplication()
+        app.launchEnvironment["HEYDAN_PREVIEW_LINES"] = "Stan"
+        app.launchForChecks()
+        XCTAssertTrue(app.staticTexts["Stan"].waitForExistence(timeout: 10))
+        app.buttons["controls.options"].tap()
+        let settings = app.buttons["options.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(app.buttons["Pair a host"].waitForExistence(timeout: 5))
+    }
+
     func testFixtureCallRefusal() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_CALL_REFUSAL": "1"])
         XCTAssertFalse(call.isEnabled)
@@ -80,6 +92,7 @@ import XCTest
         XCTAssertGreaterThanOrEqual(close.frame.height, 44)
         XCTAssertTrue(app.buttons["keys.call"].isEnabled)
         app.buttons["controls.options"].tap()
+        XCTAssertFalse(app.buttons["options.settings"].exists)
         app.buttons["options.voice"].tap()
         XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 5))
         app.buttons["picker.close"].tap()

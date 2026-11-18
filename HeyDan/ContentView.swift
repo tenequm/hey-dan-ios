@@ -11,7 +11,7 @@ struct ContentView: View {
     @State private var optionsHeight: CGFloat = 240
     @State private var optionsVoice: VoiceSettingsModel?
     @State private var voiceTarget: VoiceTarget?
-    @State private var pendingVoiceTarget: VoiceTarget?
+    @State private var optionsDestination: OptionsDestination?
     @State private var settingsBusy = false
     /// Right after "call" the same key reads "cancel": taps are ignored for a moment so a double tap cannot cancel.
     @State private var cancelArmed = false
@@ -26,6 +26,11 @@ struct ContentView: View {
         let model: VoiceSettingsModel
         let agentName: String
         let callID: UUID?
+    }
+
+    private enum OptionsDestination {
+        case voice(VoiceTarget)
+        case settings
     }
 
     var body: some View {
@@ -48,9 +53,12 @@ struct ContentView: View {
             NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
         }
         .sheet(isPresented: $presentsCallOptions, onDismiss: {
-            guard let target = pendingVoiceTarget else { return }
-            pendingVoiceTarget = nil
-            voiceTarget = target
+            switch optionsDestination {
+            case let .voice(target): voiceTarget = target
+            case .settings: showsSettings = true
+            case nil: break
+            }
+            optionsDestination = nil
         }) { callOptions }
         .sheet(item: $voiceTarget) { target in
             VoicePickerSheet(model: target.model, agentName: target.agentName, callID: target.callID)
@@ -406,7 +414,7 @@ struct ContentView: View {
                     Button {
                         guard let model = optionsVoice else { return }
                         let picker = model.loading ? VoiceSettingsModel(service: model.service) : model
-                        pendingVoiceTarget = VoiceTarget(model: picker, agentName: displayName, callID: call.liveCallID)
+                        optionsDestination = .voice(VoiceTarget(model: picker, agentName: displayName, callID: call.liveCallID))
                         presentsCallOptions = false
                     } label: {
                         SettingsRow(title: "Voice", icon: "waveform", detail: optionsVoiceName, navigates: true)
@@ -429,6 +437,18 @@ struct ContentView: View {
                     .padding(.trailing, theme.space.s4)
                     .disabled(settingsBusy || !canChangeTyping)
                     .accessibilityIdentifier(AXID.optionsTyping)
+                }
+                if pairedTarget == nil {
+                    SettingsSection {
+                        Button {
+                            optionsDestination = .settings
+                            presentsCallOptions = false
+                        } label: {
+                            SettingsRow(title: "Voice lines and paired hosts", icon: "phone", navigates: true)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier(AXID.optionsSettings)
+                    }
                 }
             }
             .foregroundStyle(theme.color.textPrimary)
