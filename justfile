@@ -214,7 +214,8 @@ server-logs cid:
 # per Simulator) or ActionButtonStartsCall; HEYDAN_CHECK_LOCKED=1 locks first. Every HEYDAN_* variable reaches the
 # app, as with `just sim`; screenshots land in build/checks. Calls are real: set HEYDAN_HANGUP_AFTER.
 # The call link is seeded by one plain launch (the Simulator's keychain keeps it), never through the test runner's
-# environment: a result bundle records that. The bundle itself lives in a temporary folder, gone on exit.
+# environment: a result bundle records that. HEYDAN_KEEP_FAILED_RESULTS=1 keeps a failing bundle in a private
+# directory under the build folder for sim-checks or app-test. It can contain message text or pairing links.
 sim-checks check="LiveActivityOnLockScreen":
     @python3 scripts/sim_tests.py sim-checks {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}} {{quote(check)}}
 

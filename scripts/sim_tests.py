@@ -1,9 +1,11 @@
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,6 +72,21 @@ def needs_call_link(selector):
     return selector.split('/')[:2] == ['HeyDanChecks', 'HeyDanChecks']
 
 
+@contextmanager
+def test_results(build, keep_failed):
+    with tempfile.TemporaryDirectory() as results:
+        try:
+            yield results
+        except Exception:
+            bundles = list(Path(results).glob('*.xcresult'))
+            if keep_failed and bundles:
+                directory = Path(tempfile.mkdtemp(prefix='failed-tests-', dir=build))
+                for bundle in bundles:
+                    shutil.move(bundle, directory / bundle.name)
+                print(f'Failed result bundle retained locally in {directory}', file=sys.stderr)
+            raise
+
+
 def main(mode, name, folder, bundle, check=None, capture_dir=None):
     env = {k: v for k, v in os.environ.items() if k in
            ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME')}
@@ -79,7 +96,8 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
         raise RuntimeError(f'No Simulator named {name}')
     build = Path(folder).resolve()
     build.mkdir(parents=True, exist_ok=True)
-    with (build / 'HeyDanSimulatorTests.lock').open('a') as lock, tempfile.TemporaryDirectory() as results:
+    with (build / 'HeyDanSimulatorTests.lock').open('a') as lock, test_results(
+            build, os.environ.get('HEYDAN_KEEP_FAILED_RESULTS') == '1') as results:
         fcntl.flock(lock, fcntl.LOCK_EX)
         sim = ['xcrun', 'simctl']
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)

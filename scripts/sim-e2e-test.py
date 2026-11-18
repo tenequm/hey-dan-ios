@@ -26,6 +26,19 @@ class SimulatorSelectionTests(unittest.TestCase):
             self.assertFalse(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
 
 
+    def test_result_bundle_retained_only_for_an_opted_in_failure(self):
+        for keep, fail in ((False, True), (True, False), (True, True)):
+            with self.subTest(keep=keep, fail=fail), tempfile.TemporaryDirectory() as build:
+                try:
+                    with sim_tests.test_results(Path(build), keep) as results:
+                        (Path(results) / 'test.xcresult').mkdir()
+                        if fail:
+                            raise RuntimeError('test failed')
+                except RuntimeError:
+                    self.assertTrue(fail)
+                self.assertEqual(bool(list(Path(build).glob('failed-tests-*/*.xcresult'))), keep and fail)
+
+
 # Real app log lines (trimmed), so a changed log line or SDK error description fails here first.
 JEV_CALL = '''\
 19:48:04.939 N call c=3667770a +0ms claim line=4462b845 mode=auto
