@@ -37,19 +37,11 @@ final class ChatComposerChecks: XCTestCase {
         XCTAssertFalse(app.buttons["composer.remove"].exists)
     }
 
-    @MainActor func testRefusedSendKeepsDraftAndTray() throws {
-        let app = try launch(attachment: true, bytes: 26 * 1024 * 1024)
-        XCTAssertTrue(app.buttons["composer.remove"].waitForExistence(timeout: 10))
-        let field = app.textFields["composer.text"]
-        field.tap()
-        field.typeText("Keep draft")
-        app.buttons["composer.send"].tap()
-        let enabled = NSPredicate(format: "enabled == true")
-        expectation(for: enabled, evaluatedWith: app.buttons["composer.send"])
-        waitForExpectations(timeout: 10)
-        XCTAssertEqual(field.value as? String, "Keep draft")
-        XCTAssertTrue(app.buttons["composer.remove"].exists)
-        XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'chat.message.' AND label CONTAINS %@ AND label CONTAINS 'Reached'", "Keep draft")).firstMatch.exists)
+    @MainActor func testOversizedPickShowsLimitWithoutStaging() throws {
+        let app = try launch(attachment: true, bytes: 25 * 1024 * 1024 + 1)
+        XCTAssertTrue(app.staticTexts["Files must be at most 25 MiB."].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["composer.remove"].exists)
+        XCTAssertFalse(app.buttons["composer.send"].isEnabled)
     }
 
     @MainActor func testFixtureImageAndPDFOpen() throws {

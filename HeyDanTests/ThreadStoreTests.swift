@@ -246,6 +246,26 @@ struct ThreadStoreTests {
         chat.setActive(false)
     }
 
+    @Test func picksRespectFileSizeAndTrayCapacity() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(count: Int(Outbox.maximumFileBytes)).write(to: root)
+        let accepted = try await AttachmentStaging.document(root)
+        defer { AttachmentStaging.remove(accepted) }
+        let file = try FileHandle(forWritingTo: root)
+        try file.truncate(atOffset: UInt64(Outbox.maximumFileBytes + 1))
+        try file.close()
+        for photo in [false, true] {
+            do {
+                _ = try await photo ? AttachmentStaging.photo(root) : AttachmentStaging.document(root)
+                Issue.record("Accepted an oversized pick")
+            } catch AppError.limit(let message) {
+                #expect(message == Outbox.fileLimitMessage)
+            }
+        }
+        try AttachmentStaging.checkCapacity(Outbox.maximumFiles - 1)
+        #expect(throws: AppError.self) { try AttachmentStaging.checkCapacity(Outbox.maximumFiles) }
+    }
+
     @MainActor @Test func closeFlushesReadAndOversizedDraftIsRejected() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = await paired(ScriptedAppService(), files: OutboxFile(root: root))
@@ -274,6 +294,31 @@ struct ThreadStoreTests {
         let snapshot = try await store.load(host: host, deviceId: "device")
         #expect(snapshot.cursor == 10)
         #expect(snapshot.conversations == [conversation(seq: 10)])
+    }
+
+    @MainActor @Test(arguments: [Outbox.State.failed, .outcomeUnknown])
+    func discardingFailedDeliveryRemovesEntryAndCopy(state: Outbox.State) async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = OutboxFile(root: root)
+        let chat = await paired(ScriptedAppService(), files: files)
+        let device = FixtureAppService.pairing.deviceId
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appending(path: "draft.txt")
+        try Data("draft".utf8).write(to: source)
+        let attachments = try await files.stage([StagedAttachment(fileURL: source, name: "draft.txt", mimeType: "text/plain")],
+                                                host: host, deviceId: device)
+        let copy = await files.directory(host: host, deviceId: device).appending(path: try #require(attachments.first).localFileName)
+        let entry = Outbox.Entry(host: host, conversationId: "conv_taylor01",
+                                 request: SendRequest(clientId: "discard", text: "", fileIds: []), state: state, attachments: attachments)
+        chat.outbox.enqueue(entry)
+        try await chat.saveOutbox()
+        #expect(FileManager.default.fileExists(atPath: copy.path))
+        #expect(try await files.load(host: host, deviceId: device) == [entry])
+        await chat.discard(clientId: entry.request.clientId)
+        #expect(chat.outbox.entries.isEmpty)
+        #expect(try await files.load(host: host, deviceId: device).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: copy.path))
+        #expect(FileManager.default.fileExists(atPath: source.path))
     }
 
     @MainActor @Test func answerErrorsAndExplicitRetry() async throws {

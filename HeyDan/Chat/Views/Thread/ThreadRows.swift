@@ -59,6 +59,7 @@ struct MessageRow: View {
     let message: Message
     var outboxState: Outbox.State?
     var retry: (String) -> Void = { _ in }
+    var discard: (String) -> Void = { _ in }
     @State private var confirmsRetry = false
 
     private var visibleCard: Card? {
@@ -126,9 +127,16 @@ struct MessageRow: View {
                 Text(state.rawValue.capitalized).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             case .failed, .outcomeUnknown:
                 if let error = message.deliveryError { Text(error.message).foregroundStyle(theme.color.danger) }
-                if outboxState?.canSendAgain == true, let id = message.clientId {
-                    Button("Send again") {
-                        if state == .outcomeUnknown { confirmsRetry = true } else { retry(id) }
+                if let id = message.clientId {
+                    HStack {
+                        if outboxState?.canSendAgain == true {
+                            Button("Send again") {
+                                if state == .outcomeUnknown { confirmsRetry = true } else { retry(id) }
+                            }
+                        }
+                        if outboxState != nil {
+                            Button("Discard", role: .destructive) { discard(id) }
+                        }
                     }
                 }
             case .unknown: EmptyView()
@@ -227,6 +235,7 @@ struct OutboxRow: View {
                     }
                     .foregroundStyle(theme.color.accentText)
                     .textRole(theme.type.caption, theme.weight.bold)
+                    Button("Discard", role: .destructive) { discard(entry.request.clientId) }
                 }
             }
             .textRole(theme.type.caption)

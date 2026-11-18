@@ -47,7 +47,7 @@ struct ScreenCaptureFixture: View {
         case "list": ConversationListSpecimen(name: "List/" + (request.scenario ?? "Activity"))
         case "pairing": PairingView()
         case "paired": PairingView(paired: Pairings.shared.active)
-        case "lines": VoiceLinesSettings()
+        case "lines": NavigationStack { VoiceLinesSettings() }
         case "call":
             let target = PairedCallTarget(host: FixtureAppService.host, deviceId: FixtureAppService.pairing.deviceId,
                                           conversation: FixtureContent.conversation)

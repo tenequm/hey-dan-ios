@@ -102,7 +102,7 @@ struct ThreadContent: View {
                 ForEach(rows, id: \.presentationID) { row in
                     switch row {
                     case .entity(.message(let message)):
-                        MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry)
+                        MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
                             .id(row.presentationID)
                     case .entity(.question(let question)):
                         QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }

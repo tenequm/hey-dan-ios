@@ -24,6 +24,7 @@ struct HostDetail: View {
             ZStack {
                 HStack {
                     GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() }
+                        .accessibilityIdentifier("chat.settings.host.back")
                     Spacer()
                 }
                 VStack {

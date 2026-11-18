@@ -79,6 +79,7 @@ struct ComposerView: View {
                 .accessibilityLabel("Use keyboard dictation")
                 .accessibilityIdentifier(AXID.composerDictation)
                 Button {
+                    importFailure = nil
                     sending = true
                     Task {
                         defer { sending = false }
@@ -118,32 +119,14 @@ struct ComposerView: View {
         }
         .task(id: importURLs) {
             guard !importURLs.isEmpty else { return }
-            staging = true
-            importFailure = nil
-            defer { staging = false }
-            for url in importURLs {
-                do {
-                    let attachment = try await AttachmentStaging.document(url)
-                    if Task.isCancelled { AttachmentStaging.remove(attachment); return }
-                    draftFiles.urls.insert(attachment.fileURL)
-                    attachments.append(attachment)
-                } catch { if !Task.isCancelled { importFailure = Self.unreadable } }
-            }
+            await stage(importURLs) { try await AttachmentStaging.document($0) }
             importURLs = []
         }
         .task(id: photos) {
             guard !photos.isEmpty else { return }
-            staging = true
-            importFailure = nil
-            defer { staging = false }
-            for photo in photos {
-                do {
-                    if let picked = try await photo.loadTransferable(type: PickedPhoto.self) {
-                        if Task.isCancelled { AttachmentStaging.remove(picked.attachment); return }
-                        draftFiles.urls.insert(picked.attachment.fileURL)
-                        attachments.append(picked.attachment)
-                    } else { importFailure = Self.unreadable }
-                } catch { if !Task.isCancelled { importFailure = Self.unreadable } }
+            await stage(photos) { photo in
+                guard let picked = try await photo.loadTransferable(type: PickedPhoto.self) else { throw CocoaError(.fileReadUnknown) }
+                return try picked.result.get()
             }
             photos = []
         }
@@ -154,6 +137,24 @@ struct ComposerView: View {
                 importURLs = [URL(fileURLWithPath: path)]
             }
             #endif
+        }
+    }
+
+    private func stage<Item: Sendable>(_ items: [Item], load: (Item) async throws -> StagedAttachment) async {
+        staging = true
+        importFailure = nil
+        defer { staging = false }
+        for item in items {
+            guard !Task.isCancelled else { return }
+            do {
+                try AttachmentStaging.checkCapacity(attachments.count)
+                let attachment = try await load(item)
+                if Task.isCancelled { AttachmentStaging.remove(attachment); return }
+                draftFiles.urls.insert(attachment.fileURL)
+                attachments.append(attachment)
+            } catch {
+                if !Task.isCancelled { importFailure = (error as? AppError)?.message ?? Self.unreadable }
+            }
         }
     }
 }
