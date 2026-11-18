@@ -36,7 +36,8 @@ struct PairedSettingsSection: View {
                             Toggle(isOn: Binding(get: { notifications }, set: { _ in
                                 if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
                             })) {
-                                SettingsRow(title: "Message notifications", icon: "bell")
+                                SettingsRow(title: "Message notifications", icon: "bell",
+                                            subtitle: "Show replies and questions on the lock screen")
                             }
                             .padding(.trailing, theme.space.s4).tint(theme.color.accent)
                         }

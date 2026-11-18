@@ -21,13 +21,15 @@ struct HostDetail: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: theme.space.s3) {
-                GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() }
-                VStack(alignment: .leading) {
+            ZStack {
+                HStack {
+                    GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() }
+                    Spacer()
+                }
+                VStack {
                     Text(name).textRole(theme.type.body, theme.weight.bold)
                     Text(connection).textRole(theme.type.label).foregroundStyle(theme.color.textSecondary)
                 }
-                Spacer()
             }
             .padding(.horizontal, theme.space.s4).padding(.vertical, theme.space.s1_5)
             ScrollView {
@@ -45,17 +47,19 @@ struct HostDetail: View {
                         }
                     }
                     SettingsSection {
-                        Button {
+                        Toggle(isOn: Binding(get: { active }, set: { selected in
+                            guard selected else { return }
                             do { try Pairings.shared.setActive(host: entry.host) }
                             catch { self.error = AppError.map(error).message }
-                        } label: {
-                            SettingsRow(title: active ? "Active host" : "Select host", icon: "star",
-                                        detail: active ? "Selected" : nil)
+                        })) {
+                            SettingsRow(title: "Active host", icon: "star", subtitle: "Open chats on this host")
                         }
+                        .padding(.trailing, theme.space.s4).tint(theme.color.accent)
                         .disabled(active)
                     }
                     SettingsSection(footer: "This phone forgets the host's device key. Your chats stay on the host.") {
-                        Button { removing = true } label: { SettingsRow(title: "Unpair", icon: "link.badge.minus", destructive: true) }
+                        Button { removing = true } label: { SettingsRow(title: "Unpair this host", icon: "trash", destructive: true) }
+                            .accessibilityLabel("Unpair")
                     }
                     if let error { Text(error).textRole(theme.type.footnote).foregroundStyle(theme.color.danger) }
                 }

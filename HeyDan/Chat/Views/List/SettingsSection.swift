@@ -53,7 +53,7 @@ struct SettingsRow: View {
             if navigates { Image(systemName: "chevron.right").foregroundStyle(theme.color.chevron) }
         }
         .padding(.horizontal, theme.space.s4).padding(.vertical, theme.space.s3)
-        .frame(minHeight: theme.control.touchTarget)
+        .frame(minHeight: theme.control.touchTarget + theme.space.s3)
         .foregroundStyle(destructive ? theme.color.danger : theme.color.textPrimary)
         .contentShape(Rectangle())
     }
