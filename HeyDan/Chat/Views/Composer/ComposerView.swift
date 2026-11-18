@@ -140,7 +140,7 @@ struct ComposerView: View {
         }
     }
 
-    private func stage<Item>(_ items: [Item], load: (Item) async throws -> StagedAttachment) async {
+    private func stage<Item: Sendable>(_ items: [Item], load: (Item) async throws -> StagedAttachment) async {
         staging = true
         importFailure = nil
         defer { staging = false }
