@@ -1,5 +1,6 @@
 #if DEBUG
 import SwiftUI
+import HeyDanCore
 
 /// `HEYDAN_GALLERY=<Component>` shows one design component in its states, for a Simulator screenshot set beside the
 /// pen's (`.local/redesign/<Component>/`). Each state's frame in points goes to Caches/gallery-frames.json, so a
@@ -17,7 +18,8 @@ struct Gallery: View {
                     GlassIconButton(title: "Back", systemImage: "chevron.left") {}
                         .galleryButton(name)
                 case "ThreadCallButton": ThreadCallLabel().galleryButton(name)
-                default: Text("No gallery for \(name)").textRole(theme.type.body).foregroundStyle(theme.color.textSecondary)
+                default: threadItem.frame(width: itemWidth).galleryItem(name)
+
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -25,6 +27,59 @@ struct Gallery: View {
         .background(theme.color.surface)
         .galleryItem("viewport")
         .onPreferenceChange(GalleryFrames.self) { save($0) }
+    }
+
+    private var itemWidth: CGFloat {
+        if name.hasPrefix("ComposerView") { return 402 }
+        if name.hasPrefix("AttachmentView") { return name.hasSuffix("Image") ? 240 : 280 }
+        return 370
+    }
+
+    @ViewBuilder private var threadItem: some View {
+        let values = ThreadPreviewValues.self
+        switch name {
+        case "StatusPill", "StatusPill-Inline":
+            StatusPill(status: values.statusworking, style: name == "StatusPill" ? .capsule : .inline)
+        case "HistoryLoader": HistoryLoader(loading: true)
+        case "MessageRow-User":
+            MessageRow(message: sampleUserMessage)
+        case "MessageRow-Agent": MessageRow(message: values.agentMarkdown0)
+        case "CodeBlock": MessageBody(text: "```bash\n# Verify the backup\nbackup check\n```")
+        case "QuestionCard", "QuestionCard-Answered":
+            QuestionCard(agentName: "Taylor", question: name == "QuestionCard" ? values.questionopen : values.questionanswered)
+        case "OutboxRow-Sending", "OutboxRow-Failed":
+            OutboxRow(entry: Outbox.Entry(host: URL(string: "https://example.invalid")!, conversationId: "sample",
+                request: SendRequest(clientId: "sample", text: "Also send me the backup log.", fileIds: []),
+                state: name.hasSuffix("Failed") ? .failed : .queued), retry: { _ in }, discard: { _ in })
+        case "AttachmentView-Image", "AttachmentView-File":
+            let isImage = name.hasSuffix("Image")
+            let file = FileAttachment(id: "sample", name: isImage ? "Photo.png" : "backup.log",
+                                      mimeType: isImage ? "image/png" : "text/plain", size: 48_211,
+                                      kind: isImage ? .image : .file, width: 240, height: 180)
+            AttachmentView(file: file, download: { _ in Self.samplePhoto })
+        case "ComposerView", "ComposerView-Typing", "ComposerView-Staged", "StagedAttachmentTray":
+            ComposerView(features: ["files"], send: { _, _ in false },
+                         text: name.hasSuffix("Typing") ? "Please check the last backup\nand send the log." : "",
+                         attachments: name.hasSuffix("Staged") || name == "StagedAttachmentTray" ?
+                             [StagedAttachment(fileURL: Self.samplePhoto, name: "Photo.png", mimeType: "image/png")] : [])
+        default: EmptyView()
+        }
+    }
+
+    private var sampleUserMessage: Message {
+        var message = ThreadPreviewValues.voiceCaller0
+        message.voice = nil
+        message.text = "Why did the nightly backup fail? Can you fix it before tonight?"
+        return message
+    }
+
+    private static var samplePhoto: URL {
+        let url = URL.cachesDirectory.appending(path: "gallery-photo.png")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? UIImage(systemName: "photo")?.withTintColor(.systemGray, renderingMode: .alwaysOriginal)
+                .pngData()?.write(to: url, options: .atomic)
+        }
+        return url
     }
 
     private func save(_ frames: [String: CGRect]) {

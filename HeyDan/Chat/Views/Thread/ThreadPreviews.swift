@@ -2,7 +2,7 @@
 import SwiftUI
 import HeyDanCore
 
-private enum ThreadPreviewValues {
+enum ThreadPreviewValues {
     static func decode<T: Decodable>(_ json: String) -> T {
         try! JSONDecoder().decode(T.self, from: Data(json.utf8))
     }
