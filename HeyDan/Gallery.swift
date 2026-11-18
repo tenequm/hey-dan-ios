@@ -39,7 +39,7 @@ struct Gallery: View {
         let values = ThreadPreviewValues.self
         switch name {
         case "StatusPill", "StatusPill-Inline":
-            StatusPill(status: values.statusworking, style: name == "StatusPill" ? .capsule : .inline)
+            StatusPill(status: sampleStatus, style: name == "StatusPill" ? .capsule : .inline)
         case "HistoryLoader": HistoryLoader(loading: true)
         case "MessageRow-User":
             MessageRow(message: sampleUserMessage)
@@ -64,6 +64,12 @@ struct Gallery: View {
                              [StagedAttachment(fileURL: Self.samplePhoto, name: "Photo.png", mimeType: "image/png")] : [])
         default: EmptyView()
         }
+    }
+
+    private var sampleStatus: Status {
+        var status = ThreadPreviewValues.statusworking
+        status.at = Int64(Date.now.addingTimeInterval(-42).timeIntervalSince1970 * 1_000)
+        return status
     }
 
     private var sampleUserMessage: Message {

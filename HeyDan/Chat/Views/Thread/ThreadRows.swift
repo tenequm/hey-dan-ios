@@ -26,7 +26,7 @@ struct StatusPill: View {
                     Image(systemName: status.state == .working ? "circle.dashed" : "questionmark.bubble").foregroundStyle(ink)
                 }
                 Text(status.label ?? status.state.rawValue.capitalized)
-                if style == .capsule, status.state == .working {
+                if style == .capsule, status.state == .working, status.at > 0 {
                     Text(Date(timeIntervalSince1970: Double(status.at) / 1000), style: .timer)
                         .monospacedDigit().fixedSize().foregroundStyle(theme.color.textSecondary)
                 }
