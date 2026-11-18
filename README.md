@@ -1,251 +1,152 @@
 # Hey Dan
 
+Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agents: chat, push, calls.
+
 <p align="center">
-  <img src="docs/screenshots/ready.png" width="280" alt="Hey Dan ready to call: hands-free mode, voice commands and the call button">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/on-call.png" width="280" alt="Hey Dan on a call, waiting for the wake phrase Hey Dan">
+  <img src="docs/screenshots/list.png" width="200" alt="Chat list with three agents: one working, one done, one waiting for input">
+  <img src="docs/screenshots/thread.png" width="200" alt="A thread with a markdown reply, a code block and a photo">
+  <img src="docs/screenshots/call.png" width="200" alt="A call with the agent speaking, live captions and the Mute, Hands-free, Options and End controls">
+  <img src="docs/screenshots/push.png" width="200" alt="An agent's reply as a notification on the lock screen">
 </p>
 
-Native iPhone client for [NanoClaw](https://github.com/tenequm/nanoclaw): chat by text with your paired agents, get
-their replies as push notifications, and call them. Press the Action Button, talk to the agent; the call keeps going
-with the screen locked. Saved voice-line links work without pairing.
+<details>
+<summary>More screens</summary>
 
-- **Chat** (the nanoclaw app channel, protocol 1): pair once with the one-time link the host's `/pair` prints
-  (Settings > Pair a host). Each paired host gets its own Secure Enclave key that never leaves the phone, and every
-  request is signed with it. The conversation list, threads (markdown, images, files, question cards), the outbox
-  and unread counts follow one server-sent event stream; the thread cache and outbox stay on this phone and out
-  of its backups. Pushes arrive as communication notifications through the `HeyDanNotificationService`
-  extension. The app and extension share an App Group (`group.$(HEYDAN_BUNDLE_ID)`) to total the last unread
-  counts from all paired hosts. A thread's Call button asks the host for a call; paired calls always use relay-only ICE.
+<p align="center">
+  <img src="docs/screenshots/pairing.png" width="160" alt="Pair a host: paste the one-time pairing link">
+  <img src="docs/screenshots/paired.png" width="160" alt="Paired: the host is ready and lists its agents">
+  <img src="docs/screenshots/composer.png" width="160" alt="The composer with a file staged to send">
+  <img src="docs/screenshots/rich-card.png" width="160" alt="A rich card with a table and a bar chart">
+</p>
+<p align="center">
+  <img src="docs/screenshots/call-options.png" width="160" alt="Call options: the agent's voice and the typing sound">
+  <img src="docs/screenshots/host.png" width="160" alt="A paired host: status, agents, active host and unpair">
+  <img src="docs/screenshots/voice-picker.png" width="160" alt="Voice picker: an agent's provider and voice, saved on the host">
+</p>
 
-- **CallKit** owns the call: lock-screen controls, AirPods mute and hangup, interruptions, routing.
-- **NanoClaw** admits it: `POST /voice/livekit/token?t=<token>&v=6` returns the LiveKit URL, room token,
-  call id and the host's `protocol`; `POST /voice/livekit/end` hangs up. The contract lives in `HeyDanCore` and
-  mirrors nanoclaw's `src/channels/voice-mode-protocol.ts` and its browser call page,
-  `.claude/skills/add-voice-mode/ui/src/lib/livekit-call.ts` (join timeout, end reasons, DTX off).
-- **Protocols 6 and 4**: the app asks for protocol 6 on every call. A protocol 6 host says `protocol: 6` and its
-  worker uses `nanoclaw.voice-mode.*` names; an older host ignores `v`, names no protocol and is protocol 4, whose
-  worker uses `nanoclaw.voice.*` (`voice-livekit-protocol.ts`). The app picks the names per call from the grant
-  (`VoiceProtocol.Names`); a grant naming any other protocol is never joined: the app ends that call on the host
-  and asks the caller to update. Below, `<ns>` is the call's namespace.
-- **LiveKit Swift** carries the audio. The app shows connecting, listening, thinking
-  (`<ns>.thinking`), speaking (`lk.agent.state`), and why a call ended.
-- **Voice lines**: several call links, kept in one Keychain item (`voice-lines`; the older single
-  `call-link` item moves into it on first launch). Each line is named for the agent its host says answers
-  it (`GET /voice/info`, or the grant on its first call). Settings picks the line the Action Button calls.
-- **Action Button**: a shortcut running the Call agent intent starts the call in the background, on a locked
-  phone too, without opening the app (see [Action Button](#action-button)). The Start conversation intent is
-  the backup: it opens Hey Dan (on a locked phone after Face ID) and starts the call there; its optional Line
-  parameter lets a shortcut call one agent in particular.
-- **Tailscale precheck**: the lines are tailnet-only. Before the microphone prompt and before CallKit
-  shows a call, the app looks for a tailnet address on the phone's interfaces; with none, and the line's
-  host resolving only to tailnet addresses, it still asks the host for the call on a 4 s timeout and says
-  Tailscale looks off only when that cannot reach it. A misread never blocks a call, and the app still
-  says so when it cannot reach the host later.
-- **Transcript and spoken commands**, drawn like the browser page's screen and control rail: the worker's
-  captions (`lk.transcription` text streams) and its turn, reply and review topics fold into a live
-  transcript the way the browser page folds them, and auto mode's wake switch, pause sending and typing
-  sound go to the worker over its `<ns>.settings` RPC (once per call, after setup) when it
-  advertises commands vocabulary "2" or "3".
-- **Manual mode** (the page's review mode), when the worker sets `<ns>.review` = "1": talk, done,
-  read the draft, then send or discard it, over the worker's `<ns>.{mode,talk,done,send,discard}`
-  RPCs; the hands-free | Manual pick is kept for the next call.
-- **Live Activity** (the `HeyDanActivity` widget extension): the call's agent, state and clock on the lock
-  screen and in the Dynamic Island, with an end key.
-- **Logs**: subsystem = the app's bundle ID, one category per area, built only from ids, states, codes and
-  durations (never a token, URL or anything said). Each call line carries `c=<call> cid=<host callId> +ms`.
+</details>
+
+## What it does
+
+- **Chat** with markdown and code, photos and files, question cards you answer with a tap, and rich cards with
+  fields, tables and charts. What you send offline goes out when the host is back.
+- **Replies on the lock screen** as communication notifications, with one unread badge across all your hosts.
+- **Calls** through CallKit, so they keep going on the lock screen: start one from a thread or the Action Button,
+  talk hands-free or in Manual mode (record, review, then send), follow live captions, and change the agent's voice
+  or the typing sound in the Call options sheet.
+- **Pairing** by one-time link: each host gets its own Secure Enclave key on the phone, and requests to the host are
+  signed with it. Pair several hosts and pick the active one.
+- **Voice lines** without pairing: save a host's call link and call the agent that answers it.
+- **Live Activity**: the call's agent, state and clock on the lock screen and in the Dynamic Island, with an end key.
+
+## How it works
+
+Chat goes to your NanoClaw host's [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) as
+signed HTTPS requests, and one server-sent event stream keeps the chat list, threads and unread counts current. New
+replies arrive as APNs pushes, which the notification service extension turns into communication notifications.
+Calls run over [LiveKit](https://github.com/livekit/client-sdk-swift): a paired call with relay-only ICE, a voice line
+through the host's voice mode. The protocol details are in [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host).
 
 ## Requirements
 
-- macOS with Xcode 27 (iOS 27 SDK and Simulator runtime); an iPhone on iOS 27 to run it on a device.
-- Swift 6.2+ (ships with Xcode 27).
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) and [just](https://github.com/casey/just);
-  [jq](https://jqlang.org) for the Simulator and device recipes; GNU `timeout` (from
-  [coreutils](https://www.gnu.org/software/coreutils/)) for `just sim-checks` and `just sim-e2e`; Python 3.9+
-  for `just test` and `just sim-e2e`; [uv](https://docs.astral.sh/uv/) for `just testflight`; `ssh` only for
-  the recipes that read your server.
-- An Apple Developer team for device builds and TestFlight (Simulator and unsigned builds need none).
+- A Mac with Xcode 27 (iOS 27 SDK and Simulator runtime) and an iPhone on iOS 27.
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen), [just](https://github.com/casey/just) and [jq](https://jqlang.org);
+  Python 3.9+ and GNU `timeout` (from [coreutils](https://www.gnu.org/software/coreutils/)) for the test recipes;
+  [uv](https://docs.astral.sh/uv/) for `just testflight`.
+- An Apple Developer team for device builds and TestFlight; Simulator and unsigned builds need none.
+- A [NanoClaw](https://github.com/tenequm/nanoclaw) host the phone reaches over HTTPS: its
+  [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) for chat, pushes and paired calls,
+  or only [voice mode](https://github.com/tenequm/nanoclaw/blob/main/.claude/skills/add-voice-mode/SKILL.md) for
+  voice lines.
 
-## Server
+## Getting started
 
-Hey Dan is only a client: it needs your own [NanoClaw](https://github.com/tenequm/nanoclaw) with voice
-mode set up by its
-[add-voice-mode skill](https://github.com/tenequm/nanoclaw/blob/main/.claude/skills/add-voice-mode/SKILL.md).
-Each voice line on that server has an HTTPS call link, `https://<your-host>/voice?t=<token>`; that link is
-what the app stores. The phone must reach the host: the app's Tailscale precheck assumes a tailnet-only
-host, but any HTTPS host the phone can reach works.
+1. Copy the local config, which stays out of git:
+   - `Local.xcconfig` from [Local.xcconfig.example](Local.xcconfig.example): your `HEYDAN_BUNDLE_ID` and
+     `DEVELOPMENT_TEAM`. Without it the bundle ID is `com.example.HeyDan` and there is no team.
+   - `.env.local` from [.env.local.example](.env.local.example), which `just` loads: `TEST_CALL_LINK` for Simulator
+     calls, `NANOCLAW_SSH` and `NANOCLAW_DIR` for `just server-logs`, `ASC_ENV_CMD` and `ASC_APP_ID` for TestFlight.
+     Point `TEST_CALL_LINK` at a test agent's line, never your main agent's: a test turn keeps that agent busy.
+   - `local.just` (optional): your own recipes, imported by the [justfile](justfile).
+2. `just gen` generates `HeyDan.xcodeproj` from [project.yml](project.yml).
+3. Install: `just device` signs, installs and launches the app on the connected iPhone; or ship it through
+   [TestFlight](#testflight).
+4. Pair a host: send `/pair` to your agent in Telegram, or run `ncl devices pair --user <user-id> --agents <agent-id>`
+   on the host. In Hey Dan tap **Pair a host** (in Settings, which opens on first launch, or **+** on the chat list),
+   then **Paste** and **Pair with ...**. The link works once and expires after 10 minutes. For pushes, the host needs
+   an APNs key from your team and `APP_APNS_TOPIC` set to your `HEYDAN_BUNDLE_ID`.
+5. Or call without pairing: in Settings > Calls > Voice lines, add the call link from the host's voice mode
+   (`https://<host>/voice?t=<token>`). With several lines, tap the one the Action Button should call. A tailnet-only
+   host needs Tailscale on the phone.
+6. Set up the Action Button.
 
-## Local config
-
-Owner-specific values stay out of git; copy the examples and fill them in:
-
-- `Local.xcconfig` (from `Local.xcconfig.example`): `HEYDAN_BUNDLE_ID` and `DEVELOPMENT_TEAM`, read by
-  `Config.xcconfig` for every target and by the recipes. Without it the bundle ID is `com.example.HeyDan`
-  and there is no team.
-- `.env.local` (from `.env.local.example`, loaded by `just`): the test line's call link for Simulator calls
-  (`TEST_CALL_LINK`), the server for `just server-logs` (`NANOCLAW_SSH`/`NANOCLAW_DIR`), and
-  `ASC_ENV_CMD`/`ASC_APP_ID` for `just testflight`. A recipe that needs an unset value says which one.
-- `local.just` (optional): your own recipes or aliases, imported by the `justfile`.
-
-## Setup
-
-1. Fill in the local config above, then `just gen` and open `HeyDan.xcodeproj`.
-2. Run on the iPhone (`just device`, automatic signing), or ship it through TestFlight (below).
-3. Add each voice line's call link (`https://voice.example.com/voice?t=...`) in Settings and pick the line
-   the Action Button calls. With a tailnet-only host, Tailscale must be connected on the phone.
-4. Assign the Action Button as [Action Button](#action-button) says.
-
-## Action Button
+### Action Button
 
 1. Shortcuts > + > Add Action > Hey Dan > Call agent.
-2. Agent: it comes filled in with the line picked in Hey Dan; change it to call another agent.
-3. Call type: Audio. Do not choose Ask Each Time.
-4. Settings > Action Button > Shortcut > that shortcut.
+2. Agent: it comes filled in with the line picked in Hey Dan (with no saved line, the active host's first agent);
+   change it to call another agent.
+3. Call type: Audio, not Ask Each Time.
+4. iOS Settings > Action Button > Shortcut > that shortcut.
 
-A press then calls the agent with the phone locked and Hey Dan out of sight: the call shows on the lock screen
-and in the Dynamic Island. Call agent is iOS 27's phone start-call intent (`.phone.startCall` schema), and a
-call started through it passes CallKit's user-intent check in the background; a plain intent started from the
-background does not ("user intent could not be validated"). Both fields must be saved in the shortcut, not
-left to Ask Each Time: the saved shortcut is the setup proven on a locked iPhone (iOS 27.2). If iOS still refuses the call, the shortcut says so; then
-use Start conversation (Shortcuts > Hey Dan > Start conversation, or Siri: "Talk to Hey Dan"), which opens Hey
-Dan after Face ID and starts the call there, or open Hey Dan and call from its screen.
+A press then calls with the phone locked and Hey Dan out of sight: Call agent uses iOS 27's start-call intent schema,
+which lets CallKit start a call from the background. Keep both fields saved in the shortcut; that setup is proven on
+a locked iPhone (iOS 27.2). If iOS still refuses the call, the shortcut says so. Then use Start conversation
+(Shortcuts > Hey Dan > Start conversation, or Siri: "Talk to Hey Dan"): it opens Hey Dan after Face ID and starts the
+call there.
 
 ## Development
 
-- `just test` runs the `HeyDanCore` tests on the Mac (no simulator needed) and the `just sim-e2e` harness's
-  tests (its log grading against recorded app log lines); `just build` compile-checks for a device without
-  signing. `just app-test` runs the app-hosted `HeyDanTests` (signed client, thread store, call targets,
-  notification content) in the Simulator; it shares one build with `just sim-checks` (see [AGENTS.md](AGENTS.md)).
-- Chat UI checks: `just sim-checks ChatThreadChecks` (or `ChatPairingChecks`, `ChatComposerChecks`,
-  `ChatPushChecks`, `ChatCallChecks`, a `Class/test` selector) run against fixture data, no server needed. DEBUG
-  builds take `HEYDAN_FIXTURE_CHAT=1` for a paired fixture host (agent Taylor) with no network. `ChatChecks` and the
-  `app-*` rows of `just sim-e2e` need a local nanoclaw stack, named by `HEYDAN_LOCAL_BASE`, `HEYDAN_PAIR_CMD` (prints
-  one fresh pairing link, treated as a secret), `HEYDAN_LOCAL_CA`, `HEYDAN_STACK_RESTART_CMD` and
-  `HEYDAN_REVOKED_CMD`; `HEYDAN_CHAT_ONLY` limits a run to the rows named. Without a stack those rows skip.
-- `just sim` runs the app in the Simulator (named "Hey Dan iPhone"; `HEYDAN_SIM` and `HEYDAN_DERIVED_DATA`
-  pick another one and its build folder) with the test line's call link seeded (see
-  [Local config](#local-config)). Use a test line, not your main agent's line: a test turn keeps that agent
-  busy on your own calls. `just sim-call <seconds>
-  "<what the caller says>"` places a real call to the test line from it: the caller's words are synthesized and fed
-  in place of the microphone, and it hangs up after `seconds`. `HEYDAN_STEPS="20:mute,26:manual,33:talk"`
-  presses keys mid-call (`mute`, `unmute`, `manual`, `handsfree`, `talk`, `done`, `send`, `discard`, timed
-  from launch); `mute` and `unmute` are the same CallKit mute transaction the lock screen and AirPods send.
-  `HEYDAN_TURN_MODE=auto|review` (`just sim-call`'s `mode`) sets the pick calls start in, and
-  `HEYDAN_HANGUP_AFTER` ends every call, an intent's too. `HEYDAN_AUDIO_METER=1` logs the agent's audio as the app
-  renders it (`meter playout` and `meter track`, rms/peak dBFS each second with sound), so a reply is checked
-  in the log, not by ear. `HEYDAN_SIMULATE="quick@15,full@40"` runs LiveKit's `debug_simulate` reconnects
-  (`quick`, `full`, `node`, `migration`, `leave`) that many seconds after the call went live; DEBUG logs
-  `reconnect start/done mode=`. Every `HEYDAN_*` variable set for `just sim` reaches the app.
-- `just sim-checks <check>` runs `HeyDanChecks`, a UI test bundle, for what used to need the phone in hand:
-  `LiveActivityOnLockScreen` (the Live Activity in the Dynamic Island, then on the Lock Screen with the
-  "Allow Live Activities" choice), `IntentStartsCallFromBackground` (the Start conversation intent run out of
-  process through AppIntentsTesting with the app in the background; `HEYDAN_CHECK_LOCKED=1` locks first)
-  and `ActionButtonStartsCall` (the Action Button, after `SetActionButtonToHeyDan` picked Hey Dan's Start
-  conversation in Settings once); both expect the app to come forward and the call to go live. Screenshots
-  land in `build/checks`. `xcrun
-  devicectl device settings audio --device <sim> --input-device <uid>` picks the Simulator's microphone
-  (`systemDefault` is the Mac's).
-- Voice picker fixture checks: `just sim-checks VoicePickerSaved` (saved, queued-to-active and provider samples),
-  `VoicePickerLive` (active, refused, ended), `VoicePickerFailures` (a server from before voice names, ElevenLabs unavailable,
-  unsupported route and access lost), `VoicePickerNames` (a saved voice the provider no longer has, names unavailable
-  then Retry), `VoicePickerLostSave` (a save whose answer is lost, confirmed against the values the server filled
-  in, and a lost reset, left not confirmed with the reloaded choice shown), `VoicePickerFailuresCatalog` (catalog retry, empty search, access lost),
-  `VoicePickerGender` (the Female filter on both providers, kept across a provider switch) and `CallOptions`
-  (hands-free and Manual options).
-  `VoicePickerSaves`, `SampleThenCall` and `SampleDismissThenCall` require a real test line.
-  Before `VoicePickerSaves`, capture the server's raw saved tuple and set `HEYDAN_TTS_RESTORE` to its ready
-  JSON PATCH body; the check refuses to mutate without it and restores it in teardown. Keep an independent
-  server restore/compare cleanup in the calling script too. The sample checks need ElevenLabs (the only provider with voice previews) and skip when the catalog offers no preview.
-  `SampleDismissThenCall` plays a sample for two seconds, taps Back to stop it, closes the picker,
-  discards changes if prompted, taps Call once, and requires Call again after 45 seconds.
-- `just sim-e2e` runs an unattended call on a dedicated Simulator. Supply only a test line's call link
-  through `HEYDAN_E2E_CALL_LINK` or `TEST_CALL_LINK` in `.env.local`; never use the main agent's line.
-  For a wake-enabled line, run
-  `HEYDAN_E2E_SAY='Hey Dan. What is two plus two? Zulu.' just sim-e2e`.
-  The harness builds, installs, accepts the microphone prompt (its UI check must run its one test),
-  feeds synthesized audio, and hangs up 65 seconds after the call starts. A refused autocall (the link is
-  not a call link, or not the picked line) fails at once. Only a connect timeout gets one retry, and only
-  after the host acknowledged the first call's end; other failures stop.
-  A pass requires a caller caption, the agent's answer to it, a subscribed agent audio track, and a clean
-  hangup acknowledged by the host. On a plain line the answer is a non-notice spoken reply event and its
-  caption; a jev line offers no review mode and sends no reply events, so its answer is the agent thinking
-  after the caller's caption, then the agent's caption. The `sim-call` result names the mode
-  (`mode=plain` or `mode=jev`). This is protocol evidence, not a measurement of audible playback.
+| Recipe | What it does |
+| --- | --- |
+| `just test` | `HeyDanCore` tests on the Mac (no Simulator) and the `sim-e2e` harness's own tests |
+| `just build` | Compile-checks a device build without signing |
+| `just app-test` | The app-hosted `HeyDanTests` in the Simulator; shares one build with `sim-checks` |
+| `just sim` | Builds and launches in the Simulator "Hey Dan iPhone" (created on first run) with `TEST_CALL_LINK` saved as a line |
+| `just sim-checks <check>` | UI checks: fixture classes such as `ChatThreadChecks` need no server; bare names such as `LiveActivityOnLockScreen` call the test line |
+| `just sim-e2e` | Unattended checks on their own Simulator, results in `build/e2e`: a hands-free call to the test line, or the chat rows against a local NanoClaw stack |
+| `just screens` | Captures the fixture screens into `.local/screens/<commit>/`; resets that Simulator's keychain |
+| `just device` | Signs, installs and launches on the connected iPhone |
+| `just logs [since]` | The Simulator's app and LiveKit log for the last `since` (default `15m`) |
+| `just testflight [dry]` | Archives, signs, uploads and waits for processing; `dry` validates without uploading |
 
-  | Environment variable | Default / purpose |
-  | --- | --- |
-  | `HEYDAN_E2E_CALL_LINK` | Test-line link; falls back to `TEST_CALL_LINK`. Passed only to the app launch, never to Xcode or `just sim-checks`. |
-  | `HEYDAN_SIM` | `Hey Dan e2e`; use a unique device name. |
-  | `HEYDAN_RUN_DIR` | `build/e2e`; JSON checks in `results/`, evidence in `logs/`. |
-  | `HEYDAN_LOCAL_CA` | Optional root certificate installed in that Simulator for a local HTTPS chain. |
-  | `HEYDAN_E2E_SAY` | `What is two plus two? Please answer briefly.`; include the server's wake phrase when enabled. Passed to `say` on stdin, never as an argument. |
-  | `HEYDAN_E2E_ATTEMPTS` | `2`; use `1` to disable the connect-timeout retry. |
-  | `HEYDAN_STACK_PROFILE` | `fast`; `full` when the local stack runs a real agent, so the send check takes any reply instead of the stand-in's. |
-
-  Derived data and synthesized audio stay in `build/sim-e2e`, independent of `just sim`;
-  `HEYDAN_DERIVED_DATA` overrides that build folder. Run only one harness per checkout at a time.
-  Each invocation replaces its result files. The app is terminated on exit, Ctrl-C and SIGTERM included:
-  either also stops the running build or test and marks the current check failed. The Simulator,
-  saved test line, installed CA, builds and evidence remain. Logs contain call metadata,
-  never message text or call links. Xcode test runs have both process and test timeouts.
-- DEBUG Simulator voice hooks: `HEYDAN_PREVIEW_TTS=saved|legacy|unavailable|lookup-failed|lost-save|eleven-unavailable|catalog-fail|search-empty|no-route|forbidden`
-  supplies HTTP fixtures; `HEYDAN_PREVIEW_VOICE=pending|active|ended|refused` supplies live voice state
-  (use `HEYDAN_PREVIEW_PHASE=waiting` and open Voice). `HEYDAN_VOICE_STEPS="20:gemini/alnilam,35:elevenlabs/bIHbv24MWmeRgasZH58o"`
-  queues timed live choices after voice support appears; an omitted model uses the provider default.
-  `HEYDAN_TTS_PATCH='<json>'` applies one saved-choice PATCH at launch, including `{"reset":true}`.
-  `HEYDAN_FEED_ON_VOICE=1` delays `HEYDAN_FEED_WAV` until one second after the first queued voice outcome,
-  with a 30-second fallback. `HEYDAN_START_ON_SAMPLE=1` issues two controller starts while sample activation
-  is held; `SampleThenCall` checks the UI and the verifier checks the accepted/refused/drained/late log evidence.
-- Simulator calls go through CallKit as on the phone (provider, start/end/mute transactions), with
-  Simulator-only stand-ins for what the Simulator lacks, in Debug and Release Simulator builds and never in a
-  device build: the app claims the `facetime` URL scheme, because callservicesd ends a call it finds no FaceTime
-  app to show its in-call UI with; it activates the audio session itself after the start action, because
-  callservicesd cannot activate it there (`didActivate` never comes); and WebRTC gathers on any address, so
-  the Mac's Tailscale tunnel carries the call. DEBUG Simulator builds also take `HEYDAN_PREVIEW_PHASE` (incl. `manual`, `recording`,
-  `finishing`, `draft`, `notsent`, `toolong`, `manual-speaking`, `kept`), `HEYDAN_PREVIEW_LINES`,
-  `HEYDAN_PREVIEW_SETTINGS` and `HEYDAN_PREVIEW_ACTIVITY` for screenshots.
-- `just device` signs, installs and launches on the connected iPhone.
-- `just logs [since]` shows the Simulator's app and LiveKit log; `just device-logs` copies the phone's
-  DEBUG log file; `just server-logs <cid>` shows the server's side of one call over ssh.
-- CI (`.github/workflows/ci.yml`) runs on pull requests to `main` and pushes to `main`, with no local config:
-  `just test`, then `just build` and, on one of the runner's own Simulators, `just app-test`. The fixture check
-  classes (`ChatChecks`, `ChatThreadChecks`, `ChatPairingChecks`, `ChatComposerChecks`, `ChatCallChecks`) run
-  locally before a merge; `.github/workflows/ui-checks.yml` runs them on a runner by hand. `HEYDAN_SKIP_TESTS`
-  (space-separated `-skip-testing` identifiers, read by `scripts/sim_tests.py`) names what a Simulator that
-  never ran the app cannot pass.
+`just --list` shows the rest (`gen`, `sim-call`, `device-call`, `device-logs`, `server-logs`), and
+[AGENTS.md](AGENTS.md) has the traps and what the stack checks need. CI: [ci.yml](.github/workflows/ci.yml) runs the
+core tests, the device build and the app tests on pull requests and pushes to `main`;
+[ui-checks.yml](.github/workflows/ui-checks.yml) runs the fixture UI checks by hand.
 
 ## TestFlight
 
-`just testflight` archives a Release build, signs it for App Store distribution and uploads it to App
-Store Connect with an App Store Connect API key from the environment (`ASC_KEY_P8_B64`, the .p8 in
-base64, plus `ASC_KEY_ID` and `ASC_ISSUER_ID`; `ASC_ENV_CMD` in `.env.local` can fetch them from a secret
-manager; the key lands in a private temp file for the run only). Each upload gets a timestamp build number (`yyMMddHHmm`); the version stays `MARKETING_VERSION`
-in `project.yml`. The recipe then waits for App Store Connect (`scripts/testflight-wait.py`, every 30 s
-for up to 30 minutes): it prints the upload's state with any error and warning codes, fails when the
-upload ends anything but `COMPLETE` or the build anything but `VALID`, and once it passes the build
-appears in the TestFlight app on any device in the testing group.
-`just testflight dry` runs the same archive and export with a local `destination` and validates the IPA
-with `altool --validate-app`, uploading nothing; the export still reserves the build number in App Store
-Connect, so a stray `AWAITING_UPLOAD` record stays behind.
-LiveKit ships `LiveKitWebRTC` and `RustLiveKitUniFFI` stripped and publishes no dSYMs for them, so the
-recipe generates placeholder dSYMs with `dsymutil` (matching UUIDs and exported symbols, no DWARF): they
-silence the upload's "Upload Symbols Failed" warnings, but crashes inside those frameworks still
-symbolicate only to the nearest exported symbol.
+`just testflight` archives a Release build, signs it for App Store distribution with an App Store Connect API key,
+uploads it with a timestamp build number and waits for App Store Connect to process it, failing on a rejection.
+`just testflight dry` exports and validates the IPA locally and uploads nothing, though the export still reserves a
+build number in App Store Connect. The version is `MARKETING_VERSION` in [project.yml](project.yml).
 
 One-time setup:
 
-1. An App Store Connect team API key with the Admin role (Users and Access > Integrations), where
-   `ASC_ENV_CMD` finds it. With `-allowProvisioningUpdates` xcodebuild signs through it with a cloud-managed
-   distribution certificate and the App Store profiles it creates; an App Manager key cannot (403 on
-   `DISTRIBUTION_MANAGED`).
-2. [App Store Connect](https://appstoreconnect.apple.com) > Apps > + > New App: platform iOS, name
-   Hey Dan, primary language English, your `HEYDAN_BUNDLE_ID`, any SKU (e.g. `heydan`). Put its Apple ID
-   (App Information) in `.env.local` as `ASC_APP_ID`: the recipe waits on that app's processing.
-3. After the first upload: TestFlight > Internal Testing > + to add a group with yourself, add the
-   build, then install it from the TestFlight app on the iPhone.
+1. An App Store Connect team API key with the Admin role (Users and Access > Integrations). The recipe reads
+   `ASC_KEY_P8_B64` (the .p8 in base64), `ASC_KEY_ID` and `ASC_ISSUER_ID` from the environment; `ASC_ENV_CMD` in
+   `.env.local` can prefix the run with a command that sets them. An App Manager key cannot create the cloud-managed
+   distribution certificate (403 on `DISTRIBUTION_MANAGED`).
+2. In your [Apple Developer account](https://developer.apple.com/account), register the App Group
+   `group.<HEYDAN_BUNDLE_ID>` and enable it on both App IDs, `<HEYDAN_BUNDLE_ID>` and
+   `<HEYDAN_BUNDLE_ID>.NotificationService`. The API key cannot do this, and `just testflight` cannot sign until it is
+   done.
+3. [App Store Connect](https://appstoreconnect.apple.com) > Apps > + > New App: platform iOS, a name of your choice,
+   your `HEYDAN_BUNDLE_ID`, any SKU. Put its Apple ID (App Information) in `.env.local` as `ASC_APP_ID`.
+4. After the first upload: TestFlight > Internal Testing > + to add a group with yourself, add the build, then install
+   it from the TestFlight app.
 
-The app declares no non-exempt encryption (`ITSAppUsesNonExemptEncryption`), so builds skip the
-export compliance question.
+A TestFlight build registers for production pushes, so the host needs its production APNs key. The app declares no
+non-exempt encryption, so builds skip the export compliance question.
+
+## Privacy
+
+- Each paired host gets its own Secure Enclave key, which never leaves the phone. The app signs its requests to that
+  host with it; only the version check, the pairing request and ticketed file uploads go unsigned.
+- Call links stay in the Keychain, on this phone only.
+- The thread cache and the outbox stay on the phone and out of its backups.
+- Logs carry only ids, states, codes and durations: never a token, a link or anything said or written.
+- No analytics or tracking. A push carries a preview of the message through Apple's push service.
 
 ## License
 
