@@ -113,7 +113,6 @@ import UIKit
         guard uploadProgress[key].map({ Int($0 * 100) != Int(value * 100) }) ?? true else { return }
         uploadProgress[key] = value
     }
-    func clearProgress(key: String) { uploadProgress[key] = nil }
 
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }

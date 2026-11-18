@@ -123,7 +123,6 @@ extension ChatController {
                             self.setProgress(progress, key: attachment.uploadKey)
                         }
                     }
-                    clearProgress(key: attachment.uploadKey)
                     result = .uploaded(uploadKey: attachment.uploadKey)
                 case .send(let request):
                     let response = try await service.send(conversationId: entry.conversationId, request: request)

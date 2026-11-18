@@ -122,16 +122,17 @@ struct MessageNotificationTests {
     @Test func deliveryCallsTheHandlerOnce() {
         let original = UNMutableNotificationContent()
         let replacement = UNMutableNotificationContent()
-        let calls = Mutex<[UNNotificationContent]>([])
-        let expired = NotificationDelivery(original: original) { content in calls.withLock { $0.append(content) } }
+        let calls = Mutex<[ObjectIdentifier]>([])
+        let record: (UNNotificationContent) -> Void = { content in
+            let id = ObjectIdentifier(content)
+            calls.withLock { $0.append(id) }
+        }
+        let expired = NotificationDelivery(original: original, handler: record)
         expired.finish()
         expired.finish(replacement)
-        let updated = NotificationDelivery(original: original) { content in calls.withLock { $0.append(content) } }
+        let updated = NotificationDelivery(original: original, handler: record)
         updated.finish(replacement)
         updated.finish()
-        let delivered = calls.withLock { $0 }
-        #expect(delivered.count == 2)
-        #expect(delivered.first === original)
-        #expect(delivered.last === replacement)
+        #expect(calls.withLock { $0 } == [ObjectIdentifier(original), ObjectIdentifier(replacement)])
     }
 }
