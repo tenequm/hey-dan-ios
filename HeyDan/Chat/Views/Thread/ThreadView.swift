@@ -92,7 +92,7 @@ struct ThreadContent: View {
         .defaultScrollAnchor(.bottom)
         .scrollPosition(id: $visibleID)
         .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height + geometry.contentInsets.bottom - 16
+            geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 16
         } action: { _, bottom in
             atBottom = bottom
             readVisibleBottom()

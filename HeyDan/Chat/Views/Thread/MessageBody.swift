@@ -8,6 +8,8 @@ struct MessageBody: View {
     var body: some View {
         SelectableMarkdown(text: text, theme: theme)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(text)
     }
 
     private var theme: MarkdownTheme {

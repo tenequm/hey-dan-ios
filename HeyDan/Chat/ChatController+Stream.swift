@@ -14,6 +14,18 @@ extension ChatController {
                 features = hello.features
                 try await refreshList(token: token)
                 guard token == generation, !paused, !Task.isCancelled else { return }
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1" {
+                    let metadata = conversations.map { conversation in
+                        ["id": conversation.id, "agent": ["id": conversation.agent.id, "name": conversation.agent.name],
+                         "intentId": host.map { PairedAgentID.make(host: $0, agentId: conversation.agent.id).uuidString } ?? ""] as [String: Any]
+                    }
+                    if let bytes = try? JSONSerialization.data(withJSONObject: metadata) {
+                        _ = FileManager.default.createFile(atPath: URL.cachesDirectory.appending(path: "chat-check-context.json").path,
+                            contents: bytes, attributes: [.posixPermissions: 0o600])
+                    }
+                }
+                #endif
                 let started = ContinuousClock.now
                 CallLog.log(.stream, "connect after=\(reducer.cursor)")
                 let events = try await service.events(query: EventsQuery(after: reducer.cursor))
@@ -39,7 +51,14 @@ extension ChatController {
                     guard token == generation, !Task.isCancelled else { return }
                     reducer = candidate
                     for event in batch {
-                        if event.kind == .message, let message = try? event.decode(Message.self) { outbox.reconcile(message) }
+                        if event.kind == .message, let message = try? event.decode(Message.self) {
+                            outbox.reconcile(message)
+                            #if DEBUG
+                            if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1", let voice = message.voice {
+                                CallLog.log(.stream, "check thread voice=\(voice.rawValue) id=\(message.id)")
+                            }
+                            #endif
+                        }
                         if event.kind == .synchronized {
                             CallLog.log(.stream, "synchronized cursor=\(reducer.cursor) count=\(batch.count) ms=\(CallLog.ms(since: started))")
                             connectionState = .connected; error = nil; attempts = 0

@@ -219,7 +219,7 @@ sim-checks check="LiveActivityOnLockScreen": gen
     set -euo pipefail
     [ "{{bundle_id}}" = com.tenequm.HeyDan ] || { echo "Simulator push checks require HEYDAN_BUNDLE_ID = com.tenequm.HeyDan in gitignored Local.xcconfig (current: {{bundle_id}})" >&2; exit 1; }
     selector={{quote(check)}}
-    case "$selector" in */*) ;; *) selector="HeyDanChecks/test$selector" ;; esac
+    case "$selector" in */*|ChatChecks) ;; *) selector="HeyDanChecks/test$selector" ;; esac
     udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
     [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
     xcrun simctl bootstatus "$udid" -b >/dev/null

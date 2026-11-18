@@ -33,27 +33,27 @@ APP_CHECKS = {
     'app-pair-screen': 'testPastePair',
     'app-signature-refusal': None,
     'app-send-reply': 'testSendReply',
-    'app-history': 'testHistory',
+    'app-history': None,
     'app-resume-app': 'testResumeAfterRelaunch',
     'app-resume-server': None,
     'app-offline-send': 'testOfflineSend',
     'app-question': 'testQuestion',
     'app-working-status': 'testWorkingStatus',
     'app-download-files': 'testDownloadFiles',
-    'app-upload-photo': None,
-    'app-upload-document': None,
+    'app-upload-photo': 'testUploadPhoto',
+    'app-upload-document': 'testUploadDocument',
     'app-unread-relaunch': 'testUnreadRelaunch',
     'app-push-banner': 'testPushBanner',
     'app-push-suppressed': 'testPushSuppressed',
     'app-push-tap': 'testPushTap',
-    'app-push-read-clears': None,
+    'app-push-read-clears': 'testPushReadClears',
     'app-push-communication': None,
     'app-push-extension': None,
     'app-push-edit': None,
-    'app-paired-call': None,
+    'app-paired-call': 'testPairedCall',
     'app-paired-voice': None,
-    'app-paired-intent': None,
-    'app-unpair': None,
+    'app-paired-intent': 'testPairedIntent',
+    'app-unpair': 'testUnpair',
     'app-line-call': None,
 }
 RECORDS = {}
@@ -116,9 +116,12 @@ def build(*args, seconds, env=None):
                seconds=seconds, check=False, merge=True, env=env)
     output = proc.stdout
     if 'test-without-building' in args:
+        sites = re.findall(r'([^ /]+\.swift:\d+): error:', output)
         # XCTest activity trees can contain chat text or a pasted pairing link.
         output = '\n'.join(line for line in output.splitlines()
                            if re.match(r"^(Test (Case|Suite) .* (passed|failed)|\s*Executed \d+ test|\*\* TEST)", line))
+    if 'test-without-building' in args and sites:
+        output += '\nFailure sites: ' + ', '.join(sites)
     (OUT / 'logs' / f'{CHECK}.log').write_text(output)
     if proc.returncode:
         raise RuntimeError(f'xcodebuild exited {proc.returncode}; see logs/{CHECK}.log')
@@ -162,6 +165,11 @@ def grade(text):
     )
 
 
+def grade_paired(text):
+    evidence = grade(text)
+    return (all(evidence[key] for key in ('connected', 'reply', 'audio', 'clean', 'ended', 'fed'))
+            and bool(re.search(r'end reason=hangup status=2\d\d[^\n]*paired=true', text))
+            and all('check thread voice=' + voice in text for voice in ('caller', 'spoken')))
 
 
 @contextlib.contextmanager
@@ -180,6 +188,11 @@ def push_driver(directory, enabled):
                     payload = json.loads(fixtures.read_text())['pushPayload']['body']
                     payload['hd']['h'] = os.environ['HEYDAN_LOCAL_BASE'].rstrip('/')
                     payload['hd']['c'] = conversation
+                    container = Path(sim('get_app_container', UDID, BUNDLE, 'data'))
+                    metadata = json.loads((container / 'Library/Caches/chat-check-context.json').read_text())
+                    agent = next(row['agent'] for row in metadata if row['id'] == conversation)
+                    payload['hd']['a'] = agent
+                    payload['aps']['alert']['title'] = agent['name']
                     payload['aps']['thread-id'] = conversation
                     payload['aps']['alert']['body'] = 'New message'
                     payload_file = directory / 'push.apns'
@@ -206,8 +219,50 @@ def push_driver(directory, enabled):
 
 def ui_check(name, method, stack=False):
     global CHECK
+    selected = set(filter(None, os.environ.get('HEYDAN_CHAT_ONLY', '').split(',')))
+    if selected and name not in selected:
+        result(name, 'skip', 'Not selected by HEYDAN_CHAT_ONLY')
+        return
     CHECK = name
     runner = ENV | ({'TEST_RUNNER_HEYDAN_CHAT_STACK': '1'} if stack else {})
+    if name in ('app-upload-photo', 'app-upload-document'):
+        import base64
+        attachment = BUILD / ('upload.png' if name.endswith('photo') else 'upload.pdf')
+        if name.endswith('photo'):
+            attachment.write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aEn8AAAAASUVORK5CYII='))
+        else:
+            objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>', b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>']
+            data = b'%PDF-1.4\n'
+            offsets = [0]
+            for index, obj in enumerate(objects, 1):
+                offsets.append(len(data))
+                data += str(index).encode() + b' 0 obj\n' + obj + b'\nendobj\n'
+            xref = len(data)
+            data += b'xref\n0 4\n0000000000 65535 f \n'
+            data += b''.join(f'{offset:010} 00000 n \n'.encode() for offset in offsets[1:])
+            data += f'trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+            attachment.write_bytes(data)
+        runner['TEST_RUNNER_HEYDAN_CHAT_ATTACHMENT'] = str(attachment)
+    if name == 'app-paired-call':
+        speech = os.environ.get('HEYDAN_E2E_SAY')
+        if not speech:
+            result(name, 'skip', 'Missing HEYDAN_E2E_SAY with the stack wake phrase')
+            return
+        run('say', '-o', BUILD / 'feed.aiff', '-f', '-', stdin=speech)
+        run('afconvert', '-f', 'WAVE', '-d', 'LEF32@48000', '-c', '1', BUILD / 'feed.aiff', BUILD / 'feed.wav')
+        runner['TEST_RUNNER_HEYDAN_CHAT_WAV'] = str(BUILD / 'feed.wav')
+    container = Path(sim('get_app_container', UDID, BUNDLE, 'data'))
+    logfile = container / 'Library/Caches/heydan.log'
+    if name == 'app-paired-intent':
+        metadata = json.loads((container / 'Library/Caches/chat-check-context.json').read_text())
+        runner['TEST_RUNNER_HEYDAN_CHAT_INTENT_ID'] = metadata[0]['intentId']
+    baseline = len(logfile.read_text()) if logfile.exists() else 0
+    revoked = container / 'Library/Caches/revoked-request.json'
+    if name == 'app-unpair':
+        if not os.environ.get('HEYDAN_REVOKED_CMD'):
+            result(name, 'skip', 'Missing HEYDAN_REVOKED_CMD signed-request verifier')
+            return
+        revoked.unlink(missing_ok=True)
     screenshots = []
     try:
         with tempfile.TemporaryDirectory(prefix='chat-checks-', dir=BUILD) as temporary, push_driver(
@@ -241,9 +296,47 @@ def ui_check(name, method, stack=False):
             evidence = [f'logs/{name}.log']
             if name == 'app-push-communication':
                 evidence.extend(screenshots)
-            result(name, 'pass', 'One UI check executed with zero failures', evidence)
+            logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
+            current = logfile.read_text() if logfile.exists() else ''
+            delta = current[baseline:] if len(current) >= baseline else current
+            if name == 'app-pair-screen':
+                paired = 'pair ok' in delta
+                result(name, 'pass' if paired else 'fail', 'Screen pairing acknowledged by server' if paired else 'Screen pairing acknowledgement missing', evidence)
+            elif name == 'app-unpair':
+                revoked = logfile.parent / 'revoked-request.json'
+                try:
+                    response = run('sh', '-c', os.environ['HEYDAN_REVOKED_CMD'],
+                                   env=os.environ.copy() | {'HEYDAN_REVOKED_REQUEST': str(revoked)})
+                    proof = json.loads(response.stdout)
+                    passed = proof.get('status') == 401 and proof.get('error') == 'device_revoked'
+                    result(name, 'pass' if passed else 'fail', 'Signed request refused after UI unpair' if passed else 'Revoked signed request was not refused as device_revoked', evidence)
+                finally:
+                    revoked.unlink(missing_ok=True)
+            elif name == 'app-push-read-clears':
+                counts = re.findall(r'check push delivered=(\d+) badge=(-?\d+)', delta)
+                delivered = any(int(count) > 0 for count, _ in counts)
+                cleared = bool(counts and counts[-1] == ('0', '0'))
+                result(name, 'pass' if delivered and cleared else 'fail', 'Delivered notification and badge cleared' if delivered and cleared else 'Notification/badge cleanup not observed', evidence)
+            elif name == 'app-paired-intent':
+                passed = 'paired=true' in delta and ' connected ms=' in delta and 'end reason=hangup status=204' in delta
+                result(name, 'pass' if passed else 'fail', 'Paired intent connected and ended' if passed else 'Paired intent call evidence missing', evidence)
+            elif name == 'app-paired-call':
+                passed = grade_paired(delta)
+                (OUT / 'logs/app-paired-call-app.log').write_text(delta)
+                result(name, 'pass' if passed else 'fail', 'Paired call audio and end grading ' + ('passed' if passed else 'failed'), evidence + ['logs/app-paired-call-app.log'])
+            elif name == 'app-send-reply':
+                stored = 'check send acknowledged' in delta and 'delivery=stored' in delta
+                result(name, 'pass' if stored else 'fail', 'UI reply and stored acknowledgement observed' if stored else 'UI reply passed; stored acknowledgement missing', evidence)
+            else:
+                result(name, 'pass', 'One UI check executed with zero failures', evidence)
     except RuntimeError as error:
         result(name, 'fail', str(error), [f'logs/{name}.log'])
+    finally:
+        if name == 'app-unpair':
+            revoked.unlink(missing_ok=True)
+            with contextlib.suppress(RuntimeError, OSError):
+                current = Path(sim('get_app_container', UDID, BUNDLE, 'data'))
+                (current / 'Library/Caches/revoked-request.json').unlink(missing_ok=True)
 
 
 def pair_link():
@@ -293,7 +386,63 @@ def chat_checks():
             ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
     finally:
         run('xcrun', 'devicectl', 'device', 'pasteboard', 'copy', '-d', UDID, stdin='')
+    logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
+    CHECK = 'app-paired-voice'
+    offset = len(logfile.read_text()) if logfile.exists() else 0
+    sim('launch', '--terminate-running-process', UDID, BUNDLE,
+        env=ENV | {'SIMCTL_CHILD_HEYDAN_CHAT_CHECKS': '1', 'SIMCTL_CHILD_HEYDAN_CHECK_VOICE': '1'})
+    deadline = time.monotonic() + 60
+    voice_ok = False
+    while time.monotonic() < deadline:
+        delta = logfile.read_text()[offset:] if logfile.exists() else ''
+        if 'check voice saved=true restored=true' in delta:
+            voice_ok = True
+            break
+        if 'check voice failed' in delta:
+            break
+        time.sleep(.5)
+    result(CHECK, 'pass' if voice_ok else 'fail', 'Saved voice read back and original restored' if voice_ok else 'Voice save/read/restore not proven')
+    sim('terminate', UDID, BUNDLE, check=False)
+    restart = os.environ.get('HEYDAN_STACK_RESTART_CMD')
+    if restart:
+        CHECK = 'app-resume-server'
+        sim('launch', '--terminate-running-process', UDID, BUNDLE)
+        time.sleep(3)
+        before = logfile.read_text() if logfile.exists() else ''
+        cursors = re.findall(r'synchronized cursor=(\d+)', before)
+        if not cursors:
+            result(CHECK, 'fail', 'No synchronized cursor before restart')
+        else:
+            offset = len(before)
+            run('sh', '-c', restart, env=os.environ.copy(), seconds=120)
+            deadline = time.monotonic() + 60
+            resumed = False
+            while time.monotonic() < deadline:
+                delta = logfile.read_text()[offset:] if logfile.exists() else ''
+                after = re.findall(r'synchronized cursor=(\d+)', delta)
+                if after and int(after[-1]) >= int(cursors[-1]):
+                    resumed = True
+                    break
+                time.sleep(.5)
+            result(CHECK, 'pass' if resumed else 'fail', 'Cursor synchronized after host restart' if resumed else 'No resumed cursor within 60s')
+        sim('terminate', UDID, BUNDLE, check=False)
     for name, method in APP_CHECKS.items():
+        if name == 'app-history':
+            CHECK = name
+            logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
+            offset = len(logfile.read_text()) if logfile.exists() else 0
+            sim('launch', '--terminate-running-process', UDID, BUNDLE,
+                env=ENV | {'SIMCTL_CHILD_HEYDAN_CHAT_CHECKS': '1', 'SIMCTL_CHILD_HEYDAN_CHECK_HISTORY': '1'})
+            deadline = time.monotonic() + 30
+            passed = False
+            while time.monotonic() < deadline:
+                delta = logfile.read_text()[offset:] if logfile.exists() else ''
+                if 'check history before=true after=true' in delta:
+                    passed = True
+                    break
+                time.sleep(.5)
+            result(name, 'pass' if passed else 'fail', 'REST history pages verified in both directions' if passed else 'History before/after proof missing')
+            sim('terminate', UDID, BUNDLE, check=False)
         if method and name != 'app-pair-screen' and 'lane is not on this branch' not in RECORDS[name]['detail']:
             ui_check(name, 'ChatChecks/' + method, stack=True)
 
@@ -324,13 +473,7 @@ def main():
                if no_stack else 'Flow requires additional observable app hooks; see lane report')
     pending = {
         'app-signature-refusal': 'Signed malformed-request checks belong to the N9b scripted client',
-        'app-upload-photo': 'HEYDAN_FIXTURE_ATTACHMENT is fixture-only; needs a stack-safe staging hook from H4b',
-        'app-upload-document': 'HEYDAN_FIXTURE_ATTACHMENT is fixture-only; needs a stack-safe staging hook from H4b',
-        'app-paired-call': 'Needs a paired call WAV and bounded hangup hook from H6; existing AUTOCALL selects a saved line',
-        'app-paired-voice': 'Needs paired voice restore/readback evidence from H6 before mutating saved voice',
-        'app-paired-intent': 'Needs paired entity selection in AppIntentsTesting from H6; never fall back to a saved line',
-        'app-unpair': 'Needs signed post-unpair refusal evidence; the UI cannot issue a request with the revoked key',
-        'app-push-read-clears': 'Needs delivered-notification and badge readback from the app',
+        'app-unpair': 'Missing HEYDAN_REVOKED_CMD' if not os.environ.get('HEYDAN_REVOKED_CMD') else 'Not reached',
         'app-resume-server': 'Missing HEYDAN_STACK_RESTART_CMD' if not os.environ.get('HEYDAN_STACK_RESTART_CMD') else 'Needs stream cursor readback across host restart',
     }
     if not no_stack:
@@ -406,9 +549,9 @@ def main():
     result(CHECK, 'pass', 'SpringBoard Allow tapped on microphone permission alert', ['logs/sim-permission.log'])
     chat_checks()
     CHECK = 'sim-call'
-    if not LINK:
-        result(CHECK, 'skip', 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')
-        result('app-line-call', 'skip', 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')
+    if os.environ.get('HEYDAN_LOCAL_BASE') or not LINK:
+        result(CHECK, 'skip', 'Saved-line calls disabled for stack runs' if os.environ.get('HEYDAN_LOCAL_BASE') else 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')
+        result('app-line-call', 'skip', 'Saved-line calls disabled for stack runs' if os.environ.get('HEYDAN_LOCAL_BASE') else 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')
         return
     run('say', '-o', BUILD / 'feed.aiff', '-f', '-',
         stdin=os.environ.get('HEYDAN_E2E_SAY', 'What is two plus two? Please answer briefly.'))

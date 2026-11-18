@@ -122,6 +122,11 @@ extension ChatController {
                     guard token == generation, !Task.isCancelled else { return }
                     try await persist(reducer.upsert(.message(response.message)))
                     result = .sent(response.message)
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1" {
+                        CallLog.log(.store, "check send acknowledged client=\(request.clientId) delivery=\(response.message.delivery?.rawValue ?? "none")")
+                    }
+                    #endif
                     if let agent = reducer.conversations[entry.conversationId]?.agent { Task { await MessageNotification.donateOutgoing(agent: agent, conversationID: entry.conversationId) } }
                 default: return
                 }

@@ -116,7 +116,7 @@ struct ComposerView: View {
         }
         .task {
             #if DEBUG
-            if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1",
+            if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" || ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1",
                availableFeatures.contains("files"), let path = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_ATTACHMENT"] {
                 importURLs = [URL(fileURLWithPath: path)]
             }

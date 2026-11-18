@@ -41,6 +41,10 @@ final class SignedClient: AppService {
         uploadSession.invalidateAndCancel()
     }
 
+    #if DEBUG
+    func checkRevocationRequest() throws -> URLRequest { try makeRequest("GET", ["conversations"]) }
+    #endif
+
     private func makeRequest(_ method: String, _ path: [String], query: [(String, String)] = [],
                              body: Data = Data(), signed: Bool = true) throws -> URLRequest {
         #if DEBUG

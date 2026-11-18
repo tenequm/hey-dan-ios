@@ -1,3 +1,4 @@
+import AppIntentsTesting
 import XCTest
 
 @MainActor
@@ -7,7 +8,7 @@ final class ChatChecks: XCTestCase {
 
     private func launch(_ extra: [String: String] = [:]) {
         continueAfterFailure = false
-        app.launchEnvironment = extra
+        app.launchEnvironment = ["HEYDAN_CHAT_CHECKS": "1"].merging(extra) { _, new in new }
         app.launch()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
@@ -70,7 +71,7 @@ final class ChatChecks: XCTestCase {
         launch()
         openThread()
         let settings = app.buttons["Settings"]
-        guard settings.waitForExistence(timeout: 5) else { throw XCTSkip("H6 Settings lane is not on this branch yet") }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
         settings.tap()
         app.buttons["Pair a host"].tap()
         let paste = app.buttons["pairing.paste"]
@@ -79,13 +80,19 @@ final class ChatChecks: XCTestCase {
         let allow = app.buttons["Allow Paste"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
         app.buttons["pairing.submit"].tap()
-        XCTAssertTrue(app.staticTexts["Paired"].waitForExistence(timeout: 20))
+        let field = app.textFields["pairing.link"]
+        let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !field.exists || ["", "Pairing link"].contains(field.value as? String ?? "")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 20), .completed)
     }
 
     func testSendReply() throws {
         try stack()
         launch()
         openThread()
+        let messageRows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.message."))
+        let before = messageRows.allElementsBoundByIndex.map(\.identifier)
         let marker = "reply " + UUID().uuidString
         try send(marker)
         XCTAssertTrue(rows(containing: marker).firstMatch.waitForExistence(timeout: 30))
@@ -95,9 +102,12 @@ final class ChatChecks: XCTestCase {
         XCTAssertTrue(reached.waitForExistence(timeout: 45))
         // A routed copy can be coalesced with reached before the screen renders.
         let reply = app.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label CONTAINS %@ AND NOT label CONTAINS %@",
-            "chat.message.", marker, "Reached")).firstMatch
+            format: "label CONTAINS %@ OR value CONTAINS %@",
+            "Stand-in reply.", "Stand-in reply.")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 45))
+        let newRows = messageRows.matching(NSPredicate(format: "NOT identifier IN %@", before))
+        let received = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in newRows.count >= 2 }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 45), .completed)
     }
 
     func testResumeAfterRelaunch() throws {
@@ -134,15 +144,85 @@ final class ChatChecks: XCTestCase {
         try stack()
         launch()
         openThread()
+        let questions = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "chat.question."))
+        let previous = questions.allElementsBoundByIndex.map(\.identifier)
         try send("question")
-        let card = app.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH %@", "chat.question.")).firstMatch
+        let card = questions.matching(NSPredicate(format: "NOT identifier IN %@", previous)).firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 45))
         let answer = card.buttons.firstMatch
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        let selected = answer.label
         answer.tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "chat.answer.")).firstMatch.waitForExistence(timeout: 20))
+        let followup = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ OR value CONTAINS %@", "Selected: " + selected, "Selected: " + selected)).firstMatch
+        XCTAssertTrue(followup.waitForExistence(timeout: 45))
+    }
+
+    func testPairedIntent() async throws {
+        try stack()
+        launch(["HEYDAN_HANGUP_AFTER": "30", "HEYDAN_PAIRED_ICE": "all"])
+        XCTAssertTrue(conversation().waitForExistence(timeout: 20))
+        let bundle = String(Bundle(for: ChatChecks.self).bundleIdentifier!.dropLast(".Checks".count))
+        let definitions = IntentDefinitions(bundleIdentifier: bundle)
+        let id = try XCTUnwrap(env["HEYDAN_CHAT_INTENT_ID"].flatMap(UUID.init(uuidString:)))
+        let matches = try await definitions.entities["VoiceLineEntity"].entities(identifiers: [id])
+        let agent = try XCTUnwrap(matches.first)
+        let suggestions = try await definitions.entities["VoiceLineEntity"].suggestedEntities()
+        XCTAssertTrue(suggestions.contains(agent))
+        let intent = definitions.intents["CallLineIntent"].makeIntent(
+            destination: agent, audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))
+        try await intent.run()
+        try await Task.sleep(for: .seconds(40))
+        app.activate()
+    }
+
+    func testUnpair() throws {
+        try stack()
+        launch(["HEYDAN_CHECK_REVOKED_REQUEST": "1"])
+        openThread()
+        app.buttons["Settings"].tap()
+        app.buttons["Unpair"].firstMatch.tap()
+        let choices = app.buttons.matching(identifier: "Unpair")
+        XCTAssertTrue(choices.firstMatch.waitForExistence(timeout: 5))
+        let confirm = try XCTUnwrap(choices.allElementsBoundByIndex.first { $0.isHittable })
+        confirm.tap()
+        XCTAssertTrue(app.scrollViews["chat.thread"].waitForNonExistence(timeout: 20))
+        XCTAssertFalse(conversation().exists)
+    }
+
+    func testPairedCall() throws {
+        try stack()
+        launch(["HEYDAN_PAIRED_FEED": "1", "HEYDAN_FEED_WAV": try XCTUnwrap(env["HEYDAN_CHAT_WAV"]),
+                "HEYDAN_FEED_AFTER": "12", "HEYDAN_HANGUP_AFTER": "65", "HEYDAN_PAIRED_ICE": "all"])
+        openThread()
+        let call = app.buttons["chat.call"]
+        XCTAssertTrue(call.waitForExistence(timeout: 10))
+        XCTAssertTrue(call.isEnabled)
+        call.tap()
+        let close = app.buttons["chat.call.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 20))
+        let until = Date().addingTimeInterval(80)
+        while Date() < until { RunLoop.current.run(until: Date().addingTimeInterval(1)) }
+        close.tap()
+        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
+    }
+
+    func testUploadPhoto() throws { try upload() }
+    func testUploadDocument() throws { try upload() }
+
+    private func upload() throws {
+        try stack()
+        let path = try XCTUnwrap(env["HEYDAN_CHAT_ATTACHMENT"])
+        launch(["HEYDAN_FIXTURE_ATTACHMENT": path])
+        openThread()
+        XCTAssertTrue(app.buttons["composer.remove"].firstMatch.waitForExistence(timeout: 15))
+        let marker = "reply " + UUID().uuidString
+        try send(marker)
+        let uploaded = rows(containing: marker).firstMatch
+        XCTAssertTrue(uploaded.buttons["attachment.open"].firstMatch.waitForExistence(timeout: 45))
     }
 
     func testWorkingStatus() throws {
@@ -184,19 +264,27 @@ final class ChatChecks: XCTestCase {
         XCTAssertGreaterThanOrEqual(files.count, 2)
         for index in 0..<2 {
             files.element(boundBy: index).tap()
-            let done = app.buttons["Done"].firstMatch
-            XCTAssertTrue(done.waitForExistence(timeout: 15))
-            done.tap()
+            XCTAssertTrue(app.otherElements["QLPreviewControllerView"].waitForExistence(timeout: 15))
+            app.terminate()
+            if index == 0 { launch(); openThread() }
         }
     }
 
     func testUnreadRelaunch() throws {
         try stack()
         launch()
+        openThread()
+        let marker = "long 8 " + UUID().uuidString
+        try send(marker)
+        let reached = rows(containing: marker).matching(NSPredicate(format: "label CONTAINS %@", "Reached")).firstMatch
+        XCTAssertTrue(reached.waitForExistence(timeout: 30))
+        app.terminate()
+        launch()
         let row = conversation()
         XCTAssertTrue(row.waitForExistence(timeout: 20))
+        let unread = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in row.label.contains("unread") }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [unread], timeout: 30), .completed)
         let label = row.label
-        guard label.contains("unread") else { throw XCTSkip("Stack must seed an unread conversation") }
         app.terminate()
         launch()
         XCTAssertTrue(row.waitForExistence(timeout: 20))
@@ -239,6 +327,23 @@ final class ChatChecks: XCTestCase {
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 15))
         try requestPush(conversationID: id)
         XCTAssertFalse(banner.waitForExistence(timeout: 8))
+    }
+
+    func testPushReadClears() throws {
+        try stack()
+        launch()
+        let row = conversation()
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        try requestPush(conversationID: String(row.identifier.dropFirst("chat.conversation.".count)))
+        XCTAssertTrue(banner.waitForExistence(timeout: 15))
+        banner.tap()
+        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 15))
+        try send("reply " + UUID().uuidString)
+        let until = Date().addingTimeInterval(15)
+        while Date() < until {
+            app.scrollViews["chat.thread"].swipeUp()
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+        }
     }
 
     func testPushTap() throws {

@@ -79,6 +79,14 @@ class Grade(unittest.TestCase):
         self.assertTrue(grade['connect_timeout'] and grade['ended'])
         self.assertFalse(harness.grade(JEV_CALL)['connect_timeout'])
 
+    def test_paired_call_requires_both_thread_marks_and_paired_end(self):
+        paired = JEV_CALL.replace('status=204 ms=35', 'status=204 ms=35 paired=true')
+        marks = '\ncheck thread voice=caller id=msg_a\ncheck thread voice=spoken id=msg_b\n'
+        self.assertTrue(harness.grade_paired(paired + marks))
+        self.assertFalse(harness.grade_paired(paired + marks.replace('voice=spoken', 'voice=unknown')))
+        self.assertFalse(harness.grade_paired(paired + marks.replace('voice=caller', 'voice=unknown')))
+        self.assertFalse(harness.grade_paired(JEV_CALL + marks))
+
     def test_refused_autocall(self):
         self.assertTrue(harness.grade(REFUSED)['refused'])
         self.assertFalse(harness.grade(JEV_CALL)['refused'])

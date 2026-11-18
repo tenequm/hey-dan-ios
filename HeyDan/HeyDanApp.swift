@@ -82,8 +82,70 @@ extension HeyDanApp {
         if let steps = env["HEYDAN_VOICE_STEPS"], !steps.isEmpty { VoiceDebug.schedule(steps, launched: launched) }
         #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
-        guard env["HEYDAN_AUTOCALL"] == "1" else { return }
-        if let link = env["HEYDAN_CALL_LINK"] {
+        if env["HEYDAN_CHAT_CHECKS"] == "1", env["HEYDAN_CHECK_REVOKED_REQUEST"] == "1" {
+            let path = URL.cachesDirectory.appending(path: "revoked-request.json").path
+            let chat = ChatController.shared
+            let deadline = ContinuousClock.now + .seconds(30)
+            while chat.conversations.isEmpty, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            do {
+                guard let client = chat.service as? SignedClient else { return }
+                let request = try client.checkRevocationRequest()
+                let data = try JSONSerialization.data(withJSONObject: ["url": request.url!.absoluteString,
+                    "authorization": request.value(forHTTPHeaderField: "Authorization")!])
+                guard FileManager.default.createFile(atPath: path, contents: data,
+                    attributes: [.posixPermissions: 0o600, .protectionKey: FileProtectionType.complete]) else { return }
+            } catch { CallLog.log(.net, "check revocation prepare_failed") }
+            return
+        }
+        if env["HEYDAN_CHAT_CHECKS"] == "1", env["HEYDAN_CHECK_VOICE"] == "1" || env["HEYDAN_CHECK_HISTORY"] == "1" {
+            let chat = ChatController.shared
+            let deadline = ContinuousClock.now + .seconds(30)
+            while chat.conversations.isEmpty, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard let conversation = chat.conversations.first else { return }
+            if env["HEYDAN_CHECK_HISTORY"] == "1" {
+                func order(_ entity: ThreadEntity) -> Int64? {
+                    switch entity {
+                    case .message(let message): message.order
+                    case .question(let question): question.order
+                    case .unknown: nil
+                    }
+                }
+                do {
+                    let newest = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(limit: 1))
+                    guard let last = newest.items.compactMap(order).last else { return }
+                    let before = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(before: last, limit: 1))
+                    guard let previous = before.items.compactMap(order).last, previous < last else { return }
+                    let after = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(after: previous, limit: 1))
+                    CallLog.log(.net, "check history before=true after=\(after.items.compactMap(order).first == last)")
+                } catch { CallLog.log(.net, "check history failed") }
+                return
+            }
+            do {
+                let original = try await chat.service.voice(conversationId: conversation.id)
+                let saved = original.saved
+                let restore = saved.provider == nil ? VoicePatchRequest(reset: true) :
+                    VoicePatchRequest(provider: saved.provider, model: saved.model, voice: saved.voice)
+                var matched = false
+                do {
+                    let choice = original.effective
+                    _ = try await chat.service.updateVoice(conversationId: conversation.id,
+                        request: VoicePatchRequest(provider: choice.provider, model: choice.model, voice: choice.voice))
+                    let readback = try await chat.service.voice(conversationId: conversation.id)
+                    matched = readback.saved == SavedVoiceSelection(provider: choice.provider, model: choice.model, voice: choice.voice)
+                } catch { CallLog.log(.net, "check voice save_failed") }
+                _ = try await chat.service.updateVoice(conversationId: conversation.id, request: restore)
+                let restored = try await chat.service.voice(conversationId: conversation.id)
+                CallLog.log(.net, "check voice saved=\(matched) restored=\(restored.saved == saved)")
+            } catch { CallLog.log(.net, "check voice failed") }
+            return
+        }
+        let pairedFeed = env["HEYDAN_CHAT_CHECKS"] == "1" && env["HEYDAN_PAIRED_FEED"] == "1"
+        guard pairedFeed || env["HEYDAN_AUTOCALL"] == "1" else { return }
+        if !pairedFeed, let link = env["HEYDAN_CALL_LINK"] {
             guard let requested = VoiceLine(callLink: link), CallController.shared.line == requested else {
                 CallLog.log(.call, "debug autocall refused: supplied line invalid or not selected", level: .error)
                 return
@@ -105,10 +167,29 @@ extension HeyDanApp {
             #if targetEnvironment(simulator)
             let gated = env["HEYDAN_FEED_ON_VOICE"] == "1"
             if gated { VoiceDebug.gateFeed(launched: launched) }
-            feed = Task.detached { await AudioFeed.run(path: path, after: delay, gated: gated) }
+            feed = Task.detached {
+                if pairedFeed {
+                    while await CallController.shared.pairedCallTarget == nil, !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                await AudioFeed.run(path: path, after: delay, gated: gated)
+            }
             #else
             feed = Task.detached { await AudioFeed.run(path: path, after: delay) }
             #endif
+        }
+        if pairedFeed {
+            let deadline = ContinuousClock.now + .seconds(60)
+            while CallController.shared.pairedCallTarget == nil, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            guard CallController.shared.pairedCallTarget != nil else { return }
+            while CallController.shared.isCallActive, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return
         }
         #if targetEnvironment(simulator)
         if env["HEYDAN_START_ON_SAMPLE"] == "1" {

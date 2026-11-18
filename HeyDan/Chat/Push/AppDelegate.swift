@@ -37,6 +37,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         #if DEBUG
         Task { await debugNotification() }
+        if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1" {
+            Task {
+                while !Task.isCancelled {
+                    let count = await center.deliveredNotifications().count
+                    CallLog.log(.net, "check push delivered=\(count) badge=\(UIApplication.shared.applicationIconBadgeNumber)")
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+        }
         #endif
         return true
     }

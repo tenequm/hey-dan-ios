@@ -49,6 +49,7 @@ struct PairedSettingsSection: View {
             if let error { Text(error) }
             if let error = ChatController.shared.error { Text(error.message) }
         }
+        .buttonStyle(.borderless)
         .accessibilityIdentifier("chat.settings.pairings")
         .sheet(isPresented: $showsPairing) { PairingView() }
         .sheet(item: $voice) { selection in
