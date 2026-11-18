@@ -58,7 +58,7 @@ extension ChatController {
     func saveOutbox() async throws {
         guard let host, let pairing else { return }
         let removed = outbox.entries.filter { $0.state == .reached }
-        for entry in removed { outbox.remove(clientId: entry.request.clientId) }
+        for entry in removed { outbox.remove(clientId: entry.request.clientId); durableIDs.remove(entry.request.clientId) }
         let entries = outbox.entries
         guard entries != savedEntries || !removed.isEmpty else { return }
         try await files.save(entries, host: host, deviceId: pairing.deviceId)

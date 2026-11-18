@@ -44,25 +44,26 @@ extension ChatController {
                         }
                     }
                     guard let host, let pairing else { return }
-                    if candidate.cursor != reducer.cursor || !changed.isEmpty {
+                    let moved = candidate.cursor != reducer.cursor || !changed.isEmpty
+                    if moved {
                         try await store.save(ThreadSnapshot(cursor: candidate.cursor,
                             conversations: changed.compactMap { candidate.conversations[$0] },
                             entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
                     }
                     guard token == generation, !Task.isCancelled else { return }
-                    reducer = candidate
+                    if moved { reducer = candidate }
                     for id in changed {
                         if case .message(let message) = candidate.entities[id] { outbox.reconcile(message) }
                     }
-                    for event in batch {
-                        if event.kind == .message, let message = try? event.decode(Message.self) {
-                            #if DEBUG
-                            if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1", let voice = message.voice {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1" {
+                        for event in batch where event.kind == .message {
+                            if let message = try? event.decode(Message.self), let voice = message.voice {
                                 CallLog.log(.stream, "check thread voice=\(voice.rawValue) id=\(message.id)")
                             }
-                            #endif
                         }
                     }
+                    #endif
                     if batch.contains(where: { $0.kind == .synchronized }) {
                         CallLog.log(.stream, "synchronized cursor=\(reducer.cursor) count=\(batch.count) ms=\(CallLog.ms(since: started))")
                         connectionState = .connected; error = nil; attempts = 0

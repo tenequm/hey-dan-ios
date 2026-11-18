@@ -16,7 +16,7 @@ import SwiftData
 
     init(deviceId: String, entityId: String, conversationId: String, order: Int64,
          seq: Int64, kind: String, json: Data) {
-        key = StoreLocation.digest(deviceId) + ":" + kind + ":" + entityId
+        key = Self.key(device: StoreLocation.digest(deviceId), kind: kind, entityId: entityId)
         self.deviceId = deviceId
         self.entityId = entityId
         self.conversationId = conversationId
@@ -25,6 +25,8 @@ import SwiftData
         self.kind = kind
         self.json = json
     }
+
+    static func key(device: String, kind: String, entityId: String) -> String { device + ":" + kind + ":" + entityId }
 }
 
 @Model final class CachedStreamCursor {
@@ -151,28 +153,38 @@ actor SwiftDataThreadStore: ThreadStore {
         modelContext.autosaveEnabled = false
         do {
             let encoder = JSONEncoder()
-            if let allowed = snapshot.allowedConversations {
-                for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate { $0.deviceId == deviceId })) where !allowed.contains(row.conversationId) {
-                    modelContext.delete(row)
-                }
+            if let allowed = snapshot.allowedConversations.map(Array.init) {
+                for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
+                    $0.deviceId == deviceId && !allowed.contains($0.conversationId)
+                })) { modelContext.delete(row) }
             }
-            for conversation in snapshot.conversations {
-                try upsert(CachedThreadEntity(deviceId: deviceId, entityId: conversation.id,
-                    conversationId: conversation.id, order: 0, seq: conversation.seq,
-                    kind: "conversation", json: encoder.encode(conversation)))
-            }
+            typealias Row = (id: String, conversationId: String, kind: String, order: Int64, seq: Int64, value: any Encodable)
+            var rows: [Row] = snapshot.conversations.map { ($0.id, $0.id, "conversation", 0, $0.seq, $0) }
             for entity in snapshot.entities {
-                let id: String, conversationId: String, kind: String, order: Int64, seq: Int64
                 switch entity {
-                case .message(let value):
-                    (id, conversationId, kind, order, seq) = (value.id, value.conversationId, "message", value.order, value.seq)
-                case .question(let value):
-                    (id, conversationId, kind, order, seq) = (value.id, value.conversationId, "question", value.order, value.seq)
+                case .message(let value): rows.append((value.id, value.conversationId, "message", value.order, value.seq, entity))
+                case .question(let value): rows.append((value.id, value.conversationId, "question", value.order, value.seq, entity))
                 case .unknown: continue
                 }
-                try upsert(CachedThreadEntity(deviceId: deviceId, entityId: id,
-                    conversationId: conversationId, order: order, seq: seq, kind: kind,
-                    json: encoder.encode(entity)))
+            }
+            let device = StoreLocation.digest(deviceId)
+            let keys = rows.map { CachedThreadEntity.key(device: device, kind: $0.kind, entityId: $0.id) }
+            // One fetch for the whole batch instead of one per row.
+            var existing = Dictionary(try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
+                predicate: #Predicate { keys.contains($0.key) })).map { ($0.key, $0) }) { first, _ in first }
+            for (key, row) in zip(keys, rows) {
+                if let record = existing[key] {
+                    guard row.seq > record.seq else { continue }
+                    record.json = try encoder.encode(row.value)
+                    record.seq = row.seq
+                    record.order = row.order
+                    record.conversationId = row.conversationId
+                } else {
+                    let record = CachedThreadEntity(deviceId: deviceId, entityId: row.id, conversationId: row.conversationId,
+                        order: row.order, seq: row.seq, kind: row.kind, json: try encoder.encode(row.value))
+                    modelContext.insert(record)
+                    existing[key] = record
+                }
             }
             let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
                 predicate: #Predicate { $0.deviceId == deviceId })).first
@@ -192,18 +204,6 @@ actor SwiftDataThreadStore: ThreadStore {
             modelContext.rollback()
             throw error
         }
-    }
-
-    private func upsert(_ incoming: CachedThreadEntity) throws {
-        let key = incoming.key
-        if let existing = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
-            predicate: #Predicate { $0.key == key })).first {
-            guard incoming.seq > existing.seq else { return }
-            existing.json = incoming.json
-            existing.seq = incoming.seq
-            existing.order = incoming.order
-            existing.conversationId = incoming.conversationId
-        } else { modelContext.insert(incoming) }
     }
 
     func clear(deviceId: String) throws {

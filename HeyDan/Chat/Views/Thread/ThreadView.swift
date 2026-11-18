@@ -7,7 +7,7 @@ struct ThreadView: View {
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
     @State private var answeredQuestionID: String?
-    private var live: Conversation { chat.conversations.first { $0.id == conversation.id } ?? conversation }
+    private var live: Conversation { chat.conversation(conversation.id) ?? conversation }
 
     var body: some View {
         ThreadContent(
