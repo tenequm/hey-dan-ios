@@ -18,6 +18,7 @@ public struct Outbox: Sendable {
 
     public enum State: Sendable, Equatable, Codable {
         case queued, waiting, held, stored, routed, reached, failed, outcomeUnknown
+        public var canSendAgain: Bool { self == .failed || self == .outcomeUnknown }
     }
     public struct Attachment: Sendable, Equatable, Codable {
         public let uploadKey: String

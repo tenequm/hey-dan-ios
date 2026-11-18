@@ -50,7 +50,7 @@ extension ChatController {
     }
     func retry(clientId: String) async {
         guard let entry = outbox.entries.first(where: { $0.request.clientId == clientId }),
-              [.failed, .outcomeUnknown].contains(entry.state), let host, let pairing,
+              entry.state.canSendAgain, let host, let pairing,
               retrying.insert(clientId).inserted else { return }
         // A second tap while the copy is staged would send the message twice.
         defer { retrying.remove(clientId) }
