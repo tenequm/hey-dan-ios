@@ -10,6 +10,16 @@ struct Gallery: View {
     let name: String
 
     var body: some View {
+        if name == "CallScreen" {
+            let target = PairedCallTarget(host: URL(string: "https://example.invalid")!, deviceId: "sample",
+                                          conversation: ThreadPreviewValues.conversation)
+            PairedCallCover(target: CallTarget(paired: target, service: FixtureAppService()))
+        } else {
+            specimens
+        }
+    }
+
+    private var specimens: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: theme.space.s6) {
                 switch name {

@@ -20,6 +20,8 @@ import XCTest
     func testFixtureCallAndPairingSettings() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1"])
         XCTAssertTrue(call.isEnabled)
+        XCTAssertEqual(call.label, "Call")
+        XCTAssertGreaterThanOrEqual(call.frame.height, 44)
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.staticTexts["Taylor tester"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Pair a host"].exists)
@@ -39,9 +41,13 @@ import XCTest
         XCTAssertTrue(refusal.waitForExistence(timeout: 30))
         let close = app.buttons["chat.call.close"]
         XCTAssertTrue(close.isHittable)
+        XCTAssertEqual(close.label, "Close")
+        XCTAssertGreaterThanOrEqual(close.frame.height, 44)
         XCTAssertTrue(app.buttons["settings"].exists)
         XCTAssertTrue(close.frame.intersection(app.buttons["settings"].frame).isNull)
         close.tap()
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
+        XCTAssertTrue(call.isHittable)
+        XCTAssertTrue(call.isEnabled)
     }
 }
