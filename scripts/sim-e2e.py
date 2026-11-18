@@ -52,6 +52,7 @@ APP_CHECKS = {
     'app-push-edit': None,
     'app-paired-call': 'testPairedCall',
     'app-paired-voice': None,
+    'app-voice-picker-screen': 'testPairedVoicePicker',
     'app-paired-intent': 'testPairedIntent',
     'app-unpair': 'testUnpair',
     'app-line-call': None,
@@ -281,7 +282,7 @@ def ui_check(name, method, stack=False):
                            '-default-test-execution-time-allowance', '120',
                            '-maximum-test-execution-time-allowance', '150',
                            '-only-testing:HeyDanChecks/' + method, seconds=240, env=runner)
-            if name == 'app-push-communication':
+            if name in ('app-push-communication', 'app-pair-screen', 'app-voice-picker-screen'):
                 run('xcrun', 'xcresulttool', 'export', 'attachments',
                     '--path', Path(temporary) / 'checks.xcresult',
                     '--output-path', Path(temporary) / 'screenshots', '--filter', '*.png')
@@ -296,9 +297,7 @@ def ui_check(name, method, stack=False):
         elif 'Executed 1 test, with 0 failures' not in output:
             result(name, 'fail', 'Expected exactly one executed test with zero failures', [f'logs/{name}.log'])
         else:
-            evidence = [f'logs/{name}.log']
-            if name == 'app-push-communication':
-                evidence.extend(screenshots)
+            evidence = [f'logs/{name}.log', *screenshots]
             logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
             current = logfile.read_text() if logfile.exists() else ''
             delta = current[baseline:] if len(current) >= baseline else current
