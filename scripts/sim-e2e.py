@@ -167,9 +167,11 @@ def grade(text):
 
 def grade_paired(text):
     evidence = grade(text)
+    # A jev call speaks its reply without marking the thread's copy spoken.
+    marks = ('caller', 'spoken') if evidence['mode'] == 'plain' else ('caller',)
     return (all(evidence[key] for key in ('connected', 'reply', 'audio', 'clean', 'ended', 'fed'))
             and bool(re.search(r'end reason=hangup status=2\d\d[^\n]*paired=true', text))
-            and all('check thread voice=' + voice in text for voice in ('caller', 'spoken')))
+            and all('check thread voice=' + voice in text for voice in marks))
 
 
 @contextlib.contextmanager
@@ -224,7 +226,8 @@ def ui_check(name, method, stack=False):
         result(name, 'skip', 'Not selected by HEYDAN_CHAT_ONLY')
         return
     CHECK = name
-    runner = ENV | ({'TEST_RUNNER_HEYDAN_CHAT_STACK': '1'} if stack else {})
+    runner = ENV | ({'TEST_RUNNER_HEYDAN_CHAT_STACK': '1',
+                     'TEST_RUNNER_HEYDAN_STACK_PROFILE': os.environ.get('HEYDAN_STACK_PROFILE', 'fast')} if stack else {})
     if name in ('app-upload-photo', 'app-upload-document'):
         import base64
         attachment = BUILD / ('upload.png' if name.endswith('photo') else 'upload.pdf')

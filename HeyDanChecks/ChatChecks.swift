@@ -93,11 +93,14 @@ final class ChatChecks: XCTestCase {
             "chat.message.", marker, "Reached")).firstMatch
         XCTAssertTrue(reached.waitForExistence(timeout: 45))
         // A routed copy can be coalesced with reached before the screen renders.
-        let reply = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label CONTAINS %@ OR value CONTAINS %@",
-            "Stand-in reply.", "Stand-in reply.")).firstMatch
-        XCTAssertTrue(reply.waitForExistence(timeout: 45))
-        let newRows = messageRows.matching(NSPredicate(format: "NOT identifier IN %@", before))
+        if env["HEYDAN_STACK_PROFILE"] != "full" {
+            let reply = app.descendants(matching: .any).matching(NSPredicate(
+                format: "label CONTAINS %@ OR value CONTAINS %@",
+                "Stand-in reply.", "Stand-in reply.")).firstMatch
+            XCTAssertTrue(reply.waitForExistence(timeout: 45))
+        }
+        // A real agent's words vary: there, any second new row with text is its reply.
+        let newRows = messageRows.matching(NSPredicate(format: "NOT identifier IN %@ AND label != ''", before))
         let received = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in newRows.count >= 2 }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 45), .completed)
     }

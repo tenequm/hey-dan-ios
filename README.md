@@ -164,6 +164,7 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   | `HEYDAN_LOCAL_CA` | Optional root certificate installed in that Simulator for a local HTTPS chain. |
   | `HEYDAN_E2E_SAY` | `What is two plus two? Please answer briefly.`; include the server's wake phrase when enabled. Passed to `say` on stdin, never as an argument. |
   | `HEYDAN_E2E_ATTEMPTS` | `2`; use `1` to disable the connect-timeout retry. |
+  | `HEYDAN_STACK_PROFILE` | `fast`; `full` when the local stack runs a real agent, so the send check takes any reply instead of the stand-in's. |
 
   Derived data and synthesized audio stay in `build/sim-e2e`, independent of `just sim`;
   `HEYDAN_DERIVED_DATA` overrides that build folder. Run only one harness per checkout at a time.
