@@ -88,17 +88,17 @@ import UserNotifications
     private static func avatar(for agent: Agent) -> Data? {
         let cacheKey = agent.id + "|" + agent.name
         if let cached = avatars[cacheKey] { return cached }
-        let size = CGSize(width: 96, height: 96)
+        let theme = Theme.dark
+        let size = CGSize(width: theme.space.s10, height: theme.space.s10)
         let avatar = UIGraphicsImageRenderer(size: size).image { context in
-            UIColor.systemIndigo.setFill()
+            UIColor(theme.color.prominent).setFill()
             context.cgContext.fillEllipse(in: CGRect(origin: .zero, size: size))
-            let initials = agent.name.split(whereSeparator: \.isWhitespace).prefix(2)
-                .compactMap(\.first).map(String.init).joined().uppercased()
+            let initial = agent.name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1).uppercased()
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 36, weight: .semibold),
-                .foregroundColor: UIColor.white,
+                .font: UIFont.systemFont(ofSize: theme.type.headline.size, weight: .bold),
+                .foregroundColor: UIColor(theme.color.onProminent),
             ]
-            let text = (initials.isEmpty ? "?" : initials) as NSString
+            let text = (initial.isEmpty ? "?" : initial) as NSString
             let bounds = text.size(withAttributes: attributes)
             text.draw(at: CGPoint(x: (size.width - bounds.width) / 2,
                                  y: (size.height - bounds.height) / 2), withAttributes: attributes)

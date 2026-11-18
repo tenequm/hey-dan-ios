@@ -42,7 +42,13 @@ struct ContentView: View {
         .foregroundStyle(theme.color.textPrimary)
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .sheet(isPresented: $showsSettings) { SettingsView() }
+        .sheet(isPresented: $showsSettings) {
+            if Pairings.shared.active == nil {
+                VoiceLinesSettings()
+            } else {
+                NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
+            }
+        }
         .sheet(isPresented: $showsOptions, onDismiss: {
             guard let target = pendingVoiceTarget else { return }
             pendingVoiceTarget = nil
@@ -1426,7 +1432,7 @@ private enum Claw {
 }
 
 /// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.
-private struct SettingsView: View {
+struct VoiceLinesSettings: View {
     @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     @Environment(\.dismiss) private var dismiss
@@ -1447,7 +1453,7 @@ private struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: theme.space.s4) {
             ZStack {
-                Text(Pairings.shared.active == nil ? "Voice lines" : "Settings")
+                Text("Voice lines")
                     .textRole(theme.type.headline, theme.weight.medium)
                     .spacing(-0.01, size: 17)
                 HStack {

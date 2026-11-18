@@ -54,4 +54,15 @@ final class ChatThreadChecks: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 15))
         return card
     }
+
+    @MainActor func testListActivityStates() {
+        let app = launchChat(["HEYDAN_GALLERY": "List/Activity"])
+        let working = app.buttons["chat.conversation.preview-0"]
+        XCTAssertTrue(working.waitForExistence(timeout: 10))
+        XCTAssertTrue(working.label.contains("Working"))
+        XCTAssertTrue(app.buttons["chat.conversation.preview-1"].label.contains("Done"))
+        XCTAssertTrue(app.buttons["chat.conversation.preview-2"].label.contains("Input"))
+        shot("activity-list")
+        shot("activity-row", screenshot: working.screenshot())
+    }
 }

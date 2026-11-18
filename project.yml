@@ -129,7 +129,11 @@ targets:
   HeyDanNotificationService:
     type: app-extension
     platform: iOS
-    sources: [HeyDanNotificationService, HeyDan/Shared/MessageNotification.swift]
+    sources:
+      - HeyDanNotificationService
+      - HeyDan/Shared/MessageNotification.swift
+      - HeyDan/Tokens.swift
+      - HeyDan/Theme.swift
     dependencies:
       - package: HeyDanCore
     entitlements:

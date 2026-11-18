@@ -52,6 +52,7 @@ APP_CHECKS = {
     'app-push-edit': None,
     'app-paired-call': 'testPairedCall',
     'app-paired-voice': None,
+    'app-voice-picker-screen': 'testPairedVoicePicker',
     'app-paired-intent': 'testPairedIntent',
     'app-unpair': 'testUnpair',
     'app-line-call': None,
@@ -270,6 +271,10 @@ def ui_check(name, method, stack=False):
     try:
         with tempfile.TemporaryDirectory(prefix='chat-checks-', dir=BUILD) as temporary, push_driver(
                 Path(temporary), method.startswith('ChatChecks/testPush')):
+            if name == 'app-pair-screen':
+                link_file = Path(temporary) / 'pair-link'
+                with open(link_file, 'x', opener=lambda path, flags: os.open(path, flags, 0o600)) as out:
+                    out.write(pair_link())
             runner['TEST_RUNNER_HEYDAN_CHAT_CONTROL'] = temporary
             output = build('test-without-building', '-parallel-testing-enabled', 'NO',
                            '-resultBundlePath', Path(temporary) / 'checks.xcresult',
@@ -277,7 +282,7 @@ def ui_check(name, method, stack=False):
                            '-default-test-execution-time-allowance', '120',
                            '-maximum-test-execution-time-allowance', '150',
                            '-only-testing:HeyDanChecks/' + method, seconds=240, env=runner)
-            if name == 'app-push-communication':
+            if name in ('app-push-communication', 'app-pair-screen', 'app-voice-picker-screen'):
                 run('xcrun', 'xcresulttool', 'export', 'attachments',
                     '--path', Path(temporary) / 'checks.xcresult',
                     '--output-path', Path(temporary) / 'screenshots', '--filter', '*.png')
@@ -292,9 +297,7 @@ def ui_check(name, method, stack=False):
         elif 'Executed 1 test, with 0 failures' not in output:
             result(name, 'fail', 'Expected exactly one executed test with zero failures', [f'logs/{name}.log'])
         else:
-            evidence = [f'logs/{name}.log']
-            if name == 'app-push-communication':
-                evidence.extend(screenshots)
+            evidence = [f'logs/{name}.log', *screenshots]
             logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
             current = logfile.read_text() if logfile.exists() else ''
             delta = current[baseline:] if len(current) >= baseline else current
@@ -378,14 +381,10 @@ def chat_checks():
                'Expected pairing outcome observed' if observed else 'Pairing outcome not observed within 30s')
         if not observed:
             return
-    # The real pairing screen consumes a fresh code via pasteboard, never a runner variable.
+    # Only the temporary directory name enters the XCTest environment. The runner seeds the
+    # device-local pasteboard because simctl pbcopy can acknowledge a write without applying it.
     CHECK = 'app-pair-screen'
-    fresh = pair_link()
-    run('xcrun', 'simctl', 'pbcopy', UDID, stdin=fresh)
-    try:
-        ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
-    finally:
-        run('xcrun', 'simctl', 'pbcopy', UDID, stdin='')
+    ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
     logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
     CHECK = 'app-paired-voice'
     offset = len(logfile.read_text()) if logfile.exists() else 0

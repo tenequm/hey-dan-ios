@@ -45,9 +45,7 @@ struct ThreadCallButton: View {
         Button("Settings", systemImage: "gearshape") { showsSettings = true }
             .sheet(isPresented: $showsSettings) {
                 NavigationStack {
-                    Form { PairedSettingsSection() }
-                        .navigationTitle("Settings")
-                        .toolbar { Button("Done") { showsSettings = false } }
+                    PairedSettingsSection(close: { showsSettings = false })
                 }
             }
         if let host = chat.host, let pairing = chat.pairing {
