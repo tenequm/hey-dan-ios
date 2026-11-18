@@ -209,7 +209,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         CallLog.log(.net, "push directMessagesSetting=\(settings.directMessagesSetting.rawValue) environment=\(Bundle.main.object(forInfoDictionaryKey: Self.apsEnvironmentKey) as? String ?? "missing")")
-        let payload = PushPayload(aps: PushAPS(alert: PushAlert(title: agent.name, body: "New message"), threadId: id, mutableContent: 1, badge: 1, sound: "default", category: "message"), hd: PushData(h: entry.host.absoluteString, v: 1, c: id, m: "debug_message", k: .message, a: agent))
+        let payload = PushPayload(aps: PushAPS(alert: PushAlert(title: agent.name, body: FixtureContent.capturing ? FixtureContent.notification : "New message"), threadId: id, mutableContent: 1, badge: 1, sound: "default", category: "message"), hd: PushData(h: entry.host.absoluteString, v: 1, c: id, m: "debug_message", k: .message, a: agent))
         let original = UNMutableNotificationContent()
         original.title = payload.aps.alert.title
         original.body = payload.aps.alert.body

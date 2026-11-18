@@ -14,7 +14,6 @@ struct ScreenCaptureFixture: View {
         let family: String
         let scenario: String?
         let phase: String?
-        let voice: String?
     }
 
     var body: some View {
@@ -34,9 +33,6 @@ struct ScreenCaptureFixture: View {
                     Self.phase = next.phase
                     if next.family == "chat" {
                         ChatController.shared.selectCaptureFixture(next.scenario, id: next.id)
-                    } else if next.family == "voice" {
-                        PickerFixture.reset(to: next.scenario)
-                        CallController.shared.setPreviewVoice(next.voice)
                     }
                     request = next
                 }
@@ -48,11 +44,14 @@ struct ScreenCaptureFixture: View {
     @ViewBuilder private func screen(_ request: Request) -> some View {
         switch request.family {
         case "chat": ConversationList()
+        case "list": ConversationListSpecimen(name: "List/" + (request.scenario ?? "Activity"))
+        case "pairing": PairingView()
+        case "paired": PairingView(paired: Pairings.shared.active)
+        case "lines": VoiceLinesSettings()
         case "call":
             let target = PairedCallTarget(host: FixtureAppService.host, deviceId: FixtureAppService.pairing.deviceId,
-                                          conversation: ThreadPreviewValues.conversation)
+                                          conversation: FixtureContent.conversation)
             PairedCallCover(target: CallTarget(paired: target, service: FixtureAppService()))
-        case "voice": ContentView()
         default: EmptyView()
         }
     }

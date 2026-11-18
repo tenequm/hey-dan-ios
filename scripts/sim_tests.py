@@ -64,7 +64,7 @@ def ui_selector(check):
     return 'HeyDanChecks/HeyDanChecks/test' + check
 
 
-def main(mode, name, folder, bundle, check=None):
+def main(mode, name, folder, bundle, check=None, capture_dir=None):
     env = {k: v for k, v in os.environ.items() if k in
            ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME')}
     devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))
@@ -80,7 +80,10 @@ def main(mode, name, folder, bundle, check=None):
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
                         f'user/{os.getuid()}/com.apple.dasd'], check=True)
         destination = f'id={udid}'
+        started = time.monotonic()
         manifest = test_products(build, destination, env)
+        build_seconds = time.monotonic() - started
+        started = time.monotonic()
         runner = env.copy()
 
         def test(selector):
@@ -99,6 +102,8 @@ def main(mode, name, folder, bundle, check=None):
             proc.check_returncode()
             summary = json.loads(subprocess.check_output(['xcrun', 'xcresulttool', 'get', 'test-results',
                                                           'summary', '--path', result]))
+            if mode == 'screens' and (summary['skippedTests'] or not summary['passedTests']):
+                raise RuntimeError('Incomplete screen checks')
             if not summary['totalTestCount']:
                 raise RuntimeError(f'No tests ran for {selector}')
 
@@ -120,7 +125,22 @@ def main(mode, name, folder, bundle, check=None):
             runner.update({'TEST_RUNNER_' + k: v for k, v in os.environ.items()
                            if k.startswith('HEYDAN_') and k not in withheld})
             runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(out)
-        test(selector)
+        if mode == 'screens' or selector.startswith('HeyDanChecks/ScreenCaptureChecks'):
+            runner['TEST_RUNNER_HEYDAN_SCREENS'] = '1'
+            if capture_dir:
+                runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(capture_dir)
+            if mode == 'screens' or selector.endswith(('/testPairing', '/testVoiceLines', '/ScreenCaptureChecks')):
+                subprocess.run([*sim, 'keychain', udid, 'reset'], check=True)
+            appearance = [*sim, 'ui', udid, 'appearance']
+            original = subprocess.check_output(appearance, text=True).strip().split()[-1].lower()
+            try:
+                subprocess.run([*appearance, 'dark'], check=True)
+                test(selector)
+            finally:
+                subprocess.run([*appearance, original], check=True)
+                print(f'Build: {build_seconds:.1f}s; capture: {time.monotonic() - started:.1f}s', flush=True)
+        else:
+            test(selector)
 
 
 if __name__ == '__main__':

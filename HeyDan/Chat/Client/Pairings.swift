@@ -49,6 +49,11 @@ import UIKit
             let host = FixtureAppService.host
             saved.entries[host.absoluteString] = Entry(host: host, pairing: FixtureAppService.pairing,
                 features: ["files", "calls", "push", "voice-picker"])
+            if FixtureContent.capturing {
+                let studio = URL(string: "https://studio.example.ts.net")!
+                let pairing = PairResponse(deviceId: "dev_studio", userName: "mac mini", agents: [Agent(id: "ag_juno", name: "Juno")], protocol: 1, serverTime: 0)
+                saved.entries[studio.absoluteString] = Entry(host: studio, pairing: pairing, features: ["voice-picker"])
+            }
             saved.active = host.absoluteString
             state = .paired
             Task { @MainActor in publish() }
@@ -127,6 +132,11 @@ import UIKit
         if !fixture { try DeviceKey().remove(host: host) }
     }
     func pair(_ text: String, configuration: URLSessionConfiguration = .ephemeral) async throws {
+        #if DEBUG
+        if fixture && FixtureContent.capturing {
+            throw AppError.server(status: 403, body: ErrorBody(error: "invalid_code", message: "This link was already used. Ask Dan for a new one with /pair."))
+        }
+        #endif
         guard !fixture else { throw PairingFailure.fixture }
         guard !pairingInFlight else { throw PairingFailure.busy }
         guard state != .unreadable else { throw AppError.keyUnavailable }

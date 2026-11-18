@@ -208,19 +208,24 @@ final class CallController: NSObject {
         }
         #endif
         #if DEBUG && targetEnvironment(simulator)
-        if env["HEYDAN_FIXTURE_CHAT"] == "1", env["HEYDAN_PREVIEW_PHASE"] != nil {
-            let conversation = ThreadPreviewValues.conversation
-            let target = PairedCallTarget(host: FixtureAppService.host,
-                deviceId: FixtureAppService.pairing.deviceId, conversation: conversation)
-            pairedCallTarget = CallTarget(paired: target, service: FixtureAppService())
-            agentName = conversation.agent.name
-            showsPairedCall = true
+        if let scenario = env["HEYDAN_PREVIEW_VOICE"].flatMap(PreviewVoice.init(rawValue:)),
+           let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
+            previewVoice = scenario
+            liveVoice = scenario == .active
+                ? CallVoiceState(active: state.pending ?? state.active, activeDetails: state.pendingDetails ?? state.activeDetails, gen: state.gen)
+                : state
         }
-        setPreviewVoice(env["HEYDAN_PREVIEW_VOICE"])
         // `just sim` hands the call link in at launch: the Simulator's pasteboard does not take a CLI copy.
         if let link = env["HEYDAN_CALL_LINK"] { saveCallLink(link) }
         // Screenshots: fake lines named for the agents listed, never a real link; the first listed is picked.
-        if let names = env["HEYDAN_PREVIEW_LINES"] {
+        if FixtureContent.capturing {
+            lines = VoiceLines()
+            for (agent, host) in [("Dan", "voice.home.example.ts.net"), ("Stan", "voice-test.home.example.ts.net")] {
+                if let line = VoiceLine(callLink: "https://\(host)/voice?t=fixture") { _ = lines.add(line, agent: agent) }
+            }
+            if let first = lines.entries.first { lines.select(first.id) }
+            showLine(lines.selected)
+        } else if let names = env["HEYDAN_PREVIEW_LINES"] {
             _ = keep { next in
                 let ids = names.split(separator: ",").compactMap { name in
                     VoiceLine(callLink: "https://lines.example/voice?t=fake-\(name.lowercased())").map {
@@ -236,21 +241,6 @@ final class CallController: NSObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         setEngine(.none)
     }
-
-    #if DEBUG && targetEnvironment(simulator)
-    func setPreviewVoice(_ name: String?) {
-        previewVoiceUpdate?.cancel()
-        previewVoice = nil
-        liveVoice = nil
-        if let scenario = name.flatMap(PreviewVoice.init(rawValue:)),
-           let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
-            previewVoice = scenario
-            liveVoice = scenario == .active
-                ? CallVoiceState(active: state.pending ?? state.active, activeDetails: state.pendingDetails ?? state.activeDetails, gen: state.gen)
-                : state
-        }
-    }
-    #endif
 
     private func callProvider() -> CXProvider {
         if let provider {

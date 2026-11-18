@@ -1392,6 +1392,13 @@ private struct Preview {
             func spoke(_ segment: String, _ text: String, at seconds: TimeInterval) {
                 transcript.caption(segment: segment, text: text, isFinal: true, fromCaller: false, at: at(seconds))
             }
+            if FixtureContent.capturing {
+                said("caller", FixtureContent.caller, at: 5)
+                transcript.apply(.status(TurnStatus(turn: 1, status: .sent, text: FixtureContent.caller)), at: at(6))
+                transcript.apply(ReplyInfo(reply: 1, turn: 1), at: at(9))
+                spoke("reply", FixtureContent.reply, at: 9)
+                return transcript
+            }
             let backup = "Can you check whether the backup ran last night?"
             said("SG_1", backup, at: 5)
             transcript.apply(.status(TurnStatus(turn: 1, status: .sent, text: backup)), at: at(6))

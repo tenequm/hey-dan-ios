@@ -223,5 +223,6 @@ app-test:
     @python3 scripts/sim_tests.py app-test {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}}
 
 # Capture the fixture gallery for the current commit on an existing Simulator.
-screens theme="dark":
-    @python3 scripts/screens.py {{quote(sim_name)}} {{quote(sim_build)}} {{quote(theme)}}
+[positional-arguments]
+screens *args:
+    @python3 -B scripts/screens.py {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}} "$@"
