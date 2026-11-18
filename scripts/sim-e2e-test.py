@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 spec =importlib.util.spec_from_file_location('sim_e2e', Path(__file__).with_name('sim-e2e.py'))
@@ -81,6 +82,29 @@ class Grade(unittest.TestCase):
     def test_refused_autocall(self):
         self.assertTrue(harness.grade(REFUSED)['refused'])
         self.assertFalse(harness.grade(JEV_CALL)['refused'])
+
+
+class ChatResults(unittest.TestCase):
+    def test_missing_bundle_reports_each_check_without_starting_simulator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / 'results').mkdir()
+            with patch.object(harness, 'OUT', output), patch.object(harness, 'BUNDLE', 'com.example.HeyDan', create=True), \
+                 patch.object(harness, 'RECORDS', {}), patch.dict(os.environ, {}, clear=True), \
+                 patch.object(harness, 'sim') as sim:
+                with self.assertRaisesRegex(RuntimeError, 'Local.xcconfig'):
+                    harness.main()
+                sim.assert_not_called()
+                for name in harness.APP_CHECKS:
+                    self.assertEqual(harness.RECORDS[name]['status'], 'skip')
+                harness.report()
+                self.assertTrue((output / 'report.md').exists())
+                self.assertIn('No local stack is running', (output / 'report.md').read_text())
+
+    def test_real_bundle_required(self):
+        self.assertTrue(harness.bundle_ready('com.tenequm.HeyDan'))
+        self.assertFalse(harness.bundle_ready('com.example.HeyDan'))
+        self.assertFalse(harness.bundle_ready(''))
 
 
 @unittest.skipUnless(shutil.which('timeout'), 'GNU timeout is not installed')

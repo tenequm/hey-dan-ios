@@ -217,10 +217,16 @@ server-logs cid:
 sim-checks check="LiveActivityOnLockScreen": gen
     #!/usr/bin/env bash
     set -euo pipefail
+    [ "{{bundle_id}}" = com.tenequm.HeyDan ] || { echo "Simulator push checks require HEYDAN_BUNDLE_ID = com.tenequm.HeyDan in gitignored Local.xcconfig (current: {{bundle_id}})" >&2; exit 1; }
+    selector={{quote(check)}}
+    case "$selector" in */*) ;; *) selector="HeyDanChecks/test$selector" ;; esac
     udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
     [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
     xcrun simctl bootstatus "$udid" -b >/dev/null
-    link=$(just _test-link)
+    # Port registration alone does not detect the notificationSettings/dasd hang.
+    xcrun simctl spawn "$udid" launchctl kickstart -k "user/$(id -u)/com.apple.dasd"
+    link=""
+    case "$selector" in HeyDanChecks/*) link=$(just _test-link) ;; esac
     results=$(mktemp -d)
     trap '[ -n "$results" ] && rm -rf -- "$results"' EXIT
     mkdir -p build/checks
@@ -228,15 +234,17 @@ sim-checks check="LiveActivityOnLockScreen": gen
     xcodebuild build-for-testing -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" -derivedDataPath "{{sim_build}}" -quiet
     xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
     xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
+    if [ -n "$link" ]; then
     SIMCTL_CHILD_HEYDAN_CALL_LINK="$link" xcrun simctl launch --terminate-running-process "$udid" {{bundle_id}} >/dev/null
     sleep 3
     xcrun simctl terminate "$udid" {{bundle_id}}
+    fi
     status=0
     # --foreground keeps xcodebuild in the terminal's group, so Ctrl-C still reaches it.
     TEST_RUNNER_HEYDAN_CHECKS_OUT="$PWD/build/checks" \
         timeout --foreground --kill-after=10 600 xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
         -derivedDataPath "{{sim_build}}" -resultBundlePath "$results/HeyDanChecks.xcresult" \
-        -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -only-testing "HeyDanChecks/HeyDanChecks/test{{check}}" 2>&1 \
+        -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -parallel-testing-enabled NO -only-testing "HeyDanChecks/$selector" 2>&1 \
         | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}
     exit "$status"
 
