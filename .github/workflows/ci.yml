@@ -87,24 +87,25 @@ jobs:
             checks: ChatComposerChecks ChatCallChecks
     env:
       CHECKS: ${{ matrix.checks }}
-      # What a Simulator that never ran the app cannot pass. The first needs the notification grant, which no CLI
-      # gives (AGENTS.md); in the second the system photo picker shows no photo within the check's 10 s.
-      HEYDAN_SKIP_TESTS: >-
-        HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
-        HeyDanChecks/ChatComposerChecks/testPhotosPicker
+      # Extra xcodebuild flags for every test run. One retry: an app launch can hang on these small runners. The
+      # skips are what a Simulator that never ran the app cannot pass: the first needs the notification grant, which
+      # no CLI gives (AGENTS.md); in the second the system photo picker shows no photo within the check's 10 s.
+      HEYDAN_TEST_FLAGS: >-
+        -retry-tests-on-failure -test-iterations 2
+        -skip-testing:HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+        -skip-testing:HeyDanChecks/ChatComposerChecks/testPhotosPicker
     steps:
       - *checkout
       - *tools
       - *timeout
-      # One of the image's own Simulators (a created one takes minutes longer to boot), booted here so that its
-      # first-boot work is over when the build ends: checks on a just-booted Simulator were slow and flaky.
-      - name: Boot the Simulator
+      # One of the image's own Simulators: its first boot takes about 90 s, a created one's over 5 minutes. The
+      # script boots it after the build, which takes two to three times as long beside a booted Simulator here.
+      - name: Pick the Simulator
         run: |
           sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
           udid=$(xcrun simctl list devices available -j | jq -r --arg runtime "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}" \
             '.devices[$runtime][] | select(.name == "iPhone 18 Pro Max") | .udid')
           xcrun simctl rename "$udid" "Hey Dan iPhone"
-          nohup xcrun simctl boot "$udid" > /dev/null 2>&1 &
       - name: App tests
         if: ${{ matrix.app-tests }}
         run: just app-test

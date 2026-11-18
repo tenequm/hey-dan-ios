@@ -77,7 +77,7 @@ def main(mode, name, folder, bundle, check=None):
         fcntl.flock(lock, fcntl.LOCK_EX)
         sim = ['xcrun', 'simctl']
         destination = f'id={udid}'
-        # The build needs no booted Simulator, so a boot started beforehand (CI) runs beside it.
+        # Build before booting: beside a booted Simulator the build takes two to three times as long on CI.
         manifest = test_products(build, destination, env)
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
@@ -89,8 +89,8 @@ def main(mode, name, folder, bundle, check=None):
             proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', '600', 'xcodebuild',
                                    'test-without-building', '-xctestrun', manifest, '-destination', destination,
                                    *TEST_FLAGS, '-resultBundlePath', result, '-only-testing:' + selector,
-                                   # CI names the tests a just-created Simulator cannot run.
-                                   *('-skip-testing:' + skip for skip in os.environ.get('HEYDAN_SKIP_TESTS', '').split())],
+                                   # CI adds a retry and skips what a Simulator that never ran the app cannot pass.
+                                   *os.environ.get('HEYDAN_TEST_FLAGS', '').split()],
                                   env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             # XCTest activity trees and assertion values can contain chat text or pairing links.
             for line in proc.stdout.splitlines():

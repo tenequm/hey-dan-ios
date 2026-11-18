@@ -194,8 +194,8 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
 - CI (`.github/workflows/ci.yml`) runs on pull requests to `main` and pushes to `main`, with no local config:
   `just test`, then `just build` and, on one of the runner's own Simulators, `just app-test` and the fixture
   check classes (`ChatChecks`, `ChatThreadChecks`, `ChatPairingChecks`, `ChatComposerChecks`,
-  `ChatCallChecks`). `HEYDAN_SKIP_TESTS` (space-separated `-skip-testing` identifiers, read by
-  `scripts/sim_tests.py`) names the tests such a Simulator cannot run.
+  `ChatCallChecks`). `HEYDAN_TEST_FLAGS` (extra `xcodebuild` test flags, read by `scripts/sim_tests.py`)
+  carries its one retry and the `-skip-testing` of what a Simulator that never ran the app cannot pass.
 
 ## TestFlight
 
