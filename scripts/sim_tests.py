@@ -106,20 +106,23 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             build, os.environ.get('HEYDAN_KEEP_FAILED_RESULTS') == '1') as results:
         fcntl.flock(lock, fcntl.LOCK_EX)
         sim = ['xcrun', 'simctl']
+        destination = f'id={udid}'
+        started = time.monotonic()
+        # Build before booting: beside a booted Simulator the build takes two to three times as long on CI.
+        manifest = test_products(build, destination, env)
+        build_seconds = time.monotonic() - started
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
                         f'user/{os.getuid()}/com.apple.dasd'], check=True)
-        destination = f'id={udid}'
-        started = time.monotonic()
-        manifest = test_products(build, destination, env)
-        build_seconds = time.monotonic() - started
         started = time.monotonic()
         runner = env.copy()
 
         def test(selector):
             result = Path(results) / (selector.replace('/', '-') + '.xcresult')
             command = ['xcodebuild', 'test-without-building', '-xctestrun', manifest, '-destination', destination,
-                       *TEST_FLAGS, '-only-testing:' + selector]
+                       *TEST_FLAGS, '-only-testing:' + selector,
+                       # CI names what a Simulator that never ran the app cannot pass.
+                       *('-skip-testing:' + skip for skip in os.environ.get('HEYDAN_SKIP_TESTS', '').split())]
             count = 1
             if selector.count('/') < 2:
                 inventory = Path(results) / 'tests.txt'

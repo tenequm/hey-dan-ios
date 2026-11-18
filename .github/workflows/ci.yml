@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: &docs
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - "*.example"
+  push:
+    branches: [main]
+    paths-ignore: *docs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  core:
+    name: Core tests
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - &setup
+        uses: ./.github/actions/setup
+      - run: just test
+
+  build:
+    name: Device build
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - *checkout
+      - *setup
+      - run: just build
+
+  app-tests:
+    name: App tests
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 25
+    env:
+      # No CLI grants notification permission on a Simulator that never ran the app (AGENTS.md); this test needs it.
+      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+    steps:
+      - *checkout
+      - uses: ./.github/actions/setup
+        with:
+          simulator: true
+      - run: just app-test
