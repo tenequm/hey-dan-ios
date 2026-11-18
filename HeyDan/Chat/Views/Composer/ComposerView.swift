@@ -3,6 +3,7 @@ import PhotosUI
 import HeyDanCore
 
 struct ComposerView: View {
+    @Environment(\.theme) private var theme
     var features: [String]?
     private var availableFeatures: [String] { features ?? ChatController.shared.features }
     let send: (String, [StagedAttachment]) async -> Bool
@@ -18,44 +19,57 @@ struct ComposerView: View {
     @State private var importFailed = false
 
     var body: some View {
-        VStack(alignment: .leading) {
+        let canSend = !staging && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        VStack(alignment: .leading, spacing: 0) {
             if !attachments.isEmpty {
                 ScrollView(.horizontal) {
-                    HStack {
+                    HStack(spacing: theme.space.s2) {
                         ForEach(attachments, id: \.fileURL) { attachment in
-                            VStack {
+                            HStack(spacing: theme.space.s1) {
                                 AttachmentView(attachment: attachment)
-                                Button("Remove", systemImage: "xmark.circle") {
+                                Button("Remove", systemImage: "xmark.circle.fill") {
                                     attachments.removeAll { $0.fileURL == attachment.fileURL }
                                     AttachmentStaging.remove(attachment)
                                     draftFiles.urls.remove(attachment.fileURL)
                                 }
+                                .labelStyle(.iconOnly)
+                                .foregroundStyle(theme.color.iconMuted)
                                 .accessibilityIdentifier(AXID.composerRemove)
-                            }.frame(width: 150)
+                            }
                         }
                     }
+                    .padding(.horizontal, theme.space.s2_5)
                 }
+                .scrollIndicators(.hidden)
+                .padding(.top, theme.space.s2)
             }
             if importFailed {
                 Label("Could not read the selected attachment. Try selecting it again.", systemImage: "exclamationmark.circle")
-                    .font(.caption)
+                    .textRole(theme.type.caption).foregroundStyle(theme.color.danger)
+                    .padding(.horizontal, theme.space.s3)
             }
-            HStack(alignment: .bottom) {
+            HStack(alignment: .bottom, spacing: 0) {
                 if availableFeatures.contains("files") {
                     Menu {
                         Button("Photos", systemImage: "photo") { pickingPhotos = true }
                             .accessibilityIdentifier(AXID.composerPhotos)
-                        Button("Files", systemImage: "doc") { importing = true }
-                    } label: { Image(systemName: "plus.circle") }
+                        Button("Files", systemImage: "folder") { importing = true }
+                    } label: {
+                        Image(systemName: "plus").foregroundStyle(theme.color.icon)
+                            .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                    }
                     .accessibilityLabel("Attach")
                     .accessibilityIdentifier(AXID.composerAttach)
                     .disabled(staging)
                 }
-                TextField("Message", text: $text, axis: .vertical)
+                TextField("Message", text: $text, prompt: Text("Message").foregroundStyle(theme.color.placeholder), axis: .vertical)
                     .lineLimit(1...6)
+                    .textRole(theme.type.body)
+                    .foregroundStyle(theme.color.textPrimary)
+                    .padding(.horizontal, theme.space.s1).padding(.vertical, theme.space.s2_5)
                     .accessibilityIdentifier(AXID.composerText)
                 if staging { ProgressView() }
-                Button("Send", systemImage: "arrow.up.circle.fill") {
+                Button {
                     sending = true
                     Task {
                         defer { sending = false }
@@ -65,14 +79,27 @@ struct ComposerView: View {
                         attachments = []
                         draftFiles.urls.removeAll()
                     }
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: theme.type.body.size, weight: theme.weight.bold))
+                        .foregroundStyle(canSend ? theme.color.onAccent : theme.color.disabledIcon)
+                        .frame(width: theme.type.display.size, height: theme.type.display.size)
+                        .background(canSend ? theme.color.accent : theme.color.disabledFill, in: Circle())
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
                 }
-                .labelStyle(.iconOnly)
-                .disabled(staging || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
+                .buttonStyle(.plain).accessibilityLabel("Send")
+                .disabled(!canSend)
                 .accessibilityIdentifier(AXID.composerSend)
             }
+            .padding(.vertical, theme.space.s0_5)
         }
         .disabled(sending)
-        .padding()
+        .tint(theme.color.accentText)
+        .background(theme.color.composer, in: RoundedRectangle(cornerRadius: theme.radius.composer))
+        .overlay { RoundedRectangle(cornerRadius: theme.radius.composer).strokeBorder(theme.color.composerBorder).allowsHitTesting(false) }
+        .shadow(color: theme.color.shadow, radius: theme.space.s3_5, y: theme.space.s1_5)
+        .padding(.horizontal, theme.space.s3)
+        .padding(.bottom, theme.space.s1_5)
         .photosPicker(isPresented: $pickingPhotos, selection: $photos, matching: .images)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
