@@ -190,7 +190,8 @@ private struct CardPlot: View {
                             let group = PlottableValue.value("Series", String(s))
                             switch type {
                             case .bar:
-                                BarMark(x: x, y: y).position(by: group)
+                                BarMark(x: x, y: y, width: .ratio(0.84))
+                                    .position(by: group, axis: .horizontal, span: .ratio(1))
                                     .foregroundStyle(color(s)).cornerRadius(theme.space.s1)
                                     .accessibilityLabel(categories[i])
                             case .area:
