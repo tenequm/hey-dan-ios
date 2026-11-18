@@ -129,30 +129,43 @@ struct MessageRow: View {
 }
 
 struct QuestionCard: View {
+    @Environment(\.theme) private var theme
+    var agentName: String? = nil
     let question: Question
     var errorMessage: String?
     var answer: (String) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(question.title).font(Theme.sans(18, .semibold))
-            MessageBody(text: question.text)
-            if question.state == .answered, let chosen = question.answer {
+        let answered = question.state == .answered
+        VStack(alignment: .leading, spacing: theme.space.s2_5) {
+            HStack(spacing: theme.space.s1_5) {
+                if answered { Image(systemName: "checkmark.circle").foregroundStyle(theme.color.statusDone) }
+                Text(answered ? "Answered" : [agentName, "needs input"].compactMap { $0 }.joined(separator: " "))
+                    .textCase(.uppercase).tracking(1)
+            }
+            .textRole(theme.type.caption, theme.weight.bold).foregroundStyle(theme.color.textSecondary)
+            Text(question.title).textRole(answered ? theme.type.footnote : theme.type.headline, answered ? theme.weight.regular : theme.weight.bold)
+            if !question.text.isEmpty { MessageBody(text: question.text) }
+            if answered, let chosen = question.answer {
                 Text(question.options.first { $0.value == chosen.value }?.selectedLabel ?? chosen.label)
+                    .textRole(theme.type.footnote, theme.weight.medium)
+                    .padding(.leading, theme.space.s3)
+                    .overlay(alignment: .leading) { Rectangle().fill(theme.color.statusDone).frame(width: theme.space.s0_5) }
                     .accessibilityIdentifier("chat.answer.\(question.id)")
             } else {
                 ForEach(question.options, id: \.value) { option in
                     optionButton(option).disabled(question.state != .open)
                 }
-                if question.state == .expired { Text("Expired").foregroundStyle(Theme.muted) }
-                if let errorMessage { Text(errorMessage).foregroundStyle(Theme.error) }
+                if question.state == .expired { Text("Expired").foregroundStyle(theme.color.textSecondary) }
+                if let errorMessage { Text(errorMessage).foregroundStyle(theme.color.danger) }
             }
         }
-        .font(Theme.sans(16))
-        .padding(16)
+        .textRole(theme.type.body)
+        .padding(theme.space.s4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-        .foregroundStyle(Theme.text)
+        .background(theme.color.surfaceCard, in: RoundedRectangle(cornerRadius: theme.radius.bubble))
+        .overlay { RoundedRectangle(cornerRadius: theme.radius.bubble).strokeBorder(theme.color.border) }
+        .foregroundStyle(theme.color.textPrimary)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(AXID.question(question.id))
         .accessibilityActions {
@@ -164,13 +177,19 @@ struct QuestionCard: View {
         }
     }
 
-    @ViewBuilder private func optionButton(_ option: QuestionOption) -> some View {
-        if option.style == "primary" {
-            Button(option.label) { answer(option.value) }.buttonStyle(.borderedProminent)
-        } else {
-            Button(option.label, role: option.style == "danger" ? .destructive : nil) { answer(option.value) }
-                .buttonStyle(.bordered)
+    private func optionButton(_ option: QuestionOption) -> some View {
+        let primary = option.style == "primary"
+        let shape = RoundedRectangle(cornerRadius: theme.radius.l)
+        return Button(role: option.style == "danger" ? .destructive : nil) { answer(option.value) } label: {
+            Text(option.label).textRole(theme.type.footnote, theme.weight.bold)
+                .foregroundStyle(option.style == "danger" ? theme.color.danger : theme.color.textPrimary)
+                .padding(.horizontal, theme.space.s3_5).padding(.vertical, theme.space.s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(primary ? theme.color.accentSoft : theme.color.surfaceInput, in: shape)
+                .overlay { shape.strokeBorder(primary ? theme.color.accent : theme.color.border) }
+                .contentShape(shape)
         }
+        .buttonStyle(.plain)
     }
 }
 
