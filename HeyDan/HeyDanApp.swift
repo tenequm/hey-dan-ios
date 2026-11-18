@@ -44,6 +44,8 @@ struct HeyDanApp: App {
                 )) {
                     if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
                 }
+                .environment(\.theme, Theme.dark)
+                .preferredColorScheme(.dark)
                 .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG

@@ -24,6 +24,7 @@ struct PairedCallButton: View {
 }
 
 struct PairedCallCover: View {
+    @Environment(\.theme) private var theme
     let target: CallTarget
     @Environment(\.dismiss) private var dismiss
 
@@ -33,13 +34,13 @@ struct PairedCallCover: View {
             HStack {
                 Spacer()
                 GlassIconButton(title: "Close", systemImage: "xmark") { dismiss() }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
+                    .padding(.horizontal, theme.space.s5)
+                    .padding(.top, theme.space.s2)
                     .accessibilityIdentifier("chat.call.close")
             }
             ContentView(pairedTarget: target)
         }
-        .background(Theme.page.ignoresSafeArea())
+        .background(theme.color.surface.ignoresSafeArea())
         .onAppear {
             if let paired = target.paired, ChatController.shared.host == paired.host {
                 ChatController.shared.openConversation(paired.conversation.id)
@@ -70,6 +71,7 @@ struct ThreadCallButton: View {
 }
 
 struct GlassIconButton: View {
+    @Environment(\.theme) private var theme
     let title: String
     let systemImage: String
     let action: () -> Void
@@ -77,9 +79,9 @@ struct GlassIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .medium))
-                .frame(width: 44, height: 44)
-                .glassCapsule()
+                .font(.system(size: theme.control.glassIcon, weight: theme.weight.medium, design: theme.type.familySystem))
+                .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                .glassCapsule(theme)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -87,24 +89,25 @@ struct GlassIconButton: View {
 }
 
 extension View {
-    func glassCapsule() -> some View {
-        foregroundStyle(Tokens.Color.icon)
-            .background(Tokens.Color.glass, in: Capsule())
-            .overlay { Capsule().strokeBorder(Tokens.Color.composerBorder) }
-            .shadow(color: Tokens.Color.shadow, radius: 8, y: 4)
+    func glassCapsule(_ theme: Tokens) -> some View {
+        foregroundStyle(theme.color.icon)
+            .background(theme.color.glass, in: Capsule())
+            .overlay { Capsule().strokeBorder(theme.color.composerBorder) }
+            .shadow(color: theme.color.shadow, radius: theme.space.s2, y: theme.space.s1)
             .contentShape(Capsule())
     }
 }
 
 struct ThreadCallLabel: View {
+    @Environment(\.theme) private var theme
     var body: some View {
-        HStack(spacing: Tokens.Space.s1_5) {
-            Image(systemName: "phone").font(.system(size: 17))
-            Text("Call").font(.custom("DMSans-Medium", size: 15, relativeTo: .body))
+        HStack(spacing: theme.space.s1_5) {
+            Image(systemName: "phone").font(.system(size: theme.control.phoneIcon, design: theme.type.familySystem))
+            Text("Call").font(.custom(theme.type.face(theme.weight.medium), size: theme.control.callLabel, relativeTo: .body))
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 16)
-        .frame(minHeight: 44)
-        .glassCapsule()
+        .padding(.leading, theme.space.s3_5)
+        .padding(.trailing, theme.space.s4)
+        .frame(minHeight: theme.control.touchTarget)
+        .glassCapsule(theme)
     }
 }
