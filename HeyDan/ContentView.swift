@@ -1441,6 +1441,7 @@ struct VoiceLinesSettings: View {
     @State private var naming: UUID?
     @State private var deleting: VoiceLines.Entry?
     @State private var voiceLine: VoiceLines.Entry?
+    @State private var showsPairing = false
 
     private enum Note: Equatable {
         case invalid, notSaved, unreadable, asking
@@ -1462,6 +1463,12 @@ struct VoiceLinesSettings: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
+                    if Pairings.shared.active == nil {
+                        Button { showsPairing = true } label: {
+                            SettingsRow(title: "Pair a host", icon: "plus")
+                        }
+                        .buttonStyle(.plain)
+                    }
                     linesSection
                     addSection
                     if Pairings.shared.active == nil, call.lines.selected != nil {
@@ -1498,6 +1505,7 @@ struct VoiceLinesSettings: View {
         } message: { _ in
             Text("Its call link leaves this phone. Shortcuts that call this line stop working.")
         }
+        .sheet(isPresented: $showsPairing) { PairingView() }
         .sheet(item: $voiceLine) { entry in
             VoicePickerSheet(service: VoiceSettingsModel.lineService(entry.line), agentName: entry.name, callID: nil)
         }
