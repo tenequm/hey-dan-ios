@@ -8,9 +8,10 @@ actor FixtureAppService: AppService {
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Taylor tester",
         agents: [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
     let previewOutbox: [Outbox.Entry]
-    private let scenario = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]
+    private let scenario: String?
 
-    init() {
+    init(scenario: String? = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]) {
+        self.scenario = scenario
         let preview = ThreadPreviewValues.self
         if scenario == "outbox" {
             previewOutbox = [Outbox.State.queued, .waiting, .held].map { state in

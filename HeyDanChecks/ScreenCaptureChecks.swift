@@ -8,24 +8,22 @@ import XCTest
     }
 
     private func capture(_ name: String, showing element: XCUIElement) {
-        XCTAssertTrue(element.waitForExistence(timeout: 15), "Missing screen: \(name)")
+        XCTAssertTrue(element.exists || element.waitForExistence(timeout: 15), "Missing screen: \(name)")
         // Informational views, including the call-refusal banner, can be visible without a hit target.
         XCTAssertFalse(element.frame.intersection(XCUIApplication().frame).isEmpty, "Offscreen: \(name)")
         shot(name)
     }
 
-    private func openThread(_ environment: [String: String] = [:]) -> XCUIApplication {
-        let app = launchChat(environment.merging(["HEYDAN_FIXTURE_CHAT": "1"]) { $1 })
+    func testChatScreens() {
+        let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_CALL_REFUSAL": "1"])
+        defer { session.finish() }
+        let app = session.app
         let row = app.buttons["chat.conversation.conv_taylor01"]
-        XCTAssertTrue(row.waitForExistence(timeout: 15))
-        row.tap()
-        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
-        return app
-    }
-
-    func testConversationsAndSettings() {
-        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_CALL_REFUSAL": "1"])
-        let row = app.buttons["chat.conversation.conv_taylor01"]
+        session.show("chat", scenario: "offline")
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        capture("list-empty-offline", showing: app.staticTexts["No conversations"])
+        session.show("chat")
         capture("list-unread", showing: row)
         row.tap()
         capture("thread-call-refused", showing: app.staticTexts["chat.call.refusal"])
@@ -36,18 +34,10 @@ import XCTest
         app.buttons["picker.close"].tap()
         app.buttons["Unpair"].tap()
         capture("settings-unpair", showing: app.staticTexts["Unpair this host?"])
-    }
-
-    func testPairingSheet() {
-        let app = openThread()
+        session.openThread()
         app.buttons["Settings"].tap()
         app.buttons["Pair a host"].tap()
         capture("pairing-sheet", showing: app.textFields["pairing.link"])
-    }
-
-    func testOfflineList() {
-        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_OFFLINE_FOR": "120"])
-        capture("list-empty-offline", showing: app.staticTexts["No conversations"])
     }
 
     func testPairing() {
@@ -61,7 +51,10 @@ import XCTest
     }
 
     func testThread() {
-        let app = openThread()
+        let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_CHAT": "1"])
+        defer { session.finish() }
+        let app = session.app
+        session.openThread()
         let answer = app.buttons["Continue"]
         capture("question-open", showing: answer)
         answer.tap()
@@ -70,10 +63,7 @@ import XCTest
         capture("thread-markdown", showing: app.descendants(matching: .any)["chat.message.msg_2101"].firstMatch)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         capture("list-read", showing: app.buttons["chat.conversation.conv_taylor01"])
-    }
-
-    func testMessageKinds() {
-        let app = openThread(["HEYDAN_FIXTURE_THREAD": "messages"])
+        session.openThread("messages")
         let thread = app.scrollViews["chat.thread"]
         capture("thread-waiting", showing: app.descendants(matching: .any)["chat.status"].firstMatch)
         capture("question-expired", showing: app.descendants(matching: .any)["chat.question.q_2110"].firstMatch)
@@ -83,53 +73,43 @@ import XCTest
             if !row.isHittable { thread.swipeUp() }
             capture("thread-\(name)", showing: row)
         }
-    }
 
-    func testDelivery() {
-        let app = openThread(["HEYDAN_FIXTURE_THREAD": "delivery"])
+        session.openThread("delivery")
         for (id, name) in [("msg_2113", "failed"), ("msg_2105", "unknown"), ("msg_2103", "reached-with-file")] {
             let row = app.descendants(matching: .any)["chat.message.\(id)"].firstMatch
             if !row.isHittable { app.scrollViews["chat.thread"].swipeDown() }
             capture("delivery-\(name)", showing: row)
         }
-    }
 
-    func testOutbox() {
-        let app = openThread(["HEYDAN_FIXTURE_THREAD": "outbox"])
-        let thread = app.scrollViews["chat.thread"]
+        session.openThread("outbox")
         for state in ["Held", "Waiting to retry", "Queued", "Routed", "Stored"] {
             let row = thread.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS %@", state)).firstMatch
             if !row.isHittable { thread.swipeDown() }
             capture("outbox-" + state.lowercased().replacingOccurrences(of: " ", with: "-"), showing: row)
         }
-    }
 
-    func testAnswerError() {
-        let app = openThread(["HEYDAN_FIXTURE_THREAD": "answer-error"])
+        session.openThread("answer-error")
         app.buttons["Continue"].tap()
         let card = app.descendants(matching: .any).matching(NSPredicate(
             format: "label CONTAINS %@", "The answer did not reach the agent")).firstMatch
         capture("question-error", showing: card)
     }
 
-    func testComposerWithoutFiles() {
-        let app = openThread(["HEYDAN_FIXTURE_THREAD": "text-only"])
+    func testComposer() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appendingPathComponent("Notes.txt")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_ATTACHMENT": url.path])
+        defer { session.finish() }
+        let app = session.app
+        session.openThread("text-only")
         XCTAssertFalse(app.buttons["composer.attach"].exists)
         capture("composer-text-only", showing: app.textFields["composer.text"])
-    }
-
-    func testUnreadableAttachment() {
-        let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        let app = openThread(["HEYDAN_FIXTURE_ATTACHMENT": url.path])
+        session.openThread()
         capture("composer-import-error", showing: app.staticTexts["Could not read the selected attachment. Try selecting it again."])
-    }
-
-    func testComposer() throws {
-        let url = FileManager.default.temporaryDirectory.appending(path: "Notes.txt")
         try Data("Meeting notes".utf8).write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let app = openThread(["HEYDAN_FIXTURE_ATTACHMENT": url.path])
+        session.openThread()
         let remove = app.buttons["composer.remove"]
         capture("composer-attachment", showing: remove)
         remove.tap()
@@ -144,15 +124,17 @@ import XCTest
     }
 
     func testPreviews() {
+        let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_CHAT": "1"])
+        defer { session.finish() }
+        let app = session.app
         for (name, file) in [("image", "Image.png"), ("pdf", "Document.pdf")] {
-            let app = openThread()
+            session.openThread()
             if name == "pdf" { app.scrollViews["chat.thread"].swipeUp() }
             let attachment = app.buttons.matching(identifier: "attachment.open")
                 .matching(NSPredicate(format: "label CONTAINS %@", file)).firstMatch
             capture("thread-attachment-\(name)", showing: attachment)
             attachment.tap()
             capture("preview-\(name)", showing: app.otherElements["QLPreviewControllerView"])
-            app.terminate()
         }
     }
 
@@ -160,12 +142,11 @@ import XCTest
         let phases = ["idle", "connecting", "listening", "waiting", "thinking", "speaking", "muted",
                       "thinking-muted", "speaking-muted", "reconnecting", "ended", "left", "failed",
                       "manual", "recording", "finishing", "draft", "notsent", "toolong", "manual-speaking", "kept"]
+        let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_CHAT": "1"])
+        defer { session.finish() }
         for phase in phases {
-            let app = XCUIApplication()
-            app.launchEnvironment = ["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_PREVIEW_PHASE": phase]
-            app.launch()
-            capture("call-\(phase)", showing: app.buttons["chat.call.close"])
-            app.terminate()
+            session.show("call", phase: phase)
+            capture("call-\(phase)", showing: session.app.buttons["chat.call.close"])
         }
     }
 
@@ -173,5 +154,45 @@ import XCTest
         let app = launchChat(["HEYDAN_PREVIEW_PHASE": "idle", "HEYDAN_PREVIEW_LINES": "Taylor",
                               "HEYDAN_PREVIEW_SETTINGS": "1"])
         capture("settings-lines", showing: app.buttons["close"])
+    }
+}
+
+@MainActor final class ScreenCaptureSession {
+    let app: XCUIApplication
+    private let request = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+
+    init(environment: [String: String]) {
+        app = XCUIApplication()
+        app.launchEnvironment = environment.merging(["HEYDAN_CAPTURE_REQUEST": request.path]) { $1 }
+        app.launch()
+    }
+
+    func show(_ family: String, scenario: String? = nil, phase: String? = nil, voice: String? = nil) {
+        let id = UUID().uuidString
+        let fields = ["id": id, "family": family, "scenario": scenario, "phase": phase, "voice": voice]
+        XCTAssertNoThrow(try JSONEncoder().encode(fields).write(to: request, options: .atomic))
+        let ready = request.appendingPathExtension("ready")
+        let deadline = Date.now.addingTimeInterval(10)
+        while (try? String(contentsOf: ready, encoding: .utf8)) != id {
+            guard Date.now < deadline else {
+                XCTFail("Missing fixture: \(family)/\(scenario ?? phase ?? "default")")
+                return
+            }
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))
+        }
+    }
+
+    func openThread(_ scenario: String? = nil) {
+        show("chat", scenario: scenario)
+        let row = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(row.exists || row.waitForExistence(timeout: 15))
+        row.tap()
+        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
+    }
+
+    func finish() {
+        app.terminate()
+        try? FileManager.default.removeItem(at: request)
+        try? FileManager.default.removeItem(at: request.appendingPathExtension("ready"))
     }
 }

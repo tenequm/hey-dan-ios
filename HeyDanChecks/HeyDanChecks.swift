@@ -512,7 +512,28 @@ final class HeyDanChecks: XCTestCase {
                        "The call key must show \(label)")
     }
 
+    private var captureSession: ScreenCaptureSession?
+
+    func testCaptureVoiceScreens() throws {
+        try XCTSkipUnless(env["HEYDAN_SCREENS"] == "1")
+        continueAfterFailure = false
+        captureSession = ScreenCaptureSession(environment: ["HEYDAN_PREVIEW_LINES": "Taylor"])
+        defer { captureSession?.finish(); captureSession = nil }
+        try testCallOptions()
+        try testVoicePickerSaved()
+        try testVoicePickerLive()
+        try testVoicePickerFailures()
+        try testVoicePickerFailuresCatalog()
+        try testVoicePickerNames()
+        try testVoicePickerLostSave()
+        try testVoicePickerGender()
+    }
+
     private func fixture(_ scenario: String, voice: String = "", phase: String = "waiting") {
+        if let captureSession {
+            captureSession.show("voice", scenario: scenario, phase: phase, voice: voice)
+            return
+        }
         app.terminate()
         launch(["HEYDAN_PREVIEW_TTS": scenario, "HEYDAN_PREVIEW_VOICE": voice, "HEYDAN_PREVIEW_PHASE": phase])
     }
@@ -588,11 +609,14 @@ extension XCTestCase {
 
     @MainActor func shot(_ name: String) {
         let screenshot = XCUIScreen.main.screenshot()
+        let env = ProcessInfo.processInfo.environment
+        if let dir = env["HEYDAN_CHECKS_OUT"], !dir.isEmpty {
+            XCTAssertNoThrow(try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png")))
+            if env["HEYDAN_SCREENS"] == "1" { return }
+        }
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        guard let dir = ProcessInfo.processInfo.environment["HEYDAN_CHECKS_OUT"], !dir.isEmpty else { return }
-        XCTAssertNoThrow(try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png")))
     }
 }

@@ -1323,9 +1323,9 @@ private struct Preview {
     var endedAt: Date? { wasLive ? shownAt : nil }
     var thinkingSince: Date? { phase == .live(.thinking) ? start.addingTimeInterval(71) : nil }
 
-    static func fromEnvironment() -> Preview? {
+    @MainActor static func fromEnvironment() -> Preview? {
         #if DEBUG && targetEnvironment(simulator)
-            guard var name = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_PHASE"] else { return nil }
+            guard var name = ScreenCaptureFixture.phase ?? ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_PHASE"] else { return nil }
             // "thinking-muted", "speaking-muted": the same stage with the microphone muted.
             let mutedVariant = name.hasSuffix("-muted")
             if mutedVariant { name.removeLast("-muted".count) }

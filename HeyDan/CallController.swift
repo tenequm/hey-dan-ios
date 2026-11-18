@@ -216,13 +216,7 @@ final class CallController: NSObject {
             agentName = conversation.agent.name
             showsPairedCall = true
         }
-        if let scenario = env["HEYDAN_PREVIEW_VOICE"].flatMap(PreviewVoice.init(rawValue:)),
-           let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
-            previewVoice = scenario
-            liveVoice = scenario == .active
-                ? CallVoiceState(active: state.pending ?? state.active, activeDetails: state.pendingDetails ?? state.activeDetails, gen: state.gen)
-                : state
-        }
+        setPreviewVoice(env["HEYDAN_PREVIEW_VOICE"])
         // `just sim` hands the call link in at launch: the Simulator's pasteboard does not take a CLI copy.
         if let link = env["HEYDAN_CALL_LINK"] { saveCallLink(link) }
         // Screenshots: fake lines named for the agents listed, never a real link; the first listed is picked.
@@ -242,6 +236,21 @@ final class CallController: NSObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         setEngine(.none)
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    func setPreviewVoice(_ name: String?) {
+        previewVoiceUpdate?.cancel()
+        previewVoice = nil
+        liveVoice = nil
+        if let scenario = name.flatMap(PreviewVoice.init(rawValue:)),
+           let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
+            previewVoice = scenario
+            liveVoice = scenario == .active
+                ? CallVoiceState(active: state.pending ?? state.active, activeDetails: state.pendingDetails ?? state.activeDetails, gen: state.gen)
+                : state
+        }
+    }
+    #endif
 
     private func callProvider() -> CXProvider {
         if let provider {

@@ -30,9 +30,13 @@ struct HeyDanApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
-                    Gallery(name: name)
-                } else { root }
+                #if targetEnvironment(simulator)
+                if let path = ProcessInfo.processInfo.environment["HEYDAN_CAPTURE_REQUEST"] {
+                    ScreenCaptureFixture(requestURL: URL(fileURLWithPath: path))
+                } else { debugRoot }
+                #else
+                debugRoot
+                #endif
                 #else
                 root
                 #endif
@@ -53,6 +57,13 @@ struct HeyDanApp: App {
                 #endif
         }
     }
+
+    #if DEBUG
+    @ViewBuilder private var debugRoot: some View {
+        if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] { Gallery(name: name) }
+        else { root }
+    }
+    #endif
 
     @ViewBuilder private var root: some View {
         if ChatController.shared.pairing != nil {

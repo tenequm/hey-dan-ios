@@ -882,7 +882,13 @@ private final class PickerFixtureProtocol: URLProtocol, @unchecked Sendable {
 /// every PATCH but loses its answer.
 @MainActor
 enum PickerFixture {
-    static let scenario = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_TTS"]
+    private(set) static var scenario = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_TTS"]
+
+    static func reset(to scenario: String?) {
+        self.scenario = scenario
+        savedByLine.removeAll()
+        ttsLoads = 0
+    }
     private static var savedByLine: [URL: [String: Any]] = [:]
     private static var ttsLoads = 0
     private static let providers = #"[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"alnilam"},"modelNames":{"gemini-3.8-flash-tts":"Gemini 3.8 Flash TTS","gemini-3.8-flash-lite-tts":"Gemini 3.8 Flash Lite TTS"}},{"id":"elevenlabs","name":"ElevenLabs","available":true,"models":["eleven_v4_turbo","eleven_v4"],"default":{"model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"modelNames":{"eleven_v4_turbo":"Eleven v4 Turbo","eleven_v4":"Eleven v4"}}]"#
