@@ -210,7 +210,7 @@ final class CallController: NSObject {
         #if DEBUG && targetEnvironment(simulator)
         if env["HEYDAN_FIXTURE_CHAT"] == "1", env["HEYDAN_PREVIEW_PHASE"] != nil {
             let conversation = ThreadPreviewValues.conversation
-            let target = PairedCallTarget(host: URL(string: "https://app.example.com")!,
+            let target = PairedCallTarget(host: FixtureAppService.host,
                 deviceId: FixtureAppService.pairing.deviceId, conversation: conversation)
             pairedCallTarget = CallTarget(paired: target, service: FixtureAppService())
             agentName = conversation.agent.name

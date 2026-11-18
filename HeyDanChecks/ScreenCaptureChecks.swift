@@ -9,7 +9,8 @@ import XCTest
 
     private func capture(_ name: String, showing element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 15), "Missing screen: \(name)")
-        XCTAssertTrue(element.isHittable, "Offscreen: \(name)")
+        // Informational views, including the call-refusal banner, can be visible without a hit target.
+        XCTAssertFalse(element.frame.intersection(XCUIApplication().frame).isEmpty, "Offscreen: \(name)")
         shot(name)
     }
 
@@ -30,6 +31,16 @@ import XCTest
         capture("thread-call-refused", showing: app.staticTexts["chat.call.refusal"])
         app.buttons["Settings"].tap()
         capture("settings-paired", showing: app.staticTexts["Taylor tester"])
+        app.buttons["Voice: Taylor"].tap()
+        capture("voice-paired-unavailable", showing: app.buttons["picker.retry"])
+        app.buttons["picker.close"].tap()
+        app.buttons["Unpair"].tap()
+        capture("settings-unpair", showing: app.staticTexts["Unpair this host?"])
+    }
+
+    func testPairingSheet() {
+        let app = openThread()
+        app.buttons["Settings"].tap()
         app.buttons["Pair a host"].tap()
         capture("pairing-sheet", showing: app.textFields["pairing.link"])
     }
@@ -64,6 +75,7 @@ import XCTest
     func testMessageKinds() {
         let app = openThread(["HEYDAN_FIXTURE_THREAD": "messages"])
         let thread = app.scrollViews["chat.thread"]
+        capture("thread-waiting", showing: app.descendants(matching: .any)["chat.status"].firstMatch)
         capture("question-expired", showing: app.descendants(matching: .any)["chat.question.q_2110"].firstMatch)
         thread.swipeDown()
         for (id, name) in [("msg_0126", "edited-reaction"), ("msg_2107", "caller"), ("msg_2108", "spoken"), ("msg_2109", "host")] {
@@ -80,6 +92,37 @@ import XCTest
             if !row.isHittable { app.scrollViews["chat.thread"].swipeDown() }
             capture("delivery-\(name)", showing: row)
         }
+    }
+
+    func testOutbox() {
+        let app = openThread(["HEYDAN_FIXTURE_THREAD": "outbox"])
+        let thread = app.scrollViews["chat.thread"]
+        for state in ["Held", "Waiting to retry", "Queued", "Routed", "Stored"] {
+            let row = thread.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", state)).firstMatch
+            if !row.isHittable { thread.swipeDown() }
+            capture("outbox-" + state.lowercased().replacingOccurrences(of: " ", with: "-"), showing: row)
+        }
+    }
+
+    func testAnswerError() {
+        let app = openThread(["HEYDAN_FIXTURE_THREAD": "answer-error"])
+        app.buttons["Continue"].tap()
+        let card = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@", "The answer did not reach the agent")).firstMatch
+        capture("question-error", showing: card)
+    }
+
+    func testComposerWithoutFiles() {
+        let app = openThread(["HEYDAN_FIXTURE_THREAD": "text-only"])
+        XCTAssertFalse(app.buttons["composer.attach"].exists)
+        capture("composer-text-only", showing: app.textFields["composer.text"])
+    }
+
+    func testUnreadableAttachment() {
+        let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let app = openThread(["HEYDAN_FIXTURE_ATTACHMENT": url.path])
+        capture("composer-import-error", showing: app.staticTexts["Could not read the selected attachment. Try selecting it again."])
     }
 
     func testComposer() throws {

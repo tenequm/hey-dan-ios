@@ -4,11 +4,29 @@ import Foundation
 import HeyDanCore
 
 actor FixtureAppService: AppService {
+    static let host = URL(string: "https://app.example.com")!
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Taylor tester",
         agents: [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
+    let previewOutbox: [Outbox.Entry]
+    private let scenario = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]
+
     init() {
         let preview = ThreadPreviewValues.self
-        switch ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"] {
+        if scenario == "outbox" {
+            previewOutbox = [Outbox.State.queued, .waiting, .held].map { state in
+                Outbox.Entry(host: Self.host, conversationId: "conv_taylor01",
+                    request: SendRequest(clientId: UUID().uuidString, text: "Please check the report.", fileIds: []),
+                    state: state)
+            }
+        } else { previewOutbox = [] }
+        switch scenario {
+        case "outbox":
+            messages = [Delivery.stored, .routed].enumerated().map { offset, delivery in
+                let order = Int64(5 + offset)
+                return Message(kind: .message, id: "msg_\(order)", conversationId: "conv_taylor01",
+                    order: order, seq: order, role: .user, text: "Here is the update.", files: [],
+                    reactions: [], delivery: delivery, createdAt: 0)
+            }
         case "messages":
             messages = [preview.editSequence2, preview.voiceCaller0, preview.voiceSpoken0, preview.host0]
             question = preview.questionexpired
@@ -44,7 +62,10 @@ actor FixtureAppService: AppService {
                 FileAttachment(id: "file_doc01", name: "Document.pdf", mimeType: "application/pdf", size: 0, kind: .file)
             ], reactions: [], createdAt: 0)
     ]
-    private var status: Status { Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0) }
+    private var status: Status {
+        if scenario == "messages" { return ThreadPreviewValues.statuswaiting }
+        return Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0)
+    }
     private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.unread) }
     private func event<T: Encodable>(_ kind: Kind, _ value: T, id: Int64? = nil) throws(AppError) -> AppEvent {
         do { return AppEvent(kind: kind, id: id, data: try JSONEncoder().encode(value)) }
@@ -55,7 +76,7 @@ actor FixtureAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse {
         HelloResponse(protocol: 1, minProtocol: 1, voiceProtocol: 6,
-            features: ["files", "calls", "push", "voice-picker"], serverTime: 0)
+            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker"], serverTime: 0)
     }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { Self.pairing }
     func conversations() async throws(AppError) -> ConversationsResponse {
@@ -104,6 +125,10 @@ actor FixtureAppService: AppService {
     }
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse {
         sequence += 1
+        if scenario == "answer-error" {
+            throw .server(status: 502, body: ErrorBody(error: "answer_not_delivered",
+                message: "The answer did not reach the agent. Try again."))
+        }
         question.seq = sequence
         question.state = .answered
         question.answer = QuestionAnswer(value: request.value, label: "Continued", at: 0)

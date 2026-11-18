@@ -42,19 +42,36 @@ def main(simulator, derived_data):
         subprocess.run(["xcodebuild", "build-for-testing", *build], check=True, env=env)
         try:
             for mode in ("dark", "light"):
+                print(f"Capturing {mode} appearance on {simulator}", flush=True)
                 folder = stage / mode
                 folder.mkdir()
                 subprocess.run([*appearance, mode], check=True)
                 subprocess.run(["xcrun", "simctl", "spawn", device, "launchctl", "kickstart", "-k",
                                 f"user/{os.getuid()}/com.apple.dasd"], check=True)
-                subprocess.run(["timeout", "--foreground", "--kill-after=10", "1200", "xcodebuild",
-                                "test-without-building", *build, "-parallel-testing-enabled", "NO",
-                                "-test-timeouts-enabled", "YES", "-default-test-execution-time-allowance", "300",
-                                "-resultBundlePath", f"{temp}/{mode}.xcresult",
-                                *["-only-testing:HeyDanChecks/" + test for test in selectors]],
-                               check=True, env=env | {"TEST_RUNNER_HEYDAN_CHECKS_OUT": str(folder),
-                                                      "TEST_RUNNER_HEYDAN_SCREENS": "1",
-                                                      "TEST_RUNNER_HEYDAN_PREVIEW_LINES": "Taylor"})
+                bundle = Path(temp) / f"{mode}.xcresult"
+                runner = env | {
+                    "TEST_RUNNER_HEYDAN_CHECKS_OUT": str(folder),
+                    "TEST_RUNNER_HEYDAN_SCREENS": "1",
+                    "TEST_RUNNER_HEYDAN_PREVIEW_LINES": "Taylor",
+                }
+                result = subprocess.run([
+                    "timeout", "--foreground", "--kill-after=10", "1800", "xcodebuild", "test-without-building",
+                    *build, "-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES",
+                    "-default-test-execution-time-allowance", "600", "-resultBundlePath", str(bundle),
+                    *["-only-testing:HeyDanChecks/" + test for test in selectors],
+                ], env=runner)
+                if not (bundle / "Info.plist").exists():
+                    result.check_returncode()
+                    sys.exit(f"Missing test results for {mode}")
+                summary = json.loads(output("xcrun", "xcresulttool", "get", "test-results", "summary",
+                                            "--path", str(bundle)))
+                for failure in summary["testFailures"]:
+                    print(f"{failure['testIdentifierString']}: {failure['failureText']}", file=sys.stderr)
+                print(f"{mode}: {summary['passedTests']} passed, {summary['failedTests']} failed, "
+                      f"{summary['skippedTests']} skipped", flush=True)
+                result.check_returncode()
+                if summary["skippedTests"] or not summary["passedTests"]:
+                    sys.exit("Incomplete screen checks")
         finally:
             subprocess.run([*appearance, original], check=True)
 
@@ -69,9 +86,15 @@ def main(simulator, derived_data):
             f"# Hey Dan screens at {revision}", "", "Captured in each Simulator appearance. Views can override the system appearance.",
             "", "| Screen | Dark | Light |", "| --- | --- | --- |", *rows, "",
         ]))
+        previous = Path(temp) / "previous"
         if destination.exists():
-            destination.rename(Path(temp) / "previous")
-        stage.rename(destination)
+            destination.rename(previous)
+        try:
+            stage.rename(destination)
+        except OSError:
+            if previous.exists() and not destination.exists():
+                previous.rename(destination)
+            raise
     print(f"{len(images)} screens in each appearance: {destination}/index.md")
 
 

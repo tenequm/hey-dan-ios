@@ -46,7 +46,7 @@ import UIKit
         #if DEBUG
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
             fixture = true
-            let host = URL(string: "https://app.example.com")!
+            let host = FixtureAppService.host
             saved.entries[host.absoluteString] = Entry(host: host, pairing: FixtureAppService.pairing,
                 features: ["files", "calls", "push", "voice-picker"])
             saved.active = host.absoluteString

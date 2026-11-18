@@ -29,7 +29,11 @@ import UIKit
         reducer.thread(conversationId: id).filter { ($0.order ?? 0) >= (historyFloors[id] ?? 0) }
     }
     private func visibleRows(_ id: String) -> [ThreadRow] {
-        reducer.rows(conversationId: id, outbox: outbox.entries).filter {
+        var entries = outbox.entries
+        #if DEBUG
+        if let fixture = service as? FixtureAppService { entries += fixture.previewOutbox }
+        #endif
+        return reducer.rows(conversationId: id, outbox: entries).filter {
             if case .entity(let entity) = $0 { return (entity.order ?? 0) >= (historyFloors[id] ?? 0) }
             return true
         }
