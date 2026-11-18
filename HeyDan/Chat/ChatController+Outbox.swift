@@ -115,10 +115,11 @@ extension ChatController {
                 case .mint(let attachment): result = .ticket(uploadKey: attachment.uploadKey, try await service.initializeFile(attachment.request))
                 case .renewTicket(let attachment): result = .ticket(uploadKey: attachment.uploadKey, try await service.renewFileTicket(fileId: attachment.fileId!))
                 case .upload(let attachment):
-                    let bytes = try await files.bytes(attachment, host: host, deviceId: deviceId)
-                    guard token == generation, !Task.isCancelled else { return }
-                    try await service.upload(fileId: attachment.fileId!, ticket: attachment.ticket!, bytes: bytes)
-                    result = .uploaded(uploadKey: attachment.uploadKey)
+                    if let bytes = try? await files.bytes(attachment, host: host, deviceId: deviceId) {
+                        guard token == generation, !Task.isCancelled else { return }
+                        try await service.upload(fileId: attachment.fileId!, ticket: attachment.ticket!, bytes: bytes)
+                        result = .uploaded(uploadKey: attachment.uploadKey)
+                    } else { result = .localFailure }
                 case .send(let request):
                     let response = try await service.send(conversationId: entry.conversationId, request: request)
                     guard token == generation, !Task.isCancelled else { return }
