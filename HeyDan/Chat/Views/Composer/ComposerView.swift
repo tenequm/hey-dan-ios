@@ -22,26 +22,11 @@ struct ComposerView: View {
         let canSend = !staging && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
         VStack(alignment: .leading, spacing: 0) {
             if !attachments.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: theme.space.s2) {
-                        ForEach(attachments, id: \.fileURL) { attachment in
-                            HStack(spacing: theme.space.s1) {
-                                AttachmentView(attachment: attachment)
-                                Button("Remove", systemImage: "xmark.circle.fill") {
-                                    attachments.removeAll { $0.fileURL == attachment.fileURL }
-                                    AttachmentStaging.remove(attachment)
-                                    draftFiles.urls.remove(attachment.fileURL)
-                                }
-                                .labelStyle(.iconOnly)
-                                .foregroundStyle(theme.color.iconMuted)
-                                .accessibilityIdentifier(AXID.composerRemove)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, theme.space.s2_5)
+                StagedAttachmentTray(attachments: attachments) { attachment in
+                    attachments.removeAll { $0.fileURL == attachment.fileURL }
+                    AttachmentStaging.remove(attachment)
+                    draftFiles.urls.remove(attachment.fileURL)
                 }
-                .scrollIndicators(.hidden)
-                .padding(.top, theme.space.s2)
             }
             if importFailed {
                 Label("Could not read the selected attachment. Try selecting it again.", systemImage: "exclamationmark.circle")
@@ -146,6 +131,46 @@ struct ComposerView: View {
             }
             #endif
         }
+    }
+}
+
+struct StagedAttachmentTray: View {
+    @Environment(\.theme) private var theme
+    let attachments: [StagedAttachment]
+    let remove: (StagedAttachment) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: theme.space.s2) {
+                ForEach(attachments, id: \.fileURL) { attachment in
+                    if attachment.mimeType.hasPrefix("image/") {
+                        AttachmentView(attachment: attachment)
+                            .overlay(alignment: .topTrailing) { removeButton(attachment) }
+                    } else {
+                        HStack(spacing: 0) {
+                            AttachmentView(attachment: attachment)
+                            removeButton(attachment)
+                        }
+                        .padding(.trailing, theme.space.s1)
+                        .background(theme.color.surfaceSubtle, in: RoundedRectangle(cornerRadius: theme.radius.m))
+                    }
+                }
+            }
+            .padding(.horizontal, theme.space.s2_5)
+        }
+        .scrollIndicators(.hidden)
+        .padding(.top, theme.space.s2)
+    }
+
+    private func removeButton(_ attachment: StagedAttachment) -> some View {
+        Button { remove(attachment) } label: {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(theme.color.onAccent, theme.color.backdrop)
+                .frame(width: theme.space.s6, height: theme.space.s6)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Remove")
+        .accessibilityIdentifier(AXID.composerRemove)
     }
 }
 
