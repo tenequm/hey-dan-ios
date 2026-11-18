@@ -2,6 +2,7 @@ import SwiftUI
 import HeyDanCore
 
 struct ThreadView: View {
+    @Environment(\.theme) private var theme
     let conversation: Conversation
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
@@ -11,6 +12,7 @@ struct ThreadView: View {
     var body: some View {
         ThreadContent(
             rows: chat.rows,
+            agentName: conversation.agent.name,
             status: chat.statuses[conversation.id],
             outboxStates: chat.outboxStates,
             hasMoreBefore: chat.hasMoreBefore,
@@ -35,21 +37,36 @@ struct ThreadView: View {
         .safeAreaBar(edge: .top) {
             if chat.features.contains("calls"), !live.canCall, let refusal = live.callRefusal {
                 Text(refusal.message)
-                    .font(Theme.sans(13))
-                    .foregroundStyle(Theme.muted)
+                    .textRole(theme.type.label)
+                    .foregroundStyle(theme.color.textSecondary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, theme.space.s1_5)
                     .accessibilityIdentifier("chat.call.refusal")
             }
         }
         .navigationTitle(conversation.agent.name)
-        .toolbar { ThreadCallButton(conversation: conversation) }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 0) {
+                    Text(conversation.agent.name).textRole(theme.type.headline, theme.weight.semibold)
+                    if let host = chat.host?.host() {
+                        Text(host).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+                    }
+                }
+                .lineLimit(1)
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) { ThreadCallButton(conversation: conversation) }
+        }
+        .tint(theme.color.accentText)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
 }
 
 struct ThreadContent: View {
+    @Environment(\.theme) private var theme
     let rows: [ThreadRow]
+    var agentName: String?
     var status: Status?
     var outboxStates: [String: Outbox.State] = [:]
     var hasMoreBefore = false
@@ -71,11 +88,14 @@ struct ThreadContent: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: theme.space.s4) {
                 if hasMoreBefore, let firstOrder {
-                    Button("Load older messages") {
+                    Button {
                         Task { await loadOlder(firstOrder) }
+                    } label: {
+                        HistoryLoader(loading: loadingHistory)
                     }
+                    .accessibilityLabel("Load older messages")
                     .disabled(loadingHistory)
                     .onAppear { Task { await loadOlder(firstOrder) } }
                 }
@@ -85,7 +105,7 @@ struct ThreadContent: View {
                         MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry)
                             .id(row.presentationID)
                     case .entity(.question(let question)):
-                        QuestionCard(question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
+                        QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
                             .id(row.presentationID)
                     case .outbox(let entry):
                         OutboxRow(entry: entry, retry: retry, discard: discard)
@@ -93,10 +113,10 @@ struct ThreadContent: View {
                     case .entity(.unknown): EmptyView()
                     }
                 }
-                if let status { StatusPill(status: status) }
+                if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()
-            .padding(16)
+            .padding(theme.space.s4)
         }
         .defaultScrollAnchor(.bottom)
         .scrollPosition(id: $visibleID)
@@ -108,7 +128,7 @@ struct ThreadContent: View {
         }
         .onChange(of: newestOrder) { readVisibleBottom() }
         .onChange(of: active) { readVisibleBottom() }
-        .background(Theme.page)
+        .background(theme.color.surface)
         .accessibilityIdentifier(AXID.thread)
     }
 
@@ -141,5 +161,21 @@ private extension ThreadRow {
         case .outbox(let entry): return "client.\(entry.request.clientId)"
         case .entity(.unknown): return "unknown"
         }
+    }
+}
+
+
+struct HistoryLoader: View {
+    @Environment(\.theme) private var theme
+    let loading: Bool
+
+    var body: some View {
+        HStack(spacing: theme.space.s2) {
+            if loading { ProgressView().controlSize(.small) }
+            Text(loading ? "Loading earlier messages" : "Load older messages")
+        }
+        .textRole(theme.type.label)
+        .foregroundStyle(theme.color.textSecondary)
+        .padding(.vertical, theme.space.s3)
     }
 }

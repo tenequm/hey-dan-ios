@@ -29,19 +29,13 @@ struct HeyDanApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if ChatController.shared.pairing != nil {
-                    ConversationList()
-                } else {
-                    #if DEBUG
-                    if ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
-                        || ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] != nil
-                        || ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
-                        PairingView()
-                    } else { ContentView() }
-                    #else
-                    ContentView()
-                    #endif
-                }
+                #if DEBUG
+                if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
+                    Gallery(name: name)
+                } else { root }
+                #else
+                root
+                #endif
             }
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
                 .fullScreenCover(isPresented: Binding(
@@ -50,11 +44,29 @@ struct HeyDanApp: App {
                 )) {
                     if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
                 }
+                .environment(\.theme, Theme.dark)
+                .preferredColorScheme(.dark)
                 .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG
                 .task { await Self.debugScript() }
                 #endif
+        }
+    }
+
+    @ViewBuilder private var root: some View {
+        if ChatController.shared.pairing != nil {
+            ConversationList()
+        } else {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
+                || ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] != nil
+                || ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
+                PairingView()
+            } else { ContentView() }
+            #else
+            ContentView()
+            #endif
         }
     }
 }
