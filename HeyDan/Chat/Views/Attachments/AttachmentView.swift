@@ -66,7 +66,8 @@ struct AttachmentView: View {
                                 else if failure == nil { ProgressView() }
                             }
                             .clipShape(RoundedRectangle(cornerRadius: theme.radius.m))
-                            .frame(maxWidth: localURL == nil ? 240 : 56)
+                            .frame(width: localURL == nil ? nil : 56, height: localURL == nil ? nil : 56)
+                            .frame(maxWidth: 240)
                             .accessibilityLabel(file.name)
                     } else {
                         HStack(spacing: theme.space.s3) {
@@ -86,8 +87,8 @@ struct AttachmentView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(AXID.attachmentOpen)
-                if file.kind != .image || loadedURL != nil {
-                    if file.kind != .image { Spacer(minLength: 0) }
+                if localURL == nil && file.kind != .image {
+                    Spacer(minLength: 0)
                     Button("Share", systemImage: "square.and.arrow.up") { open(.share) }
                         .labelStyle(.iconOnly).foregroundStyle(theme.color.iconMuted)
                         .frame(minWidth: theme.control.touchTarget, minHeight: theme.control.touchTarget)
@@ -106,6 +107,9 @@ struct AttachmentView: View {
                 Text(failure).textRole(theme.type.caption).foregroundStyle(theme.color.danger)
                 Button("Retry") { attempt += 1 }.tint(theme.color.accentText)
             }
+        }
+        .contextMenu {
+            if let loadedURL { ShareLink(item: loadedURL) }
         }
         .quickLookPreview($previewURL)
         .sheet(isPresented: $sharing) {
