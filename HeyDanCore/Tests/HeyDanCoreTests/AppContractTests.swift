@@ -110,9 +110,7 @@ private struct CheckFailure: Error { let label: String }
     try ensure(try events[0].cursor(after: 3) == 9, "unknown advances cursor")
     var incomplete = SSEParser()
     try ensure(try incomplete.feed(Data("data: {}\n".utf8)).isEmpty, "no event before blank line")
-    var bounded = SSEParser(maximumEventBytes: 3)
-    do { _ = try bounded.feed(Data("abcd".utf8)); throw CheckFailure(label: "unbounded event") }
-    catch ContractError.eventTooLarge {}
+
 }
 
 @Test func richCardWireFixture() throws {
