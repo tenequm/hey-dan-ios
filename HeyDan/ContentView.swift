@@ -199,7 +199,7 @@ struct ContentView: View {
             }
         }
         .textRole(theme.type.label)
-        .lineSpacing(4)
+        .lineSpacing(theme.space.s1)
         .foregroundStyle(hintIsError ? theme.color.danger : theme.color.textSecondary)
         .padding(hintIsError ? theme.space.s3 : 0)
         .frame(maxWidth: .infinity, alignment: hintIsError ? .leading : .center)
@@ -404,12 +404,12 @@ struct ContentView: View {
                     if review.mode == .auto, reviewKeys == nil {
                         Section("Voice commands") {
                             Toggle("wait for \"\(wakePhrase)\"", isOn: settingBinding(shown.wake) { change(wake: $0) })
-                                .frame(minHeight: 44)
+                                .frame(minHeight: theme.control.touchTarget)
                                 .accessibilityIdentifier(AXID.optionsWake)
                                 .accessibilityHint("Nothing is sent until you say \(wakePhrase); then say \(CommandWords.join(commandWords.sendHints, quoted: false)) to send.")
                             if shown.wake {
                                 Toggle("a pause also sends", isOn: settingBinding(shown.pauseSends) { change(pauseSends: $0) })
-                                    .frame(minHeight: 44)
+                                    .frame(minHeight: theme.control.touchTarget)
                                     .accessibilityIdentifier(AXID.optionsPauseSends)
                                     .accessibilityHint("After the wake phrase a pause sends too, not only \(CommandWords.join(commandWords.sendHints, quoted: false)).")
                             }
@@ -418,7 +418,7 @@ struct ContentView: View {
                     }
                     Section {
                         Toggle("typing sound", isOn: settingBinding(shown.typing) { change(typing: $0) })
-                            .frame(minHeight: 44)
+                            .frame(minHeight: theme.control.touchTarget)
                             .accessibilityIdentifier(AXID.optionsTyping)
                             .accessibilityHint("A quiet keyboard sound while the agent works on your turn.")
                     }
@@ -451,7 +451,7 @@ struct ContentView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(role: .close) { showsOptions = false }
                         .accessibilityLabel("Close")
-                        .frame(minWidth: 44, minHeight: 44)
+                        .frame(minWidth: 44, minHeight: theme.control.touchTarget)
                 }
             }
             .controlSize(.large)
@@ -497,7 +497,7 @@ struct ContentView: View {
         let primaryDisabled = (!isCallActive && !hasLine) || (isSettingUp && !cancelArmed)
         let leftArmed = (leftArmedAs ?? leftIdentity) == leftIdentity
         let rightArmed = (rightArmedAs ?? rightIdentity) == rightIdentity
-        VStack(spacing: 6) {
+        VStack(spacing: theme.space.s1_5) {
             Button(asWritten(rv.left.label, keep: [])) { run(rv.left.action) }
                 .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
                 .tint(rv.left.action == .discard ? theme.color.secondaryFill : theme.color.accent)
@@ -505,20 +505,20 @@ struct ContentView: View {
                 .disabled(rv.left.disabled || !leftArmed || ((rv.left.action == .call || rv.left.action == .cancel) && primaryDisabled))
             keyLabel(Text(review.ended && review.draft != nil ? "draft kept" : callLabel))
         }
-        VStack(spacing: 6) {
+        VStack(spacing: theme.space.s1_5) {
             Button {
                 run(rv.right.action)
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: theme.space.s1_5) {
                     Image(systemName: rv.right.action == .done ? "stop.fill" : rv.right.action == .send ? "arrow.up" : "mic.fill")
-                        .font(.system(size: rv.right.action == .done ? 12 : 15, weight: .semibold))
+                        .font(.system(size: rv.right.action == .done ? theme.type.caption.size : theme.type.body.size, weight: theme.weight.semibold))
                     Text(asWritten(rv.right.label, keep: []))
                 }
             }
             .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
             .tint(rv.right.action == .send && !rv.right.disabled ? theme.color.accent : theme.color.surfaceGrouped)
             .disabled(rv.right.disabled || !rightArmed)
-            keyLabel(HStack(spacing: 6) {
+            keyLabel(HStack(spacing: theme.space.s1_5) {
                 Circle().fill(rv.capturing || review.micError == .stop ? theme.color.statusConnected : theme.color.iconMuted)
                     .frame(width: theme.space.s2, height: theme.space.s2)
                 Text(asWritten(rv.mic, keep: []))
@@ -756,7 +756,7 @@ private struct DraftPanel: View {
     var body: some View {
         let text = hearing ? words : panel.text
         VStack(alignment: .leading, spacing: 0) {
-            FlowLayout(spacing: 10, lineSpacing: 2) {
+            FlowLayout(spacing: theme.space.s2_5, lineSpacing: theme.space.s0_5) {
                 Text(panel.title)
                     .foregroundStyle(titleInk)
                     .accessibilityAddTraits(.updatesFrequently)
@@ -772,12 +772,12 @@ private struct DraftPanel: View {
             .textRole(theme.type.micro)
             .spacing(0.04, size: 11)
             .foregroundStyle(theme.color.textSecondary)
-            .padding(EdgeInsets(top: 7, leading: 12, bottom: 3, trailing: 12))
+            .padding(EdgeInsets(top: theme.space.s2, leading: theme.space.s3, bottom: theme.space.s1, trailing: theme.space.s3))
             if let note {
                 Text(asWritten(note, keep: keep))
                     .textRole(theme.type.micro)
                     .foregroundStyle(theme.color.accentText)
-                    .padding(EdgeInsets(top: 0, leading: 12, bottom: 4, trailing: 12))
+                    .padding(EdgeInsets(top: 0, leading: theme.space.s3, bottom: theme.space.s1, trailing: theme.space.s3))
                     .fixedSize(horizontal: false, vertical: true)
             }
             ScrollView {
@@ -795,7 +795,7 @@ private struct DraftPanel: View {
                 .lineHeight(.multiple(factor: 1.5))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(EdgeInsets(top: 0, leading: 12, bottom: 9, trailing: 12))
+                .padding(EdgeInsets(top: 0, leading: theme.space.s3, bottom: theme.space.s2_5, trailing: theme.space.s3))
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
             }
             // A frozen draft opens at its first word; heard words follow the tail.
@@ -833,15 +833,15 @@ private struct PanelButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage).font(.system(size: 11))
+            HStack(spacing: theme.space.s1_5) {
+                Image(systemName: systemImage).font(.system(size: theme.type.micro.size))
                 Text(title)
             }
             .foregroundStyle(theme.color.textPrimary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
+            .padding(.horizontal, theme.space.s2)
+            .padding(.vertical, theme.space.s0_5)
             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color.textPrimary, lineWidth: 1))
-            .padding(.vertical, 8)
+            .padding(.vertical, theme.space.s2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -863,13 +863,13 @@ private struct TranscriptPane: View {
 
     var body: some View {
         let transcript = standIn ?? call.transcript
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: theme.space.s2_5) {
             if let notice = Self.deliveryNotice(transcript) {
                 Text(notice)
                     .textRole(theme.type.caption)
                     .spacing(0.04, size: 12)
                     .foregroundStyle(theme.color.danger)
-                    .padding(.horizontal, 2)
+                    .padding(.horizontal, theme.space.s0_5)
                     .fixedSize(horizontal: false, vertical: true)
             }
             TranscriptConsole(
@@ -921,7 +921,7 @@ private struct TranscriptConsole: View {
 
     var body: some View {
         if transcript.lines.isEmpty, let empty {
-            VStack(spacing: 4) {
+            VStack(spacing: theme.space.s1) {
                 Text("Nothing said yet")
                     .textRole(theme.type.footnote, theme.weight.medium)
                     .foregroundStyle(theme.color.textPrimary)
@@ -930,7 +930,7 @@ private struct TranscriptConsole: View {
                     .foregroundStyle(theme.color.textSecondary)
             }
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, theme.space.s4)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if transcript.lines.isEmpty {
             Color.clear
@@ -965,7 +965,7 @@ private struct TranscriptConsole: View {
                         }
                     }
                     .scrollTargetLayout()
-                    .padding(EdgeInsets(top: 16, leading: 4, bottom: 4, trailing: 4))
+                    .padding(EdgeInsets(top: theme.space.s4, leading: theme.space.s1, bottom: theme.space.s1, trailing: theme.space.s1))
                     Color.clear.frame(height: 0).id(Self.bottom)
                 }
             }
@@ -1004,14 +1004,14 @@ private struct TranscriptConsole: View {
                         proxy.scrollTo(Self.bottom, anchor: .bottom)
                     }
                     .labelStyle(.iconOnly)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: theme.type.footnote.size, weight: theme.weight.semibold))
                     .foregroundStyle(theme.color.textPrimary)
                     .frame(width: 32, height: 32)
                     .background(Circle().fill(theme.color.glass).shadow(color: theme.color.shadow, radius: theme.space.s1, y: theme.space.s0_5))
                     .overlay(Circle().strokeBorder(theme.color.border, lineWidth: 1))
-                    .frame(width: 44, height: 44)
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
                     .contentShape(Rectangle())
-                    .padding(.bottom, 10)
+                    .padding(.bottom, theme.space.s2_5)
                 }
             }
         }
@@ -1053,11 +1053,11 @@ private struct UnheardNote: View {
         Text("not heard - \(agentName.lowercased()) was speaking.")
             .textRole(theme.type.caption)
             .foregroundStyle(theme.color.textSecondary)
-            .padding(.vertical, 3)
-            .padding(.horizontal, 8)
+            .padding(.vertical, theme.space.s1)
+            .padding(.horizontal, theme.space.s2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .leading) { theme.color.accentText.frame(width: 2) }
-            .padding(.vertical, 2)
+            .padding(.vertical, theme.space.s0_5)
     }
 }
 
@@ -1093,7 +1093,7 @@ private struct CaptionLine: View {
                 words(caret: false)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, theme.space.s1_5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
@@ -1112,7 +1112,7 @@ private struct CaptionLine: View {
     }
 
     private var header: some View {
-        FlowLayout(spacing: 8, lineSpacing: 3) {
+        FlowLayout(spacing: theme.space.s2, lineSpacing: theme.space.s1) {
             Text(speaker)
                 .foregroundStyle(theme.color.textSecondary)
             Text(time).foregroundStyle(theme.color.textSecondary)
@@ -1227,7 +1227,7 @@ private struct MarkTag: View {
         Text(text)
             .foregroundStyle(ink)
             .lineHeight(.multiple(factor: 1.5))
-            .padding(.horizontal, boxed ? 5 : 0)
+            .padding(.horizontal, boxed ? theme.space.s1_5 : 0)
             .background {
                 switch style {
                 case .sent: EmptyView()
@@ -1443,7 +1443,7 @@ private struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: theme.space.s4) {
             ZStack {
                 Text(Pairings.shared.active == nil ? "Voice lines" : "Settings")
                     .textRole(theme.type.headline, theme.weight.medium)
@@ -1451,11 +1451,11 @@ private struct SettingsView: View {
                 Button("close") { dismiss() }
                     .textRole(theme.type.label)
                     .foregroundStyle(theme.color.textSecondary)
-                    .frame(minHeight: 44)
+                    .frame(minHeight: theme.control.touchTarget)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: theme.space.s6) {
                     PairedSettingsSection()
                     linesSection
                     addSection
@@ -1473,12 +1473,12 @@ private struct SettingsView: View {
                         .disabled(call.isCallActive)
                     }
                 }
-                .padding(.bottom, 20)
+                .padding(.bottom, theme.space.s5)
             }
             .scrollBounceBehavior(.basedOnSize)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .padding(.horizontal, theme.space.s5)
+        .padding(.top, theme.space.s3)
         .foregroundStyle(theme.color.textPrimary)
         .presentationDetents(Pairings.shared.active == nil ? [.large] : [.medium, .large])
         .presentationBackground(theme.color.surfaceSheet)
@@ -1502,19 +1502,19 @@ private struct SettingsView: View {
     // MARK: Lines
 
     private var linesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: theme.space.s2) {
             label("Saved lines")
             if call.lines.entries.isEmpty {
                 Text("no lines yet. add the call link nanoclaw gave you below.")
                     .textRole(theme.type.caption)
                     .foregroundStyle(theme.color.textSecondary)
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: theme.space.s1_5) {
                     ForEach(call.lines.entries) { entry in row(entry) }
                 }
                 Text("the picked line is the one the action button and \"talk to hey dan\" call. a shortcut can call any line by name.")
                     .textRole(theme.type.micro)
-                    .lineSpacing(3)
+                    .lineSpacing(theme.space.s1)
                     .foregroundStyle(theme.color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1523,16 +1523,16 @@ private struct SettingsView: View {
 
     private func row(_ entry: VoiceLines.Entry) -> some View {
         let picked = entry.id == call.lines.selected?.id
-        return HStack(spacing: 4) {
+        return HStack(spacing: theme.space.s1) {
             Button {
                 call.selectLine(entry.id)
             } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: theme.space.s3) {
                     Circle()
                         .strokeBorder(picked ? theme.color.accentText : theme.color.border, lineWidth: 2)
-                        .background(Circle().fill(picked ? theme.color.accentText : .clear).padding(5))
+                        .background(Circle().fill(picked ? theme.color.accentText : .clear).padding(theme.space.s1_5))
                         .frame(width: 20, height: 20)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: theme.space.s0_5) {
                         Text(entry.agent ?? "Unnamed line")
                             .textRole(theme.type.body, theme.weight.medium)
                             .foregroundStyle(entry.agent == nil ? theme.color.textSecondary : theme.color.textPrimary)
@@ -1544,7 +1544,7 @@ private struct SettingsView: View {
                     .minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
                 }
-                .frame(minHeight: 44)
+                .frame(minHeight: theme.control.touchTarget)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1558,16 +1558,16 @@ private struct SettingsView: View {
                 Button("Delete...", systemImage: "trash", role: .destructive) { deleting = entry }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 15))
+                    .font(.system(size: theme.type.body.size))
                     .foregroundStyle(theme.color.textSecondary.opacity(naming == entry.id ? 0.4 : 1))
-                    .frame(width: 44, height: 44)
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Actions for \(entry.name)")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 2)
-        .padding(.vertical, 4)
+        .padding(.leading, theme.space.s3)
+        .padding(.trailing, theme.space.s0_5)
+        .padding(.vertical, theme.space.s1)
         .background(RoundedRectangle(cornerRadius: theme.radius.l).fill(theme.color.surfaceGrouped))
         .overlay(
             RoundedRectangle(cornerRadius: theme.radius.l)
@@ -1578,9 +1578,9 @@ private struct SettingsView: View {
     // MARK: Add
 
     private var addSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: theme.space.s2) {
             label("Add a call link")
-            HStack(spacing: 10) {
+            HStack(spacing: theme.space.s2_5) {
                 SecureField(
                     "",
                     text: $link,
@@ -1594,7 +1594,7 @@ private struct SettingsView: View {
                 .autocorrectionDisabled()
                 .submitLabel(.done)
                 .onSubmit(add)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, theme.space.s3)
                 .frame(height: 46)
                 .background(theme.color.surfaceInput, in: RoundedRectangle(cornerRadius: theme.radius.field))
                 Button("add", action: add)
@@ -1604,7 +1604,7 @@ private struct SettingsView: View {
             }
             noteText
                 .textRole(theme.type.caption)
-                .lineSpacing(3)
+                .lineSpacing(theme.space.s1)
                 .foregroundStyle(theme.color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
