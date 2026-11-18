@@ -61,21 +61,11 @@ jobs:
         run: brew install coreutils
       - run: just test
 
-  probe:
-    name: Probe (temporary)
-    runs-on: xcode-27
-    timeout-minutes: 15
-    steps:
-      - run: |
-          xcrun simctl list devices available | grep -A8 -- "-- iOS"
-          udid=$(xcrun simctl list devices available -j | jq -r '.devices["com.apple.CoreSimulator.SimRuntime.iOS-27-2"][] | select(.name == "iPhone 18 Pro Max") | .udid')
-          time xcrun simctl bootstatus "$udid" -b
-
   build:
     name: Device build
     needs: core
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - *checkout
       - *tools
@@ -85,7 +75,7 @@ jobs:
     name: Simulator (${{ matrix.name }})
     needs: core
     runs-on: xcode-27
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -97,27 +87,38 @@ jobs:
             checks: ChatComposerChecks ChatCallChecks
     env:
       CHECKS: ${{ matrix.checks }}
-      # No CLI grants notification permission on a just-created Simulator (AGENTS.md); this test needs the grant.
-      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+      # What a Simulator that never ran the app cannot pass. The first needs the notification grant, which no CLI
+      # gives (AGENTS.md); in the second the system photo picker shows no photo within the check's 10 s.
+      HEYDAN_SKIP_TESTS: >-
+        HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+        HeyDanChecks/ChatComposerChecks/testPhotosPicker
     steps:
       - *checkout
-      # A first boot takes minutes: it runs beside the installs and the build.
-      - name: Create and boot the Simulator
-        run: |
-          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
-          udid=$(xcrun simctl create "Hey Dan iPhone" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}")
-          nohup xcrun simctl boot "$udid" > /dev/null 2>&1 &
       - *tools
       - *timeout
+      - &simulator
+        # One of the image's own Simulators: its first boot takes about 90 s, a created one's over 5 minutes.
+        name: Pick the Simulator
+        run: |
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          udid=$(xcrun simctl list devices available -j | jq -r --arg runtime "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}" \
+            '.devices[$runtime][] | select(.name == "iPhone 18 Pro Max") | .udid')
+          xcrun simctl rename "$udid" "Hey Dan iPhone"
       - name: App tests
         if: ${{ matrix.app-tests }}
-        run: time just app-test
+        run: just app-test
       - name: UI checks
-        if: ${{ !cancelled() }}
-        run: |
-          status=0
-          for check in $CHECKS; do
-            echo "== $check"
-            time just sim-checks "$check" || status=1
-          done
-          exit $status
+        run: for check in $CHECKS; do just sim-checks "$check"; done
+
+  probe:
+    name: Probe (temporary)
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - *checkout
+      - *tools
+      - *timeout
+      - *simulator
+      - run: just sim-checks ChatComposerChecks/testPhotosPicker

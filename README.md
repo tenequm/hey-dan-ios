@@ -191,6 +191,11 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
 - `just device` signs, installs and launches on the connected iPhone.
 - `just logs [since]` shows the Simulator's app and LiveKit log; `just device-logs` copies the phone's
   DEBUG log file; `just server-logs <cid>` shows the server's side of one call over ssh.
+- CI (`.github/workflows/ci.yml`) runs on pull requests to `main` and pushes to `main`, with no local config:
+  `just test`, then `just build` and, on one of the runner's own Simulators, `just app-test` and the fixture
+  check classes (`ChatChecks`, `ChatThreadChecks`, `ChatPairingChecks`, `ChatComposerChecks`,
+  `ChatCallChecks`). `HEYDAN_SKIP_TESTS` (space-separated `-skip-testing` identifiers, read by
+  `scripts/sim_tests.py`) names the tests such a Simulator cannot run.
 
 ## TestFlight
 

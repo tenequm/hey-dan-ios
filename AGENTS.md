@@ -5,7 +5,8 @@ Build, run and test commands are in [README.md](README.md). These are the traps 
 - **Notification permission on a new Simulator.** No CLI grants it (`simctl privacy`, `XCUIProtectedResource` and
   `devicectl device settings` have no notifications entry). On a Simulator that never ran the app,
   `MessageNotificationTests` fails until the prompt is answered: run `just sim` once and tap Allow, or use a Simulator
-  that already granted it (a clone keeps the grant). Do not try to automate the grant in `just app-test`.
+  that already granted it (a clone keeps the grant). Do not try to automate the grant in `just app-test`. CI runs
+  on a Simulator that never ran the app, so its workflow skips that test by name (`HEYDAN_SKIP_TESTS`).
 - **`just sim-checks` selectors.** `ChatThreadChecks` (or any `*Checks` class) runs that class,
   `ChatThreadChecks/testRichCardTable` one method, and a bare name like `LiveActivityOnLockScreen` the
   `HeyDanChecks/test<name>` method. A selector that matches no test fails instead of passing.
