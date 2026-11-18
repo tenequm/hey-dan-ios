@@ -6,26 +6,29 @@ import SwiftUI
 /// screenshot can be cut to the same box as the design's.
 struct Gallery: View {
     let name: String
-    @State private var frames: [String: CGRect] = [:]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.Space.s6) {
                 switch name {
                 case "Tokens": TokenSpecimen()
+                case "GlassIconButton":
+                    GlassIconButton(title: "Back", systemImage: "chevron.left") {}
+                        .galleryButton(name)
                 default: Text("No gallery for \(name)").textRole(.body).foregroundStyle(Tokens.Color.textSecondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Tokens.Color.surface)
-        .onPreferenceChange(GalleryFrames.self) { frames = $0; save() }
+        .galleryItem("viewport")
+        .onPreferenceChange(GalleryFrames.self) { save($0) }
     }
 
-    private func save() {
+    private func save(_ frames: [String: CGRect]) {
         let rows = frames.mapValues { ["x": $0.minX, "y": $0.minY, "w": $0.width, "h": $0.height] }
         guard let data = try? JSONSerialization.data(withJSONObject: rows, options: .sortedKeys) else { return }
-        try? data.write(to: URL.cachesDirectory.appending(path: "gallery-frames.json"))
+        try? data.write(to: URL.cachesDirectory.appending(path: "gallery-frames.json"), options: .atomic)
     }
 }
 
@@ -37,6 +40,11 @@ struct GalleryFrames: PreferenceKey {
 }
 
 extension View {
+    func galleryButton(_ name: String) -> some View {
+        padding(EdgeInsets(top: 20, leading: 24, bottom: 28, trailing: 24))
+            .galleryItem(name)
+    }
+
     /// Marks one state for the screenshot cut, by the name its design frame has.
     func galleryItem(_ name: String) -> some View {
         background(GeometryReader { proxy in

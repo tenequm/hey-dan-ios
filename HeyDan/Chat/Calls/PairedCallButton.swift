@@ -31,9 +31,7 @@ struct PairedCallCover: View {
         VStack(spacing: 0) {
             HStack {
                 Spacer()
-                Button("Close", systemImage: "xmark") { dismiss() }
-                    .font(Theme.sans(15))
-                    .foregroundStyle(Theme.muted)
+                GlassIconButton(title: "Close", systemImage: "xmark") { dismiss() }
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .accessibilityIdentifier("chat.call.close")
@@ -67,5 +65,32 @@ struct ThreadCallButton: View {
                 conversation: chat.conversations.first { $0.id == conversation.id } ?? conversation),
                 service: chat.service, callsEnabled: chat.features.contains("calls"))
         }
+    }
+}
+
+struct GlassIconButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .medium))
+                .frame(width: 44, height: 44)
+                .glassCapsule()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+}
+
+extension View {
+    func glassCapsule() -> some View {
+        foregroundStyle(Tokens.Color.icon)
+            .background(Tokens.Color.glass, in: Capsule())
+            .overlay { Capsule().strokeBorder(Tokens.Color.composerBorder) }
+            .shadow(color: Tokens.Color.shadow, radius: 8, y: 4)
+            .contentShape(Capsule())
     }
 }
