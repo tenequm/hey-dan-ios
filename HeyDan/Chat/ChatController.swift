@@ -298,19 +298,28 @@ import UIKit
     }
     /// One conversation by id, without sorting the list.
     func conversation(_ id: String) -> Conversation? { reducer.conversations[id] }
-    func unpair(host: URL) async {
-        guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return }
+    /// `localOnly` forgets the host on this phone without asking it: for a host that no longer answers, whose device
+    /// then stays listed there until it is revoked on the host.
+    @discardableResult func unpair(host: URL, localOnly: Bool = false) async -> AppError? {
+        guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return nil }
         // The call's hangup is signed with this host's key, which unpairing deletes.
         if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired?.host == host {
             error = .callActive
-            return
+            return .callActive
         }
         do {
             let client: any AppService = self.host == host ? service : SignedClient(host: host, deviceId: entry.deviceId)
-            do { try await client.unpair() }
-            catch AppError.server(401, let body) where Outbox.revokedCodes.contains(body.error) {}
+            if !localOnly {
+                do { try await client.unpair() }
+                catch AppError.server(401, let body) where Outbox.revokedCodes.contains(body.error) {}
+            }
             try await forget(host: host, deviceId: entry.deviceId)
-        } catch { self.error = AppError.map(error) }
+            return nil
+        } catch {
+            let failure = AppError.map(error)
+            self.error = failure
+            return failure
+        }
     }
     /// The pairing goes first, which stops this controller's writers for that device, then its thread and outbox.
     private func forget(host: URL, deviceId: String) async throws {

@@ -27,6 +27,11 @@ struct DeviceKey: Sendable {
         catch let error as AppError { throw error }
         catch { throw .keyUnavailable }
     }
+    /// Signs with a key no longer saved under its host, such as one a new pairing just replaced.
+    func sign(_ bytes: Data, keyData: Data) throws(AppError) -> Data {
+        do { return try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: keyData).signature(for: bytes).derRepresentation }
+        catch { throw .keyUnavailable }
+    }
     func remove(host: URL) throws(AppError) { try IdentityKeychain.remove(account: host.absoluteString) }
 }
 
