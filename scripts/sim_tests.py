@@ -135,7 +135,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                        # CI names what a Simulator that never ran the app cannot pass.
                        *('-skip-testing:' + skip for skip in os.environ.get('HEYDAN_SKIP_TESTS', '').split())]
             count = 1
-            if selector.count('/') < 2:
+            # Enumerating starts its own test session, which outran its 3-minute limit on a fresh CI Simulator; the app tests are
+            # quick, so one test's allowance plus the startup margin covers them without it.
+            if mode != 'app-test' and selector.count('/') < 2:
                 inventory = Path(results) / 'tests.txt'
                 subprocess.run(['timeout', '180', *command, '-enumerate-tests', '-test-enumeration-style', 'flat',
                                 '-test-enumeration-format', 'text', '-test-enumeration-output-path', inventory],
