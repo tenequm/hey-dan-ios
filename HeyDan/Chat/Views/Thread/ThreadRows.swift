@@ -36,36 +36,40 @@ struct MessageRow: View {
     @State private var confirmsRetry = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if message.role == .user {
-                Text(message.text).textSelection(.enabled)
-            } else {
-                MessageBody(text: message.text)
-            }
-            ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
-            HStack {
-                if message.voice == .caller {
-                    Label("From a call", systemImage: "mic")
-                } else if message.voice == .spoken {
-                    Label("Spoken", systemImage: "speaker.wave.2")
+        // Not only a role filter: without this branch, a sent message that takes over its outbox row's ForEach id
+        // never reaches UI checks with its own identifier and label (ChatComposerChecks.testTextSend).
+        if message.role == .user || message.role == .agent || message.role == .host {
+            VStack(alignment: .leading, spacing: 10) {
+                if message.role == .user {
+                    Text(message.text).textSelection(.enabled)
+                } else {
+                    MessageBody(text: message.text)
                 }
-                ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
-                    Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
+                ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
+                HStack {
+                    if message.voice == .caller {
+                        Label("From a call", systemImage: "mic")
+                    } else if message.voice == .spoken {
+                        Label("Spoken", systemImage: "speaker.wave.2")
+                    }
+                    ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
+                        Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
+                    }
+                    if message.editedAt != nil { Text("Edited") }
                 }
-                if message.editedAt != nil { Text("Edited") }
+                .font(Theme.sans(12)).foregroundStyle(Theme.muted)
+                if message.role == .user { delivery }
             }
-            .font(Theme.sans(12)).foregroundStyle(Theme.muted)
-            if message.role == .user { delivery }
-        }
-        .font(Theme.sans(16))
-        .foregroundStyle(Theme.text)
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(message.role == .user ? Theme.card : Theme.page, in: RoundedRectangle(cornerRadius: 14))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(AXID.message(message.id))
-        .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
-            Button("Send again") { if let id = message.clientId { retry(id) } }
+            .font(Theme.sans(16))
+            .foregroundStyle(Theme.text)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(message.role == .user ? Theme.card : Theme.page, in: RoundedRectangle(cornerRadius: 14))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(AXID.message(message.id))
+            .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
+                Button("Send again") { if let id = message.clientId { retry(id) } }
+            }
         }
     }
 
