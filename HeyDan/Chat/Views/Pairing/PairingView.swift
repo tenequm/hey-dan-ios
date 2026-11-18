@@ -1,10 +1,17 @@
 import HeyDanCore
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var holdingPairingScreen: Binding<Bool> = .constant(false)
+    @Entry var openPairedChats: @MainActor () -> Void = {}
+}
+
 struct PairingView: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isPresented) private var isPresented
+    @Environment(\.holdingPairingScreen) private var hold
+    @Environment(\.openPairedChats) private var openChats
     @State private var link = ""
     @State private var working = false
     @State private var message: String?
@@ -72,7 +79,7 @@ struct PairingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.top, theme.space.s4)
             }
             if paired != nil {
-                Button("Open chats") { dismiss() }.buttonStyle(PanelActionStyle())
+                Button("Open chats") { dismiss(); openChats() }.buttonStyle(PanelActionStyle())
             } else {
                 PasteButton(payloadType: String.self) { @Sendable strings in
                     Task { @MainActor in
@@ -97,10 +104,12 @@ struct PairingView: View {
         .foregroundStyle(theme.color.textPrimary)
         .background(theme.color.surface.ignoresSafeArea())
         .interactiveDismissDisabled(working)
+        .onDisappear { hold.wrappedValue = false }
     }
 
     private func submit() {
         guard !working, !link.isEmpty else { return }
+        if Pairings.shared.active == nil { hold.wrappedValue = true }
         working = true
         message = nil
         Task {
