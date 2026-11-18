@@ -39,7 +39,8 @@ nonisolated struct HostBadges {
             }
         }
         if let coordinationError { throw coordinationError }
-        return try result!.get()
+        guard let result else { throw CocoaError(.fileWriteUnknown) }
+        return try result.get()
     }
 
     static func incoming(_ original: UNNotificationContent) -> UNNotificationContent {

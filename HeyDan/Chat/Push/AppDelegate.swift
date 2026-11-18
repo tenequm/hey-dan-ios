@@ -147,11 +147,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return readOrder > previous
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         let payload = MessageNotification.payload(from: notification.request.content.userInfo)
-        var options = Self.presentation(for: payload?.hd, host: Pairings.shared.active?.host, conversationID: ChatController.shared.openConversationId)
+        var options = await Self.presentation(for: payload?.hd, host: Pairings.shared.active?.host, conversationID: ChatController.shared.openConversationId)
         if let payload, let host = PairedHost.key(payload.hd.h),
-           let total = try? HostBadges.shared?.update(pairings: Self.badgeHosts(), host: host, count: payload.aps.badge) {
+           let total = try? HostBadges.shared?.update(pairings: await Self.badgeHosts(), host: host, count: payload.aps.badge) {
             try? await center.setBadgeCount(total)
             options.remove(.badge)
         }
