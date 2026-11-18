@@ -586,8 +586,7 @@ extension XCTestCase {
         return app
     }
 
-    @MainActor func shot(_ name: String) {
-        let screenshot = XCUIScreen.main.screenshot()
+    @MainActor func shot(_ name: String, screenshot: XCUIScreenshot = XCUIScreen.main.screenshot()) {
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
