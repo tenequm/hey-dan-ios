@@ -1,0 +1,3 @@
+#!/bin/sh
+# Materialize agent skills (gitignored) in fresh checkouts and worktrees
+command -v kst >/dev/null 2>&1 && kst sync -q --color never || true

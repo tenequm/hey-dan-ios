@@ -20,3 +20,6 @@ Local.xcconfig
 local.just
 
 .local/
+# Agent skills that kasetto installs from kasetto.yaml.
+.claude/skills/
+.agents/skills/

@@ -3,6 +3,9 @@
 Commands are `just` recipes: [README.md](README.md#development) lists them and the [justfile](justfile) documents
 each. Below: the traps agents hit, how the app talks to the host, and what test runs need.
 
+Agent skills come from [kasetto.yaml](kasetto.yaml) ([kasetto](https://github.com/pivoshenko/kasetto), `kst`): run
+`git config core.hooksPath .githooks` once per clone so checkouts sync them (the hook does nothing without `kst`).
+
 - **Notification permission on a new Simulator.** No CLI grants it (`simctl privacy`, `XCUIProtectedResource` and
   `devicectl device settings` have no notifications entry). On a Simulator that never ran the app,
   `MessageNotificationTests` fails until the prompt is answered: run `just sim` once and tap Allow, or use a Simulator

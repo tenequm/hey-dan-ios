@@ -1,0 +1,5 @@
+scope: project
+agent: [claude-code, codex]
+skills:
+  - source: https://github.com/tenequm/skills
+    skills: [swift-dev]
