@@ -19,9 +19,6 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading) {
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["HEYDAN_COMPOSER_CHECKS"] == "1" { ComposerFixtureRows() }
-            #endif
             if !attachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack {

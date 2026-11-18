@@ -127,7 +127,7 @@ actor FixtureAppService: AppService {
         FileTicketRenewResponse(fileId: fileId, ticket: "fixture", expiresAt: Int64.max,
             uploadPath: "/app/files/" + fileId, uploaded: false)
     }
-    func upload(fileId: String, ticket: String, bytes: Data, progress: (@Sendable (Double) -> Void)? = nil) async throws(AppError) { uploaded[fileId] = bytes; progress?(1) }
+    func upload(fileId: String, ticket: String, bytes: Data) async throws(AppError) { uploaded[fileId] = bytes }
     func download(fileId: String) async throws(AppError) -> Data {
         if let bytes = uploaded[fileId] { return bytes }
         if fileId == "file_doc01" {

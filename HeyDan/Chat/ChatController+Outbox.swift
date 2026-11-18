@@ -117,12 +117,7 @@ extension ChatController {
                 case .upload(let attachment):
                     let bytes = try await files.bytes(attachment, host: host, deviceId: deviceId)
                     guard token == generation, !Task.isCancelled else { return }
-                    try await service.upload(fileId: attachment.fileId!, ticket: attachment.ticket!, bytes: bytes) { [weak self] progress in
-                        Task { @MainActor in
-                            guard let self, self.generation == token else { return }
-                            self.setProgress(progress, key: attachment.uploadKey)
-                        }
-                    }
+                    try await service.upload(fileId: attachment.fileId!, ticket: attachment.ticket!, bytes: bytes)
                     result = .uploaded(uploadKey: attachment.uploadKey)
                 case .send(let request):
                     let response = try await service.send(conversationId: entry.conversationId, request: request)

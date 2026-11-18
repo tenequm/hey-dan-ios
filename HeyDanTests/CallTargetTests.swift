@@ -171,7 +171,7 @@ private final class FixtureBundle {}
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> { throw .transport(.unavailable) }
     func initializeFile(_ request: FileInitRequest) async throws(AppError) -> FileInitResponse { throw .transport(.unavailable) }
     func renewFileTicket(fileId: String) async throws(AppError) -> FileTicketRenewResponse { throw .transport(.unavailable) }
-    func upload(fileId: String, ticket: String, bytes: Data, progress: (@Sendable (Double) -> Void)?) async throws(AppError) -> Void { throw .transport(.unavailable) }
+    func upload(fileId: String, ticket: String, bytes: Data) async throws(AppError) -> Void { throw .transport(.unavailable) }
     func download(fileId: String) async throws(AppError) -> Data { throw .transport(.unavailable) }
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant {
         starts.append(request)

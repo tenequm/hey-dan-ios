@@ -185,8 +185,7 @@ final class SignedClient: AppService {
         throw .transport(.invalidResponse)
     }
 
-    func upload(fileId: String, ticket: String, bytes: Data,
-                progress: (@Sendable (Double) -> Void)? = nil) async throws(AppError) {
+    func upload(fileId: String, ticket: String, bytes: Data) async throws(AppError) {
         let start = Date()
         var outcome = "cancelled"
         defer { CallLog.log(.net, "PUT /app/files/:id \(outcome) \(Int(Date().timeIntervalSince(start) * 1000))ms") }
@@ -195,12 +194,9 @@ final class SignedClient: AppService {
             request.setValue("HeyDan-Ticket " + ticket, forHTTPHeaderField: "Authorization")
             request.setValue(String(bytes.count), forHTTPHeaderField: "Content-Length")
             request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-            progress?(0)
-            let (data, response) = try await uploadSession.upload(for: request, from: bytes,
-                delegate: TransferDelegate(progress: progress))
+            let (data, response) = try await uploadSession.upload(for: request, from: bytes)
             try validate(data, response)
             outcome = "http_\((response as? HTTPURLResponse)?.statusCode ?? 0)"
-            progress?(1)
         } catch { outcome = AppError.map(error).logName; throw AppError.map(error) }
     }
     func hello() async throws(AppError) -> HelloResponse {
@@ -260,13 +256,7 @@ final class SignedClient: AppService {
 }
 
 private final class TransferDelegate: NSObject, URLSessionTaskDelegate, Sendable {
-    let progress: (@Sendable (Double) -> Void)?
-    init(progress: (@Sendable (Double) -> Void)? = nil) { self.progress = progress }
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
-                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-        if totalBytesExpectedToSend > 0 { progress?(Double(totalBytesSent) / Double(totalBytesExpectedToSend)) }
-    }
 }

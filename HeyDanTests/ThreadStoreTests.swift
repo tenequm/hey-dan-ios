@@ -91,7 +91,6 @@ struct ThreadStoreTests {
             if case .message(let message) = entity, message.clientId == clientId { return message }; return nil
         }
         #expect(messages.count == 1)
-        #expect(chat.uploadProgress.values.contains(1))
         chat.setActive(false)
         let cursor = chat.reducer.cursor
         let restored = await paired(service, store: store, files: files)
@@ -367,7 +366,7 @@ private actor ScriptedAppService: AppService {
         return try await base.events(query: query) }
     func initializeFile(_ request: FileInitRequest) async throws(AppError) -> FileInitResponse { mintKeys.append(request.uploadKey); try check("initializeFile"); let result = try await base.initializeFile(request); try check("initializeFileAfter"); return result }
     func renewFileTicket(fileId: String) async throws(AppError) -> FileTicketRenewResponse { try check("renewFileTicket"); return try await base.renewFileTicket(fileId: fileId) }
-    func upload(fileId: String, ticket: String, bytes: Data, progress: (@Sendable (Double) -> Void)?) async throws(AppError) -> Void { try check("upload"); try await base.upload(fileId: fileId, ticket: ticket, bytes: bytes, progress: progress); try check("uploadAfter") }
+    func upload(fileId: String, ticket: String, bytes: Data) async throws(AppError) -> Void { try check("upload"); try await base.upload(fileId: fileId, ticket: ticket, bytes: bytes); try check("uploadAfter") }
     func download(fileId: String) async throws(AppError) -> Data { try check("download"); return try await base.download(fileId: fileId) }
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant { try check("startCall"); return try await base.startCall(request) }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) -> Void { try check("endCall"); return try await base.endCall(callId: callId, request: request) }

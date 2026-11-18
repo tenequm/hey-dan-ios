@@ -38,7 +38,6 @@ import UIKit
     var badge: Badge? { reducer.badge }
     var hasMoreBefore: Bool { openConversationId.flatMap { reducer.hasMoreBefore[$0] } ?? false }
     var outboxStates: [String: Outbox.State] { Dictionary(uniqueKeysWithValues: outbox.entries.map { ($0.request.clientId, $0.state) }) }
-    private(set) var uploadProgress: [String: Double] = [:]
     var reducer = ThreadReducer()
     var outbox = Outbox()
     @ObservationIgnored private(set) var service: any AppService
@@ -103,12 +102,6 @@ import UIKit
     }
     deinit { monitor?.cancel(); protectedTask?.cancel(); streamTask?.cancel(); runner?.cancel(); loadTask?.cancel(); readTask?.cancel() }
 
-    /// Whole percents only: every sent chunk would otherwise re-render the open thread.
-    func setProgress(_ value: Double, key: String) {
-        guard uploadProgress[key].map({ Int($0 * 100) != Int(value * 100) }) ?? true else { return }
-        uploadProgress[key] = value
-    }
-
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }
         flushRead()
@@ -119,7 +112,7 @@ import UIKit
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); openConversationId = pairing == nil ? nil : pendingOpen
         historyFloors = [:]
-        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; error = nil; uploadProgress = [:]
+        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; error = nil
         features = pairing == nil ? [] : Pairings.shared.entries.first { $0.host == host }?.features ?? []
         connectionState = .disconnected
         guard let pairing else { return }

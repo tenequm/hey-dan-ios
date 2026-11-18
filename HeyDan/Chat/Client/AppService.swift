@@ -22,7 +22,7 @@ protocol AppService: Sendable {
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error>
     func initializeFile(_ request: FileInitRequest) async throws(AppError) -> FileInitResponse
     func renewFileTicket(fileId: String) async throws(AppError) -> FileTicketRenewResponse
-    func upload(fileId: String, ticket: String, bytes: Data, progress: (@Sendable (Double) -> Void)?) async throws(AppError) -> Void
+    func upload(fileId: String, ticket: String, bytes: Data) async throws(AppError) -> Void
     func download(fileId: String) async throws(AppError) -> Data
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) -> Void
