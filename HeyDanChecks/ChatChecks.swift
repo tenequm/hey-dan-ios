@@ -69,9 +69,10 @@ final class ChatChecks: XCTestCase {
         let paste = app.buttons["pairing.paste"]
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         paste.tap()
-        let allow = app.buttons["Allow Paste"].firstMatch
-        if allow.waitForExistence(timeout: 3) { allow.tap() }
-        app.buttons["pairing.submit"].tap()
+        allowPaste(in: app)
+        let submit = app.buttons["pairing.submit"]
+        XCTAssertTrue(submit.isEnabled)
+        submit.tap()
         let chats = app.buttons["Open chats"]
         XCTAssertTrue(chats.waitForExistence(timeout: 20))
         shot("pairing-success")

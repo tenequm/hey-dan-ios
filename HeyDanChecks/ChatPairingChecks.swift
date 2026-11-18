@@ -12,8 +12,8 @@ import XCTest
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         shot("pairing-empty")
         paste.tap()
-        let allow = app.buttons["Allow Paste"].firstMatch
-        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        allowPaste(in: app)
+        XCTAssertTrue(app.buttons["pairing.submit"].isEnabled)
         shot("pairing-filled")
         app.buttons["pairing.submit"].tap()
         return app
@@ -28,5 +28,14 @@ import XCTest
     func testOfflinePairing() {
         let app = pasteAndSubmit("https://example.invalid/app/pair#fixture-not-a-real-code", offline: true)
         XCTAssertTrue(app.staticTexts["You are offline. Check your connection and try again."].waitForExistence(timeout: 5))
+    }
+}
+
+extension XCTestCase {
+    @MainActor func allowPaste(in app: XCUIApplication) {
+        let system = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Paste"].firstMatch
+        if system.waitForExistence(timeout: 2) { system.tap(); return }
+        let local = app.buttons["Allow Paste"].firstMatch
+        if local.exists { local.tap() }
     }
 }

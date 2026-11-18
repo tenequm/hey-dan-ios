@@ -88,17 +88,18 @@ struct PairingView: View {
             if paired != nil {
                 Button("Open chats") { dismiss(); openChats() }.buttonStyle(PanelActionStyle())
             } else {
-                PasteButton(payloadType: String.self) { @Sendable strings in
-                    Task { @MainActor in
-                        link = strings.first ?? ""
-                        message = nil
+                Button {
+                    guard let pasted = UIPasteboard.general.string, !pasted.isEmpty else {
+                        message = "Copy a pairing link, then paste it here."
+                        return
                     }
+                    link = pasted
+                    message = nil
+                } label: {
+                    Label("Paste from clipboard", systemImage: "document.on.clipboard")
                 }
-                .labelStyle(.titleAndIcon).buttonBorderShape(.capsule)
-                .tint(theme.color.surfaceGrouped).frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
-                .background(theme.color.surfaceCard, in: Capsule())
-                .accessibilityLabel("Paste from clipboard").accessibilityIdentifier("pairing.paste")
-                .disabled(working)
+                .buttonStyle(PanelActionStyle(secondary: true))
+                .accessibilityIdentifier("pairing.paste").disabled(working)
                 Button(action: submit) {
                     if working { ProgressView() }
                     else { Text(failure != nil ? "Try again" : host.map { "Pair with \($0)" } ?? "Pair") }
