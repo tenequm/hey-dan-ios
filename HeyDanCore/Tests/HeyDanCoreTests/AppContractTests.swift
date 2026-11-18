@@ -147,6 +147,26 @@ private struct CheckFailure: Error { let label: String }
     let message = try fixtureDecode(Message.self, wire)
     #expect(message.card?.parts == [.divider, .text(content: "Still here", style: "bold")])
     #expect(message.text == wire["text"] as? String)
+
+    for card: Any in [["title": "No actions", "parts": [["type": "divider"]]], ["parts": ["type": "divider"], "actions": []],
+                      ["title": 7, "parts": [], "actions": []], "not a card"] {
+        wire["card"] = card
+        #expect(try fixtureDecode(Message.self, wire).text == wire["text"] as? String)
+    }
+    wire["card"] = ["title": "No actions", "parts": [["type": "divider"]]] as [String: Any]
+    #expect(try fixtureDecode(Message.self, wire).card == Card(title: "No actions", description: nil, parts: [.divider], actions: []))
+}
+
+@Test func unreadableItemKeepsTheRestOfItsHistoryPage() throws {
+    let messages = try #require(coreFixtures()["messages"] as? [String: Any])
+    let good = try #require(messages["agentMarkdown"] as? [String: Any])
+    var bad = good
+    bad["id"] = "msg_bad"
+    bad["files"] = "not files"
+    let page = try fixtureDecode(HistoryPage.self, ["items": [bad, good], "hasMoreBefore": false, "hasMoreAfter": false])
+    #expect(page.items.count == 2)
+    guard case .unknown = page.items[0] else { Issue.record("an unreadable message should decode as unknown"); return }
+    guard case .message = page.items[1] else { Issue.record("the readable message should survive"); return }
 }
 
 @Test func cardChartShapesRoundTrip() throws {
