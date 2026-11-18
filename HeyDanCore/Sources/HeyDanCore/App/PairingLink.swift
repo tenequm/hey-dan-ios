@@ -23,7 +23,7 @@ public struct PairingLink: Sendable, Equatable {
     public init?(_ text: String, allowsLocalNetworking: Bool = false) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),
-              var parts = URLComponents(string: text),
+              let parts = URLComponents(string: text),
               parts.user == nil, parts.password == nil, parts.query == nil,
               parts.percentEncodedPath == "/app/pair",
               let host = parts.host, !host.isEmpty,
@@ -37,8 +37,8 @@ public struct PairingLink: Sendable, Equatable {
         }()
         guard parts.scheme?.lowercased() == "https" ||
                 (parts.scheme?.lowercased() == "http" && allowsLocalNetworking && loopback) else { return nil }
-        parts.path = ""; parts.fragment = nil
-        guard let url = parts.url else { return nil }
+        // Spelled as its key, so one host is one pairing and one device key however the link spells it.
+        guard let parsed = parts.url, let url = URL(string: PairedHost.key(parsed)) else { return nil }
         baseURL = url
         self.code = code
     }

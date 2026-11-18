@@ -72,10 +72,13 @@ private struct SelectableMarkdown: UIViewRepresentable {
 
     func updateUIView(_ view: MarkdownTextView, context: Context) {
         view.linkHandler = { payload, _, _ in
-            switch payload {
-            case .url(let url): openURL(url)
-            case .string(let string): if let url = URL(string: string) { openURL(url) }
+            let url: URL? = switch payload {
+            case .url(let url): url
+            case .string(let string): URL(string: string)
             }
+            // Agent text can carry any scheme (tel:, sms:, another app's); links open only as web pages or mail,
+            // as card actions do.
+            if let url, ["http", "https", "mailto"].contains(url.scheme?.lowercased()) { openURL(url) }
         }
         if context.coordinator.text != text || context.coordinator.theme != theme {
             view.setContentImmediately(MarkdownContent(markdown: text, theme: theme), theme: theme)

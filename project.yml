@@ -87,7 +87,6 @@ targets:
           - Fonts/DMSans/DMSans-Medium.ttf
           - Fonts/DMSans/DMSans-SemiBold.ttf
           - Fonts/DMSans/DMSans-Bold.ttf
-          - Fonts/HankenGrotesk/HankenGrotesk[wght].ttf
           - Fonts/IBMPlexMono/IBMPlexMono-Regular.ttf
           - Fonts/IBMPlexMono/IBMPlexMono-Medium.ttf
     settings:

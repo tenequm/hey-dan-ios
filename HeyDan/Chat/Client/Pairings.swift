@@ -6,6 +6,12 @@ import UIKit
 
 @MainActor @Observable final class Pairings {
     static let shared = Pairings()
+    /// Plain http to a loopback host, for a local stack: Debug builds only.
+    #if DEBUG
+    static let allowsLocalNetworking = true
+    #else
+    static let allowsLocalNetworking = false
+    #endif
     enum State { case unreadable, none, paired }
     struct Entry: Codable, Sendable {
         let host: URL
@@ -73,17 +79,19 @@ import UIKit
         #endif
     }
     private func reload() {
+        let data: Data?
+        do { data = try IdentityKeychain.load(account: account) }
+        catch { state = .unreadable; self.error = .keyUnavailable; return }
         do {
-            if let data = try IdentityKeychain.load(account: account) {
-                saved = try JSONDecoder().decode(Saved.self, from: data)
-            } else { saved = Saved() }
+            saved = try data.map { try JSONDecoder().decode(Saved.self, from: $0) } ?? Saved()
             error = nil
-            publish()
-        } catch is DecodingError {
-            saved = Saved(); error = nil
+        } catch {
+            // Set aside before the next save overwrites it, and said on the pairing screen instead of passing as unpaired.
+            if let data { try? IdentityKeychain.save(data, account: account + "-unreadable") }
+            saved = Saved(); self.error = .pairing(.savedDataInvalid)
             CallLog.log(.net, "pairings invalid_saved_data")
-            publish()
-        } catch { state = .unreadable; self.error = .keyUnavailable }
+        }
+        publish()
     }
     private func publish() {
         if publishes { HeyDanShortcuts.updateAppShortcutParameters() }
@@ -101,6 +109,7 @@ import UIKit
             catch { throw .keyUnavailable }
         }
         saved = next
+        error = nil
         publish()
     }
     func add(_ pairing: PairResponse, host: URL, features: [String]) throws(AppError) {
@@ -129,7 +138,10 @@ import UIKit
         next.entries.removeValue(forKey: host.absoluteString)
         if next.active == host.absoluteString { next.active = next.entries.keys.sorted().first }
         try commit(next)
-        if !fixture { try DeviceKey().remove(host: host) }
+        // The pairing is gone already: a key left behind is replaced by the next pairing, and the wipes must still run.
+        if !fixture {
+            do { try DeviceKey().remove(host: host) } catch { CallLog.log(.store, "pairings key_remove_failed \(error.logName)") }
+        }
     }
     func pair(_ text: String, configuration: URLSessionConfiguration = .ephemeral) async throws {
         #if DEBUG
@@ -140,12 +152,7 @@ import UIKit
         guard !fixture else { throw PairingFailure.fixture }
         guard !pairingInFlight else { throw PairingFailure.busy }
         guard state != .unreadable else { throw AppError.keyUnavailable }
-        #if DEBUG
-        let allowsLocal = true
-        #else
-        let allowsLocal = false
-        #endif
-        guard let link = PairingLink(text, allowsLocalNetworking: allowsLocal) else { throw PairingFailure.invalidLink }
+        guard let link = PairingLink(text, allowsLocalNetworking: Self.allowsLocalNetworking) else { throw PairingFailure.invalidLink }
         pairingInFlight = true
         defer { pairingInFlight = false }
         let client = SignedClient(host: link.baseURL, configuration: configuration)
@@ -164,8 +171,10 @@ import UIKit
                     build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
                     os: UIDevice.current.systemVersion))
             let pairing = try await client.pair(request)
+            let replaced = saved.entries[link.baseURL.absoluteString].flatMap { $0.deviceId == pairing.deviceId ? nil : $0.deviceId }
+            var previous: Data?
             do {
-                let previous = try IdentityKeychain.load(account: link.baseURL.absoluteString)
+                previous = try IdentityKeychain.load(account: link.baseURL.absoluteString)
                 guard let blob = try IdentityKeychain.load(account: pending.absoluteString) else { throw AppError.keyUnavailable }
                 try IdentityKeychain.save(blob, account: link.baseURL.absoluteString)
                 do { try add(pairing, host: link.baseURL, features: hello.features) }
@@ -181,6 +190,20 @@ import UIKit
                 throw error
             }
             try? key.remove(host: pending)
+            if let replaced {
+                // Its key is about to be gone for good: only it can sign the replaced device's own removal on the host.
+                if let previous {
+                    do {
+                        try await SignedClient(host: link.baseURL, deviceId: replaced, configuration: configuration,
+                            signer: { bytes, _ in try DeviceKey().sign(bytes, keyData: previous) }).unpair()
+                    } catch { CallLog.log(.net, "pair unpair_replaced_failed \(AppError.map(error).logName)") }
+                }
+                // Its queued sends can never go out now: drop them with its cache.
+                if publishes {
+                    do { try await ChatController.shared.clearLocal(host: link.baseURL, deviceId: replaced) }
+                    catch { CallLog.log(.store, "pair clear_replaced_failed") }
+                }
+            }
             CallLog.log(.net, "pair ok")
         } catch {
             try? key.remove(host: pending)
@@ -191,12 +214,13 @@ import UIKit
 }
 
 enum PairingFailure: Error, LocalizedError {
-    case invalidLink, protocolMismatch, busy, fixture
+    case invalidLink, protocolMismatch, busy, fixture, savedDataInvalid
     var errorDescription: String? {
         switch self {
         case .busy: "Pairing is already in progress."
         case .fixture: "Pairing is unavailable in fixture mode."
         case .invalidLink: "Paste a valid pairing link."
+        case .savedDataInvalid: "Saved pairings could not be read. Pair your hosts again."
         case .protocolMismatch: "This host requires a different app version. Update the app and try again."
         }
     }

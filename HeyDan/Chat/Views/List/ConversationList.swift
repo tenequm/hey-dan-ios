@@ -25,7 +25,8 @@ struct ConversationList: View {
     }
 
     var body: some View {
-        NavigationStack(path: path) {
+        let conversations = self.conversations
+        return NavigationStack(path: path) {
             Group {
                 if tab == .settings {
                     PairedSettingsSection()
@@ -40,7 +41,7 @@ struct ConversationList: View {
                                 .padding(.horizontal, theme.space.s4)
                                 .accessibilityLabel("Search chats")
                         }
-                        if chat.connectionState == .reconnecting || chat.connectionState == .disconnected || chat.error != nil {
+                        if chat.connectionState == .reconnecting || chat.connectionState == .disconnected {
                             Label(connectionNotice, systemImage: "wifi.slash")
                                 .textRole(theme.type.footnote, theme.weight.medium)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -83,7 +84,7 @@ struct ConversationList: View {
             .background(theme.color.surface.ignoresSafeArea())
             .toolbarVisibility(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in
-                if let conversation = chat.conversations.first(where: { $0.id == id }) {
+                if let conversation = chat.conversation(id) {
                     ThreadView(conversation: conversation)
                 }
             }

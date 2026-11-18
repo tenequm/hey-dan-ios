@@ -15,7 +15,7 @@ struct PairingView: View {
     @State private var message: String?
     var paired: Pairings.Entry? = nil
 
-    private var host: String? { PairingLink(link, allowsLocalNetworking: true)?.baseURL.host() }
+    private var host: String? { PairingLink(link, allowsLocalNetworking: Pairings.allowsLocalNetworking)?.baseURL.host() }
     private var failure: String? { message ?? Pairings.shared.error?.message }
 
     var body: some View {
@@ -130,8 +130,7 @@ struct PairingView: View {
                 try await Pairings.shared.pair(link)
                 link = ""
                 confirmation.wrappedValue = Pairings.shared.active
-            } catch let error as AppError { message = error.message }
-            catch { message = error.localizedDescription }
+            } catch { message = AppError.map(error).message }
         }
     }
 }

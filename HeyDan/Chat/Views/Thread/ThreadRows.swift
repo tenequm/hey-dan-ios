@@ -230,7 +230,10 @@ struct OutboxRow: View {
                 }
             }
             .textRole(theme.type.caption)
-            if entry.state == .held { Button("Discard", role: .destructive) { discard(entry.request.clientId) } }
+            // A waiting entry can be a host that keeps failing it: Discard lets the conversation's later sends go.
+            if entry.state == .held || entry.state == .waiting {
+                Button("Discard", role: .destructive) { discard(entry.request.clientId) }
+            }
         }
         .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)

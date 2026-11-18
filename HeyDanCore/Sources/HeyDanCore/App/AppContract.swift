@@ -300,12 +300,13 @@ nonisolated public struct Card: Sendable, Equatable, Codable {
         self.actions = actions
     }
 
+    /// Never throws: a card this build cannot read comes out empty, and the message falls back to its text.
     public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        title = try c.decodeIfPresent(String.self, forKey: .title)
-        description = try c.decodeIfPresent(String.self, forKey: .description)
-        parts = try c.decode([CardElement<CardPart>].self, forKey: .parts).compactMap(\.value)
-        actions = try c.decode([CardElement<CardAction>].self, forKey: .actions).compactMap(\.value)
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        title = (try? c?.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        description = (try? c?.decodeIfPresent(String.self, forKey: .description)) ?? nil
+        parts = ((try? c?.decodeIfPresent([CardElement<CardPart>].self, forKey: .parts)) ?? nil)?.compactMap(\.value) ?? []
+        actions = ((try? c?.decodeIfPresent([CardElement<CardAction>].self, forKey: .actions)) ?? nil)?.compactMap(\.value) ?? []
     }
 }
 
@@ -831,9 +832,10 @@ nonisolated public enum ThreadEntity: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey { case kind }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A known kind this build cannot read is kept as unknown, so one item never fails a whole history page.
         switch try c.decode(String.self, forKey: .kind) {
-        case "message": self = .message(try Message(from: decoder))
-        case "question": self = .question(try Question(from: decoder))
+        case "message": self = try (try? Message(from: decoder)).map(Self.message) ?? .unknown(JSONValue(from: decoder))
+        case "question": self = try (try? Question(from: decoder)).map(Self.question) ?? .unknown(JSONValue(from: decoder))
         default: self = .unknown(try JSONValue(from: decoder))
         }
     }

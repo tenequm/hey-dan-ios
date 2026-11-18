@@ -6,6 +6,7 @@ import XCTest
 @testable import HeyDan
 
 final class SignedClientTests: XCTestCase {
+    private static let removals = Mutex<[String]>([])
     func testSecureEnclaveCreateSignReload() throws {
         let host = URL(string: "https://key-test-\(UUID().uuidString.lowercased()).invalid")!
         let key = DeviceKey()
@@ -117,8 +118,13 @@ final class SignedClientTests: XCTestCase {
         try pairings.add(PairResponse(deviceId: "dev_old", userName: "Old", agents: [], protocol: 1, serverTime: 0), host: host, features: [])
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [Stub.self]
+        SignedClientTests.removals.withLock { $0 = [] }
         for (status, code) in [(400, "bad_proof"), (403, "invalid_code"), (429, "rate_limited"), (200, "ok")] {
             Stub.handler.withLock { $0 = { request in
+                if request.httpMethod == "DELETE" {
+                    SignedClientTests.removals.withLock { $0.append(request.value(forHTTPHeaderField: "Authorization") ?? "") }
+                    return (204, Data())
+                }
                 if request.url!.path == "/app/hello" {
                     return (200, Data(#"{"protocol":1,"minProtocol":1,"voiceProtocol":6,"features":["files"],"serverTime":0}"#.utf8))
                 }
@@ -132,10 +138,14 @@ final class SignedClientTests: XCTestCase {
                 XCTAssertEqual(status, 200)
                 XCTAssertEqual(pairings.active?.pairing.deviceId, "dev_new")
                 XCTAssertNotEqual(try key.publicKey(host: host), old)
+                // The replaced device is removed on the host, signed by its own (old) key.
+                XCTAssertEqual(SignedClientTests.removals.withLock { $0.count }, 1)
+                XCTAssertTrue(SignedClientTests.removals.withLock { $0.first?.contains("d=dev_old,") ?? false })
                 let reloaded = Pairings(account: account, publishes: false)
                 while reloaded.state == .unreadable { await Task.yield() }
                 XCTAssertEqual(reloaded.active?.pairing.deviceId, "dev_new")
             } catch AppError.server(let actual, let body) {
+                XCTAssertEqual(SignedClientTests.removals.withLock { $0.count }, 0)
                 XCTAssertEqual(actual, status); XCTAssertEqual(body.message, "verbatim " + code)
                 XCTAssertEqual(try key.publicKey(host: host), old)
                 XCTAssertEqual(pairings.active?.pairing.deviceId, "dev_old")
@@ -147,13 +157,16 @@ final class SignedClientTests: XCTestCase {
     @MainActor func testCorruptSavedPairingsCanRecover() async throws {
         let account = "test-corrupt-" + UUID().uuidString
         try IdentityKeychain.save(Data("invalid".utf8), account: account)
-        defer { try? IdentityKeychain.remove(account: account) }
+        defer { try? IdentityKeychain.remove(account: account); try? IdentityKeychain.remove(account: account + "-unreadable") }
         let pairings = Pairings(account: account, publishes: false)
         while pairings.state == .unreadable { await Task.yield() }
         XCTAssertEqual(pairings.state, .none)
+        XCTAssertNotNil(pairings.error, "an unreadable blob is said, not passed off as unpaired")
+        XCTAssertEqual(try IdentityKeychain.load(account: account + "-unreadable"), Data("invalid".utf8))
         try pairings.add(PairResponse(deviceId: "d", userName: "u", agents: [], protocol: 1, serverTime: 0),
             host: URL(string: "https://recover.invalid")!, features: [])
         XCTAssertEqual(pairings.state, .paired)
+        XCTAssertNil(pairings.error)
     }
 
 }

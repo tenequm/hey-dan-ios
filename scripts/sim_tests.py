@@ -106,6 +106,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 raise RuntimeError('Incomplete screen checks')
             if not summary['totalTestCount']:
                 raise RuntimeError(f'No tests ran for {selector}')
+            # A skipped test counts in the total and exits 0: a run in which nothing passed proves nothing.
+            if not summary.get('passedTests'):
+                raise RuntimeError(f'No test passed for {selector} ({summary.get("skippedTests", 0)} skipped)')
 
         subprocess.run([*sim, 'install', udid, build / 'Build/Products/Debug-iphonesimulator/HeyDan.app'], check=True)
         selector = 'HeyDanTests' if mode == 'app-test' else ui_selector(check)
@@ -121,9 +124,10 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 subprocess.run([*sim, 'terminate', udid, bundle], check=True)
             out = Path('build/checks').resolve()
             out.mkdir(parents=True, exist_ok=True)
-            withheld = {'HEYDAN_CALL_LINK', 'HEYDAN_E2E_CALL_LINK', 'HEYDAN_PAIR_LINK', 'HEYDAN_PAIR_CMD'}
+            # Links and the stack's commands can carry secrets, and a result bundle records the runner's environment.
+            withheld = {'HEYDAN_CALL_LINK', 'HEYDAN_E2E_CALL_LINK', 'HEYDAN_PAIR_LINK'}
             runner.update({'TEST_RUNNER_' + k: v for k, v in os.environ.items()
-                           if k.startswith('HEYDAN_') and k not in withheld})
+                           if k.startswith('HEYDAN_') and k not in withheld and not k.endswith('_CMD')})
             runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(out)
         if mode == 'screens' or selector.startswith('HeyDanChecks/ScreenCaptureChecks'):
             runner['TEST_RUNNER_HEYDAN_SCREENS'] = '1'

@@ -375,7 +375,7 @@ struct ContentView: View {
     private func startDisplayedCall() async {
         if let target = pairedTarget, let paired = target.paired, let service = target.service {
             let chat = ChatController.shared
-            let live = chat.host == paired.host ? chat.conversations.first { $0.id == paired.conversation.id } : nil
+            let live = chat.host == paired.host ? chat.conversation(paired.conversation.id) : nil
             _ = await call.start(target: CallTarget(paired: PairedCallTarget(host: paired.host, deviceId: paired.deviceId,
                 conversation: live ?? paired.conversation), service: service))
         } else { _ = await call.start(lineID: call.shownLineID) }
@@ -1424,18 +1424,6 @@ private struct Preview {
             return transcript
         }
     #endif
-}
-
-/// The mascot as a pincer in dots: the notch opens while the call is live.
-private enum Claw {
-    static let open = [
-        ".........", "...##....", "..###....", ".###+....", ".##+++##.",
-        ".###+###.", "..#####..", "...###...", ".........",
-    ]
-    static let closed = [
-        ".........", "...###...", "..####...", ".###+.##.", ".##+++##.",
-        ".###+###.", "..#####..", "...###...", ".........",
-    ]
 }
 
 /// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.

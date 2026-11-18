@@ -687,9 +687,9 @@ enum IntentCall {
         let controller = CallController.shared
         // A process launched before the first unlock after a restart could not read the lines; unlocked, it can.
         controller.readLinesIfNeeded()
-        if lineID == nil || !controller.lines.entries.contains(where: { $0.id == lineID }) {
-            try await readyPairings()
-        }
+        // Only when a paired agent could answer: the picked saved line calls without waiting on the pairings' keychain.
+        let savedLine = lineID.map { id in controller.lines.entries.contains { $0.id == id } } ?? !controller.lines.entries.isEmpty
+        if !savedLine { try await readyPairings() }
         CallLog.log(.intent, "start line=\(lineID.map(CallController.short) ?? "picked") lines=\(controller.lines.entries.count)")
         if controller.lines.entries.isEmpty && Pairings.shared.entries.isEmpty {
             CallLog.log(.intent, "no line: \(inBackground ? "failed" : "the app shows its settings")")

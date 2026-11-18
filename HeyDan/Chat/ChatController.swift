@@ -20,6 +20,8 @@ import UIKit
     private(set) var openConversationId: String?
     var connectionState: ConnectionState = .disconnected
     var error: AppError?
+    /// Why the last send from the composer did not queue; shown there, not as the connection's error.
+    var sendFailure: String?
     var features: [String] = []
     var conversations: [Conversation] { reducer.conversations.values.sorted { $0.id < $1.id } }
     var thread: [ThreadEntity] { openConversationId.map { visibleThread($0) } ?? [] }
@@ -66,7 +68,11 @@ import UIKit
     @ObservationIgnored var readFlushTask: Task<Void, Never>?
     @ObservationIgnored var readTask: Task<Void, Never>?
     @ObservationIgnored var readOrder: Int64 = 0
+    /// The open conversation's last history load failed: the next synchronized stream loads it again.
+    @ObservationIgnored var historyStale = false
     @ObservationIgnored var retrying: Set<String> = []
+    /// Held while a delivery that began in the foreground drains after the app left it.
+    @ObservationIgnored var backgroundDelivery: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var protectedTask: Task<Void, Never>?
 
@@ -127,7 +133,7 @@ import UIKit
         loadTask?.cancel(); streamTask?.cancel(); runner?.cancel(); readTask?.cancel()
         runner = nil; streamTask = nil
         self.host = host; self.pairing = pairing
-        reducer = ThreadReducer(); outbox = Outbox(); openConversationId = pairing == nil ? nil : pendingOpen
+        reducer = ThreadReducer(); outbox = Outbox(); historyStale = false; openConversationId = pairing == nil ? nil : pendingOpen
         historyFloors = [:]
         savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; error = nil
         features = pairing == nil ? [] : Pairings.shared.entries.first { $0.host == host }?.features ?? []
@@ -161,13 +167,15 @@ import UIKit
         guard openConversationId != id else { return }
         flushRead()
         openConversationId = id
+        sendFailure = nil
         Task { await loadHistory(newest: true) }
     }
-    func closeConversation() { flushRead(); openConversationId = nil }
+    func closeConversation() { flushRead(); openConversationId = nil; sendFailure = nil }
     func setActive(_ active: Bool) {
         guard self.active != active else { return }
         self.active = active
         restart()
+        if active { endBackgroundDelivery() } else { keepDeliveringInBackground() }
     }
     func restart() {
         guard active, networkAvailable, ready, !paused, pairing != nil else {
@@ -235,25 +243,32 @@ import UIKit
             if let floor = page.items.compactMap(\.order).min() {
                 historyFloors[id] = min(historyFloors[id] ?? floor, floor)
             }
+            historyStale = false
             let changed = reducer.upsert(page, conversationId: id)
             for entity in page.items { if case .message(let message) = entity { outbox.reconcile(message) } }
             try await persist(changed)
             guard token == generation else { return }
             try await saveOutbox()
-        } catch { await handle(error, token: token) }
+        } catch {
+            if token == generation, !Task.isCancelled { historyStale = true }
+            await handle(error, token: token)
+        }
     }
-    func answer(questionId: String, value: String) async {
+    /// The failure to show on this question's card, nil once the host took the answer.
+    @discardableResult func answer(questionId: String, value: String) async -> String? {
         let token = generation
         do {
             let response = try await service.answer(questionId: questionId, request: AnswerRequest(value: value))
-            guard token == generation else { return }
+            guard token == generation else { return nil }
             try await persist(reducer.upsert(.question(response.question)))
+            return nil
         } catch {
-            guard token == generation else { return }
+            guard token == generation else { return nil }
             if case AppError.server(409, let body) = error, let question = body.question {
                 do { try await persist(reducer.upsert(.question(question))) } catch { self.error = AppError.map(error) }
             }
             await handle(error, token: token)
+            return AppError.map(error).message
         }
     }
     func flushRead() {
@@ -276,11 +291,10 @@ import UIKit
         guard let id = openConversationId, order > max(readOrder, reducer.conversations[id]?.readOrder ?? 0) else { return }
         readOrder = max(readOrder, order)
         readTask?.cancel()
-        let token = generation, pending = readOrder
         readTask = Task {
             do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
-            readOrder = 0
-            await sendRead(id: id, order: pending, token: token)
+            // Sent outside this task: closing the thread cancels only the wait, never a read already on its way.
+            flushRead()
         }
     }
     /// An agent's conversation and the client that reaches its host. Another host is read on a client of its own,
@@ -299,21 +313,43 @@ import UIKit
         guard host == entry.host else { throw .notPaired }
         return (conversations.first { $0.agent.id == agentId }, client)
     }
-    func unpair(host: URL) async {
-        guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return }
+    /// One conversation by id, without sorting the list.
+    func conversation(_ id: String) -> Conversation? { reducer.conversations[id] }
+    /// `localOnly` forgets the host on this phone without asking it: for a host that no longer answers, whose device
+    /// then stays listed there until it is revoked on the host.
+    @discardableResult func unpair(host: URL, localOnly: Bool = false) async -> AppError? {
+        guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return nil }
+        // The call's hangup is signed with this host's key, which unpairing deletes.
+        if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired?.host == host {
+            error = .callActive
+            return .callActive
+        }
         do {
             let client: any AppService = self.host == host ? service : SignedClient(host: host, deviceId: entry.deviceId)
-            do { try await client.unpair() }
-            catch AppError.server(401, let body) where Outbox.revokedCodes.contains(body.error) {}
+            if !localOnly {
+                do { try await client.unpair() }
+                catch AppError.server(401, let body) where Outbox.revokedCodes.contains(body.error) {}
+            }
             try await forget(host: host, deviceId: entry.deviceId)
-        } catch { self.error = AppError.map(error) }
+            return nil
+        } catch {
+            let failure = AppError.map(error)
+            self.error = failure
+            return failure
+        }
     }
     /// The pairing goes first, which stops this controller's writers for that device, then its thread and outbox.
     private func forget(host: URL, deviceId: String) async throws {
         try Pairings.shared.remove(host: host, deviceId: deviceId)
-        try await store.clear(host: host, deviceId: deviceId)
-        try await files.clear(host: host, deviceId: deviceId)
+        try await clearLocal(host: host, deviceId: deviceId)
         CallLog.log(.store, "unpaired")
+    }
+    /// Both wipes run even when one fails: nothing would ever clear a device's data once its pairing is gone.
+    func clearLocal(host: URL, deviceId: String) async throws {
+        var failure: (any Error)?
+        do { try await store.clear(host: host, deviceId: deviceId) } catch { failure = error }
+        do { try await files.clear(host: host, deviceId: deviceId) } catch { failure = failure ?? error }
+        if let failure { throw failure }
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }

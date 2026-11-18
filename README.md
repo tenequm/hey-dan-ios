@@ -6,8 +6,16 @@
   <img src="docs/screenshots/on-call.png" width="280" alt="Hey Dan on a call, waiting for the wake phrase Hey Dan">
 </p>
 
-Native iPhone voice client for [NanoClaw](https://github.com/tenequm/nanoclaw) voice lines. Press the
-Action Button, talk to the agent; the call keeps going with the screen locked.
+Native iPhone client for [NanoClaw](https://github.com/tenequm/nanoclaw): chat by text with your paired agents, get
+their replies as push notifications, and call them. Press the Action Button, talk to the agent; the call keeps going
+with the screen locked. Saved voice-line links work without pairing.
+
+- **Chat** (the nanoclaw app channel, protocol 1): pair once with the one-time link the host's `/pair` prints
+  (Settings > Pair a host). Each paired host gets its own Secure Enclave key that never leaves the phone, and every
+  request is signed with it. The conversation list, threads (markdown, images, files, question cards), the outbox
+  and unread counts follow one server-sent event stream; the thread cache and outbox stay on this phone and out
+  of its backups. Pushes arrive as communication notifications through the `HeyDanNotificationService`
+  extension. A thread's Call button asks the host for a call; paired calls always use relay-only ICE.
 
 - **CallKit** owns the call: lock-screen controls, AirPods mute and hangup, interruptions, routing.
 - **NanoClaw** admits it: `POST /voice/livekit/token?t=<token>&v=6` returns the LiveKit URL, room token,
@@ -105,7 +113,14 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
 
 - `just test` runs the `HeyDanCore` tests on the Mac (no simulator needed) and the `just sim-e2e` harness's
   tests (its log grading against recorded app log lines); `just build` compile-checks for a device without
-  signing.
+  signing. `just app-test` runs the app-hosted `HeyDanTests` (signed client, thread store, call targets,
+  notification content) in the Simulator; it shares one build with `just sim-checks` (see [AGENTS.md](AGENTS.md)).
+- Chat UI checks: `just sim-checks ChatThreadChecks` (or `ChatPairingChecks`, `ChatComposerChecks`,
+  `ChatPushChecks`, `ChatCallChecks`, a `Class/test` selector) run against fixture data, no server needed. DEBUG
+  builds take `HEYDAN_FIXTURE_CHAT=1` for a paired fixture host (agent Taylor) with no network. `ChatChecks` and the
+  `app-*` rows of `just sim-e2e` need a local nanoclaw stack, named by `HEYDAN_LOCAL_BASE`, `HEYDAN_PAIR_CMD` (prints
+  one fresh pairing link, treated as a secret), `HEYDAN_LOCAL_CA`, `HEYDAN_STACK_RESTART_CMD` and
+  `HEYDAN_REVOKED_CMD`; `HEYDAN_CHAT_ONLY` limits a run to the rows named. Without a stack those rows skip.
 - `just sim` runs the app in the Simulator (named "Hey Dan iPhone"; `HEYDAN_SIM` and `HEYDAN_DERIVED_DATA`
   pick another one and its build folder) with the test line's call link seeded (see
   [Local config](#local-config)). Use a test line, not your main agent's line: a test turn keeps that agent
