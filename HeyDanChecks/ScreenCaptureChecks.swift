@@ -151,6 +151,11 @@ import XCTest
         for phase in ["connecting", "speaking", "failed", "listening", "thinking", "muted", "reconnecting", "manual", "draft"] {
             session.show("call", phase: phase)
             capture(phase == "speaking" ? "call-live" : "call-" + phase, showing: session.app.buttons["chat.call.close"])
+            if phase == "speaking" {
+                session.app.buttons["controls.options"].tap()
+                capture("call-options", showing: session.app.switches["options.typing"].firstMatch)
+                session.app.buttons["Close"].firstMatch.tap()
+            }
         }
     }
 
