@@ -42,11 +42,7 @@ struct HeyDanApp: App {
             }
                 .id(rootID)
                 .environment(\.holdingPairingScreen, $holdingPairingScreen)
-                .environment(\.openPairedChats, {
-                    holdingPairingScreen = false
-                    ChatController.shared.closeConversation()
-                    rootID = UUID()
-                })
+                .environment(\.pairedChatsRoot, $rootID)
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
                 .fullScreenCover(isPresented: Binding(
                     get: { CallController.shared.showsPairedCall },

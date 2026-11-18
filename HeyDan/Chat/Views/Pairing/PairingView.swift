@@ -3,7 +3,7 @@ import SwiftUI
 
 extension EnvironmentValues {
     @Entry var holdingPairingScreen: Binding<Bool> = .constant(false)
-    @Entry var openPairedChats: @MainActor () -> Void = {}
+    @Entry var pairedChatsRoot: Binding<UUID>?
 }
 
 struct PairingView: View {
@@ -11,7 +11,7 @@ struct PairingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isPresented) private var isPresented
     @Environment(\.holdingPairingScreen) private var hold
-    @Environment(\.openPairedChats) private var openChats
+    @Environment(\.pairedChatsRoot) private var chatsRoot
     @State private var link = ""
     @State private var working = false
     @State private var message: String?
@@ -89,7 +89,13 @@ struct PairingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.top, theme.space.s4)
             }
             if paired != nil {
-                Button("Open chats") { dismiss(); openChats() }.buttonStyle(PanelActionStyle())
+                Button("Open chats") {
+                    dismiss()
+                    hold.wrappedValue = false
+                    ChatController.shared.closeConversation()
+                    chatsRoot?.wrappedValue = UUID()
+                }
+                .buttonStyle(PanelActionStyle())
             } else {
                 Button {
                     guard let pasted = UIPasteboard.general.string, !pasted.isEmpty else {
