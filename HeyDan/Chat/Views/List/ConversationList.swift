@@ -230,9 +230,6 @@ struct ConversationRow: View {
                 .accessibilityIdentifier(AXID.status)
         } else if conversation.unread > 0 && conversation.lastMessage?.role == .agent {
             Label("Done", systemImage: "checkmark.circle").foregroundStyle(theme.color.statusDone)
-        } else if let last = conversation.lastMessage {
-            Text(Date(timeIntervalSince1970: Double(last.at) / 1000), style: .time)
-                .textRole(theme.type.label).foregroundStyle(theme.color.textTertiary)
         }
     }
 
