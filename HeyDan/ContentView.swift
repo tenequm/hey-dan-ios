@@ -263,14 +263,17 @@ struct ContentView: View {
     private var controls: some View {
         VStack(spacing: theme.space.s2) {
             if hintIsError && reviewKeys == nil {
-                Button { Task { await startDisplayedCall() } } label: {
-                    Text("Call again").textRole(theme.type.body, theme.weight.medium)
-                        .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
-                        .background(theme.color.accent, in: Capsule())
-                        .foregroundStyle(theme.color.onAccent)
-                }
+                HStack(spacing: theme.space.s3) {
+                    optionsControl.fixedSize()
+                    Button { Task { await startDisplayedCall() } } label: {
+                        Text("Call again").textRole(theme.type.body, theme.weight.medium)
+                            .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
+                            .background(theme.color.accent, in: Capsule())
+                            .foregroundStyle(theme.color.onAccent)
+                    }
                     .accessibilityIdentifier(AXID.keysCall)
                     .disabled(!hasLine)
+                }
             } else {
                 ViewThatFits(in: .horizontal) {
                     HStack { controlButtons }
@@ -302,13 +305,7 @@ struct ContentView: View {
             .accessibilityValue(micLabel)
         }
         modeControl
-        Button {
-            optionsVoice = voiceService.map { VoiceSettingsModel(service: $0) }
-            presentsCallOptions = true
-        } label: {
-            CallControlLabel(title: "Options", symbol: "ellipsis")
-        }
-        .accessibilityIdentifier(AXID.controlsOptions)
+        optionsControl
 
         if reviewKeys == nil {
             Button {
@@ -321,6 +318,16 @@ struct ContentView: View {
             .accessibilityLabel(callKey.spoken)
             .disabled((!isCallActive && !hasLine) || (isSettingUp && !cancelArmed))
         }
+    }
+
+    private var optionsControl: some View {
+        Button {
+            optionsVoice = voiceService.map { VoiceSettingsModel(service: $0) }
+            presentsCallOptions = true
+        } label: {
+            CallControlLabel(title: "Options", symbol: "ellipsis")
+        }
+        .accessibilityIdentifier(AXID.controlsOptions)
     }
 
     private var modeControl: some View {
