@@ -136,7 +136,7 @@ struct AgentVoiceRow: View {
                     guard let conversation = found.conversation else { error = "This agent has no conversation yet."; return }
                     selection = PairedVoicePickerService(target: PairedCallTarget(host: entry.host, deviceId: entry.deviceId,
                         conversation: conversation), service: found.service)
-                } catch { self.error = error.message }
+                } catch { self.error = AppError.map(error).message }
             }
         } label: {
             SettingsRow(title: agent.name, icon: "waveform", navigates: true)
