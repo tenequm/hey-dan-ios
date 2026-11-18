@@ -72,11 +72,7 @@ final class ChatChecks: XCTestCase {
         let allow = app.buttons["Allow Paste"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
         app.buttons["pairing.submit"].tap()
-        let field = app.textFields["pairing.link"]
-        let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            !field.exists || ["", "Pairing link"].contains(field.value as? String ?? "")
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 20), .completed)
+        XCTAssertTrue(app.buttons["Open chats"].waitForExistence(timeout: 20))
     }
 
     func testSendReply() throws {
@@ -179,6 +175,7 @@ final class ChatChecks: XCTestCase {
         launch(["HEYDAN_CHECK_REVOKED_REQUEST": "1"])
         openThread()
         app.buttons["Settings"].tap()
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.settings.host.")).firstMatch.tap()
         app.buttons["Unpair"].firstMatch.tap()
         let choices = app.buttons.matching(identifier: "Unpair")
         XCTAssertTrue(choices.firstMatch.waitForExistence(timeout: 5))

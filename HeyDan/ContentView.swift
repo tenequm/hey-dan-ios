@@ -44,7 +44,7 @@ struct ContentView: View {
         .foregroundStyle(Theme.text)
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .sheet(isPresented: $showsSettings) { SettingsView() }
+        .sheet(isPresented: $showsSettings) { NavigationStack { PairedSettingsSection(close: { showsSettings = false }) } }
         .sheet(isPresented: $showsOptions, onDismiss: {
             guard let target = pendingVoiceTarget else { return }
             pendingVoiceTarget = nil
@@ -1481,7 +1481,8 @@ private enum Claw {
 }
 
 /// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.
-private struct SettingsView: View {
+struct VoiceLinesSettings: View {
+    @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
@@ -1498,34 +1499,24 @@ private struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ZStack {
-                Text("settings")
-                    .font(Theme.sans(17, .medium))
-                    .spacing(-0.01, size: 17)
-                Button("close") { dismiss() }
-                    .font(Theme.mono(13))
-                    .foregroundStyle(Theme.muted)
-                    .frame(minHeight: 44)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: theme.space.s4) {
+            HStack {
+                Text("Voice lines").textRole(theme.type.title, theme.weight.bold)
+                Spacer()
+                GlassIconButton(title: "Close", systemImage: "xmark") { dismiss() }
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    PairedSettingsSection()
+                VStack(alignment: .leading, spacing: theme.space.s6) {
                     linesSection
                     addSection
                 }
-                .padding(.bottom, 20)
+                .padding(.bottom, theme.space.s5)
             }
-            .scrollBounceBehavior(.basedOnSize)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .foregroundStyle(Theme.text)
+        .padding(theme.space.s4)
+        .foregroundStyle(theme.color.textPrimary)
         .presentationDetents([.medium, .large])
-        .presentationBackground(Theme.card)
-        .preferredColorScheme(.dark)
-        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .presentationBackground(theme.color.surfaceSheet)
         .confirmationDialog(
             "Delete the line to \(deleting?.name ?? "")?", item: $deleting, titleVisibility: .visible
         ) { entry in
@@ -1544,20 +1535,20 @@ private struct SettingsView: View {
     // MARK: Lines
 
     private var linesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: theme.space.s2) {
             label("voice lines")
             if call.lines.entries.isEmpty {
                 Text("no lines yet. add the call link nanoclaw gave you below.")
-                    .font(Theme.mono(12))
-                    .foregroundStyle(Theme.muted)
+                    .textRole(theme.type.caption)
+                    .foregroundStyle(theme.color.textSecondary)
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: theme.space.s1_5) {
                     ForEach(call.lines.entries) { entry in row(entry) }
                 }
                 Text("the picked line is the one the action button and \"talk to hey dan\" call. a shortcut can call any line by name.")
-                    .font(Theme.mono(11))
+                    .textRole(theme.type.micro)
                     .lineSpacing(3)
-                    .foregroundStyle(Theme.muted)
+                    .foregroundStyle(theme.color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -1565,22 +1556,22 @@ private struct SettingsView: View {
 
     private func row(_ entry: VoiceLines.Entry) -> some View {
         let picked = entry.id == call.lines.selected?.id
-        return HStack(spacing: 4) {
+        return HStack(spacing: theme.space.s1) {
             Button {
                 call.selectLine(entry.id)
             } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: theme.space.s3) {
                     Circle()
-                        .strokeBorder(picked ? Theme.orange : Theme.outline, lineWidth: 2)
-                        .background(Circle().fill(picked ? Theme.orange : .clear).padding(5))
+                        .strokeBorder(picked ? theme.color.accentText : theme.color.border, lineWidth: 2)
+                        .background(Circle().fill(picked ? theme.color.accentText : .clear).padding(5))
                         .frame(width: 20, height: 20)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: theme.space.s0_5) {
                         Text(entry.agent?.lowercased() ?? "unnamed line")
-                            .font(Theme.sans(16, .medium))
-                            .foregroundStyle(entry.agent == nil ? Theme.muted : Theme.text)
+                            .textRole(theme.type.body, theme.weight.medium)
+                            .foregroundStyle(entry.agent == nil ? theme.color.textSecondary : theme.color.textPrimary)
                         Text(picked ? "\(entry.line.host) · picked" : entry.line.host)
-                            .font(Theme.mono(11))
-                            .foregroundStyle(Theme.muted)
+                            .textRole(theme.type.micro)
+                            .foregroundStyle(theme.color.textSecondary)
                     }
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -1601,7 +1592,7 @@ private struct SettingsView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 15))
-                    .foregroundStyle(Theme.muted.opacity(naming == entry.id ? 0.4 : 1))
+                    .foregroundStyle(theme.color.textSecondary.opacity(naming == entry.id ? 0.4 : 1))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -1610,27 +1601,27 @@ private struct SettingsView: View {
         .padding(.leading, 12)
         .padding(.trailing, 2)
         .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(picked ? Theme.orange.opacity(0.07) : .clear))
+        .background(RoundedRectangle(cornerRadius: theme.radius.xs).fill(picked ? theme.color.accentText.opacity(0.07) : .clear))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(picked ? Theme.orange.opacity(0.55) : Theme.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: theme.radius.xs)
+                .strokeBorder(picked ? theme.color.accentText.opacity(0.55) : theme.color.border, lineWidth: 1)
         )
     }
 
     // MARK: Add
 
     private var addSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: theme.space.s2) {
             label("add a line")
-            HStack(spacing: 10) {
+            HStack(spacing: theme.space.s2_5) {
                 SecureField(
                     "",
                     text: $link,
-                    prompt: Text("https://voice.example.com/voice?t=...").foregroundStyle(Theme.screenDim)
+                    prompt: Text("https://voice.example.com/voice?t=...").foregroundStyle(theme.color.placeholder)
                 )
-                .font(Theme.mono(14))
-                .foregroundStyle(Theme.text)
-                .tint(Theme.orange)
+                .textRole(theme.type.footnote, mono: true)
+                .foregroundStyle(theme.color.textPrimary)
+                .tint(theme.color.accentText)
                 .textContentType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -1638,16 +1629,16 @@ private struct SettingsView: View {
                 .onSubmit(add)
                 .padding(.horizontal, 12)
                 .frame(height: 46)
-                .modifier(InsetWell(radius: 6))
+                .background(theme.color.surfaceInput, in: Capsule())
                 Button("add", action: add)
-                    .buttonStyle(KeyCapStyle(finish: .orange, height: 42))
+                    .buttonStyle(PanelActionStyle())
                     .frame(width: 72)
                     .disabled(link.isEmpty)
             }
             noteText
-                .font(Theme.mono(12))
+                .textRole(theme.type.caption)
                 .lineSpacing(3)
-                .foregroundStyle(Theme.muted)
+                .foregroundStyle(theme.color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1655,12 +1646,12 @@ private struct SettingsView: View {
     @ViewBuilder private var noteText: some View {
         switch note {
         case .invalid:
-            Text("that is not a call link. it looks like https://<host>/voice?t=<token>.").foregroundStyle(Theme.error)
+            Text("that is not a call link. it looks like https://<host>/voice?t=<token>.").foregroundStyle(theme.color.danger)
         case .notSaved:
-            Text("the keychain did not take the link. try again.").foregroundStyle(Theme.error)
+            Text("the keychain did not take the link. try again.").foregroundStyle(theme.color.danger)
         case .unreadable:
             Text("the saved lines could not be read from the keychain, so nothing is saved over them. restart the phone, then add the link again.")
-                .foregroundStyle(Theme.error)
+                .foregroundStyle(theme.color.danger)
         case .asking:
             Text("asking the host who answers…")
         case let .named(agent):
@@ -1674,9 +1665,9 @@ private struct SettingsView: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(Theme.mono(11))
+            .textRole(theme.type.micro)
             .spacing(0.06, size: 11)
-            .foregroundStyle(Theme.muted)
+            .foregroundStyle(theme.color.textSecondary)
     }
 
     private func add() {

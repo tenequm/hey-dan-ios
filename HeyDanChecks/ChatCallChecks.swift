@@ -21,7 +21,7 @@ import XCTest
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1"])
         XCTAssertTrue(call.isEnabled)
         app.buttons["Settings"].tap()
-        XCTAssertTrue(app.staticTexts["Taylor tester"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chat.settings.host.app.example.com"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Pair a host"].exists)
         // One control per tap: a tap on Voice opens the picker and nothing else in its row.
         app.buttons["Voice: Taylor"].tap()
