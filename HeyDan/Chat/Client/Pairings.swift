@@ -50,6 +50,13 @@ import UIKit
         self.account = account
         self.publishes = publishes
         #if DEBUG
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_SETTINGS"] == "1" {
+            fixture = true
+            state = .none
+            return
+        }
+        #endif
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
             fixture = true
             let host = FixtureAppService.host
