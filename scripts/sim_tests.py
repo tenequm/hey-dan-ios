@@ -76,18 +76,21 @@ def main(mode, name, folder, bundle, check=None):
     with (build / 'HeyDanSimulatorTests.lock').open('a') as lock, tempfile.TemporaryDirectory() as results:
         fcntl.flock(lock, fcntl.LOCK_EX)
         sim = ['xcrun', 'simctl']
+        destination = f'id={udid}'
+        # The build needs no booted Simulator: a first boot (minutes on CI) can run beside it.
+        manifest = test_products(build, destination, env)
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
                         f'user/{os.getuid()}/com.apple.dasd'], check=True)
-        destination = f'id={udid}'
-        manifest = test_products(build, destination, env)
         runner = env.copy()
 
         def test(selector):
             result = Path(results) / (selector.replace('/', '-') + '.xcresult')
             proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', '600', 'xcodebuild',
                                    'test-without-building', '-xctestrun', manifest, '-destination', destination,
-                                   *TEST_FLAGS, '-resultBundlePath', result, '-only-testing:' + selector],
+                                   *TEST_FLAGS, '-resultBundlePath', result, '-only-testing:' + selector,
+                                   # CI names the tests a just-created Simulator cannot run.
+                                   *('-skip-testing:' + skip for skip in os.environ.get('HEYDAN_SKIP_TESTS', '').split())],
                                   env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             # XCTest activity trees and assertion values can contain chat text or pairing links.
             for line in proc.stdout.splitlines():
