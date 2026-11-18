@@ -43,11 +43,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .sheet(isPresented: $showsSettings) {
-            if Pairings.shared.active == nil {
-                VoiceLinesSettings()
-            } else {
-                NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
-            }
+            NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
         }
         .sheet(isPresented: $showsOptions, onDismiss: {
             guard let target = pendingVoiceTarget else { return }
@@ -1428,6 +1424,8 @@ private struct Preview {
 
 /// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.
 struct VoiceLinesSettings: View {
+    var showsPairedHosts = true
+    var onCall: (() -> Void)?
     @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     @Environment(\.dismiss) private var dismiss
@@ -1461,17 +1459,17 @@ struct VoiceLinesSettings: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
-                    if Pairings.shared.active != nil { PairedSettingsSection() }
+                    if showsPairedHosts, Pairings.shared.active != nil { PairedHostSettingsRows() }
                     linesSection
                     addSection
-                    if Pairings.shared.active == nil { PairedSettingsSection() }
+                    if showsPairedHosts, Pairings.shared.active == nil { PairedHostSettingsRows() }
                 }
                 .padding(.bottom, theme.space.s5)
             }
             .scrollBounceBehavior(.basedOnSize)
             if Pairings.shared.active == nil, let selected = call.lines.selected {
                 Button {
-                    dismiss()
+                    if let onCall { onCall() } else { dismiss() }
                     Task { _ = await call.start(lineID: selected.id) }
                 } label: {
                     Label("Call \(selected.name)", systemImage: "phone.fill")
@@ -1487,6 +1485,7 @@ struct VoiceLinesSettings: View {
         .padding(.horizontal, theme.space.s5)
         .padding(.top, theme.space.s3)
         .foregroundStyle(theme.color.textPrimary)
+        .toolbarVisibility(.hidden, for: .navigationBar)
         .presentationDetents(Pairings.shared.active == nil ? [.large] : [.medium, .large])
         .presentationBackground(theme.color.surfaceSheet)
         .preferredColorScheme(.dark)

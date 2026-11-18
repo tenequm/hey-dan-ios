@@ -25,6 +25,16 @@ import XCTest
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["chat.settings.host.app.example.com"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Pair a host"].exists)
+        let host = app.buttons["chat.settings.host.app.example.com"]
+        host.tap()
+        XCTAssertTrue(app.buttons["Unpair"].waitForExistence(timeout: 5))
+        app.buttons["Back"].tap()
+        let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Voice lines")).firstMatch
+        lines.tap()
+        XCTAssertTrue(app.staticTexts["Saved lines"].waitForExistence(timeout: 5))
+        XCTAssertFalse(host.exists)
+        XCTAssertFalse(lines.exists)
+        app.buttons["close"].tap()
         // One control per tap: a tap on Voice opens the picker and nothing else in its row.
         app.buttons["Voice: Taylor"].tap()
         XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 10))
