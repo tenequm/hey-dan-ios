@@ -221,3 +221,14 @@ sim-checks check="LiveActivityOnLockScreen":
 # App-hosted tests and UI checks share the same Simulator test products.
 app-test:
     @python3 scripts/sim_tests.py app-test {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}}
+
+# Treehouse runs this in every slot it hands out: copy the owner's untracked config from the main checkout.
+# .env.local stays out (release account, test call link): copy it by hand for testflight, calls and HeyDanChecks.
+lane-ready:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+    [ "$main" != "$PWD" ] || exit 0
+    for f in Local.xcconfig local.just; do
+        if [ -f "$main/$f" ]; then cp -p "$main/$f" "$f"; fi
+    done
