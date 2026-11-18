@@ -33,16 +33,7 @@ extension ChatController {
                 for try await batch in Self.batches(events) {
                     guard token == generation, !Task.isCancelled else { return }
                     var candidate = reducer
-                    var changed: Set<String> = []
-                    for event in batch {
-                        do { changed.formUnion(try candidate.apply(event)) }
-                        catch {
-                            CallLog.log(.stream, "decode_skip seq=\(event.id ?? 0)")
-                            candidate = ThreadReducer(cursor: max(candidate.cursor, event.id ?? candidate.cursor),
-                                conversations: candidate.conversations, entities: candidate.entities,
-                                statuses: candidate.statuses, badge: candidate.badge, hasMoreBefore: candidate.hasMoreBefore)
-                        }
-                    }
+                    let changed = Self.apply(batch, to: &candidate, logs: true)
                     guard let host, let pairing else { return }
                     let moved = candidate.cursor != reducer.cursor || !changed.isEmpty
                     if moved {
@@ -51,9 +42,11 @@ extension ChatController {
                             entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
                     }
                     guard token == generation, !Task.isCancelled else { return }
-                    if moved { reducer = candidate }
+                    // Applied again to the live reducer, not swapped in: a history page, read or send that landed
+                    // during the save would be lost with the copy. Upserts keep the higher seq, so this is idempotent.
+                    if moved { Self.apply(batch, to: &reducer, logs: false) }
                     for id in changed {
-                        if case .message(let message) = candidate.entities[id] { outbox.reconcile(message) }
+                        if case .message(let message) = reducer.entities[id] { outbox.reconcile(message) }
                     }
                     #if DEBUG
                     if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1" {
@@ -67,6 +60,7 @@ extension ChatController {
                     if batch.contains(where: { $0.kind == .synchronized }) {
                         CallLog.log(.stream, "synchronized cursor=\(reducer.cursor) count=\(batch.count) ms=\(CallLog.ms(since: started))")
                         connectionState = .connected; error = nil; attempts = 0
+                        if historyStale, openConversationId != nil { Task { await loadHistory(newest: true) } }
                     }
                     try await saveOutbox()
                     runOutbox()
@@ -83,6 +77,21 @@ extension ChatController {
                 catch { return }
             }
         }
+    }
+    /// An event that does not decode is skipped, and the cursor still moves past it.
+    @discardableResult
+    private static func apply(_ batch: [AppEvent], to reducer: inout ThreadReducer, logs: Bool) -> Set<String> {
+        var changed: Set<String> = []
+        for event in batch {
+            do { changed.formUnion(try reducer.apply(event)) }
+            catch {
+                if logs { CallLog.log(.stream, "decode_skip seq=\(event.id ?? 0)") }
+                reducer = ThreadReducer(cursor: max(reducer.cursor, event.id ?? reducer.cursor),
+                    conversations: reducer.conversations, entities: reducer.entities,
+                    statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
+            }
+        }
+        return changed
     }
     nonisolated private static func batches(_ source: AsyncThrowingStream<AppEvent, any Error>) -> AsyncThrowingStream<[AppEvent], any Error> {
         let pair = AsyncThrowingStream<[AppEvent], any Error>.makeStream()

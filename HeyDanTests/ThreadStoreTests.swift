@@ -115,6 +115,9 @@ struct ThreadStoreTests {
         await chat.markRead(order: 2)
         await chat.markRead(order: 4)
         await chat.readTask?.value
+        // The debounce hands the read to its own task, which closing the thread cannot cancel.
+        chat.closeConversation()
+        await chat.readFlushTask?.value
         #expect(chat.conversations.first?.readOrder == 4)
         #expect(chat.badge?.unreadTotal == 0)
         #expect(chat.reducer.cursor == 10)
@@ -183,6 +186,10 @@ struct ThreadStoreTests {
         chat.openConversation("conv_taylor01")
         #expect(await !chat.send(text: String(repeating: "a", count: Outbox.maximumTextBytes + 1)))
         #expect(chat.outbox.entries.isEmpty)
+        #expect(chat.sendFailure != nil)
+        #expect(chat.error == nil)
+        #expect(await chat.send(text: "fits"))
+        #expect(chat.sendFailure == nil)
         await chat.markRead(order: 4)
         chat.closeConversation()
         await chat.readFlushTask?.value
@@ -325,12 +332,83 @@ struct ThreadStoreTests {
         chat.setActive(false)
     }
 
+    @MainActor @Test func sendTappedInTheForegroundIsDeliveredAfterTheAppLeavesIt() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = ScriptedAppService()
+        await service.events([])
+        let chat = await paired(service, files: OutboxFile(root: root), active: true)
+        chat.openConversation("conv_taylor01")
+        let sending = Task { await chat.send(text: "swiped home") }
+        // The tap runs up to its first suspension (staging the copy) in the foreground, then the app leaves it.
+        await Task.yield()
+        chat.setActive(false)
+        #expect(await sending.value)
+        // Acknowledged as stored by the host; reached arrives over the stream, which stays closed in the background.
+        try await waitUntil { chat.outbox.entries.first?.state == .stored }
+        #expect(await service.sentIDs.count == 1)
+        try await waitUntil { chat.backgroundDelivery == .invalid }
+        #expect(await chat.send(text: "sent while away"))
+        #expect(chat.outbox.entries.count == 2)
+        #expect(chat.outbox.entries.last?.state == .queued)
+    }
+
+    @MainActor @Test func historyThatFailedOnOpenLoadsAgainOnceSynchronized() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = ScriptedAppService()
+        await service.fail("history", with: [.transport(.offline)])
+        await service.events([AppEvent(kind: .synchronized, id: nil, data: try JSONEncoder().encode(Synchronized(seq: 12)))])
+        let chat = await paired(service, files: OutboxFile(root: root))
+        chat.openConversation("conv_taylor01")
+        try await waitUntil { chat.historyStale }
+        #expect(chat.reducer.entities["msg_2101"] == nil)
+        chat.setActive(true)
+        try await waitUntil { chat.reducer.entities["msg_2101"] != nil }
+        #expect(!chat.historyStale)
+        chat.setActive(false)
+    }
+
+    @MainActor @Test func historyLoadedDuringAStreamSaveSurvivesTheBatch() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = SaveGate()
+        let store = SwiftDataThreadStore(inMemory: true, beforeCommit: { snapshot in
+            if snapshot.cursor == 12, snapshot.allowedConversations == nil { gate.hold() }
+        })
+        let service = ScriptedAppService()
+        await service.events([AppEvent(kind: .synchronized, id: nil, data: try JSONEncoder().encode(Synchronized(seq: 12)))])
+        await service.pages([HistoryPage(items: [.message(Message(kind: .message, id: "msg_older", conversationId: "conv_taylor01",
+            order: 1, seq: 1, role: .agent, text: "Older", files: [], reactions: [], createdAt: 0))],
+            hasMoreBefore: true, hasMoreAfter: false)])
+        let chat = await paired(service, store: store, files: OutboxFile(root: root), active: true)
+        try await waitUntil { gate.isHeld }
+        chat.openConversation("conv_taylor01")
+        try await waitUntil { chat.hasMoreBefore }
+        gate.release()
+        try await waitUntil { chat.connectionState == .connected }
+        #expect(chat.reducer.cursor == 12)
+        #expect(chat.hasMoreBefore)
+        #expect(chat.reducer.entities["msg_older"] != nil)
+        chat.setActive(false)
+    }
+
     @MainActor private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(condition())
     }
 
+}
+
+/// Holds one store commit until released, so a test can act while a save is in flight.
+private final class SaveGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let released = DispatchSemaphore(value: 0)
+    private var held = false
+    var isHeld: Bool { lock.withLock { held } }
+    func hold() {
+        let first = lock.withLock { () -> Bool in defer { held = true }; return !held }
+        if first { _ = released.wait(timeout: .now() + 10) }
+    }
+    func release() { released.signal() }
 }
 
 private actor ScriptedAppService: AppService {

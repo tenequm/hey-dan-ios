@@ -20,6 +20,8 @@ import UIKit
     private(set) var openConversationId: String?
     var connectionState: ConnectionState = .disconnected
     var error: AppError?
+    /// Why the last send from the composer did not queue; shown there, not as the connection's error.
+    var sendFailure: String?
     var features: [String] = []
     var conversations: [Conversation] { reducer.conversations.values.sorted { $0.id < $1.id } }
     var thread: [ThreadEntity] { openConversationId.map { visibleThread($0) } ?? [] }
@@ -62,7 +64,11 @@ import UIKit
     @ObservationIgnored var readFlushTask: Task<Void, Never>?
     @ObservationIgnored var readTask: Task<Void, Never>?
     @ObservationIgnored var readOrder: Int64 = 0
+    /// The open conversation's last history load failed: the next synchronized stream loads it again.
+    @ObservationIgnored var historyStale = false
     @ObservationIgnored var retrying: Set<String> = []
+    /// Held while a delivery that began in the foreground drains after the app left it.
+    @ObservationIgnored var backgroundDelivery: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var protectedTask: Task<Void, Never>?
 
@@ -110,7 +116,7 @@ import UIKit
         loadTask?.cancel(); streamTask?.cancel(); runner?.cancel(); readTask?.cancel()
         runner = nil; streamTask = nil
         self.host = host; self.pairing = pairing
-        reducer = ThreadReducer(); outbox = Outbox(); openConversationId = pairing == nil ? nil : pendingOpen
+        reducer = ThreadReducer(); outbox = Outbox(); historyStale = false; openConversationId = pairing == nil ? nil : pendingOpen
         historyFloors = [:]
         savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; error = nil
         features = pairing == nil ? [] : Pairings.shared.entries.first { $0.host == host }?.features ?? []
@@ -144,13 +150,15 @@ import UIKit
         guard openConversationId != id else { return }
         flushRead()
         openConversationId = id
+        sendFailure = nil
         Task { await loadHistory(newest: true) }
     }
-    func closeConversation() { flushRead(); openConversationId = nil }
+    func closeConversation() { flushRead(); openConversationId = nil; sendFailure = nil }
     func setActive(_ active: Bool) {
         guard self.active != active else { return }
         self.active = active
         restart()
+        if active { endBackgroundDelivery() } else { keepDeliveringInBackground() }
     }
     func restart() {
         guard active, networkAvailable, ready, !paused, pairing != nil else {
@@ -218,25 +226,32 @@ import UIKit
             if let floor = page.items.compactMap(\.order).min() {
                 historyFloors[id] = min(historyFloors[id] ?? floor, floor)
             }
+            historyStale = false
             let changed = reducer.upsert(page, conversationId: id)
             for entity in page.items { if case .message(let message) = entity { outbox.reconcile(message) } }
             try await persist(changed)
             guard token == generation else { return }
             try await saveOutbox()
-        } catch { await handle(error, token: token) }
+        } catch {
+            if token == generation, !Task.isCancelled { historyStale = true }
+            await handle(error, token: token)
+        }
     }
-    func answer(questionId: String, value: String) async {
+    /// The failure to show on this question's card, nil once the host took the answer.
+    @discardableResult func answer(questionId: String, value: String) async -> String? {
         let token = generation
         do {
             let response = try await service.answer(questionId: questionId, request: AnswerRequest(value: value))
-            guard token == generation else { return }
+            guard token == generation else { return nil }
             try await persist(reducer.upsert(.question(response.question)))
+            return nil
         } catch {
-            guard token == generation else { return }
+            guard token == generation else { return nil }
             if case AppError.server(409, let body) = error, let question = body.question {
                 do { try await persist(reducer.upsert(.question(question))) } catch { self.error = AppError.map(error) }
             }
             await handle(error, token: token)
+            return AppError.map(error).message
         }
     }
     func flushRead() {
@@ -259,11 +274,10 @@ import UIKit
         guard let id = openConversationId, order > max(readOrder, reducer.conversations[id]?.readOrder ?? 0) else { return }
         readOrder = max(readOrder, order)
         readTask?.cancel()
-        let token = generation, pending = readOrder
         readTask = Task {
             do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
-            readOrder = 0
-            await sendRead(id: id, order: pending, token: token)
+            // Sent outside this task: closing the thread cancels only the wait, never a read already on its way.
+            flushRead()
         }
     }
     /// An agent's conversation and the client that reaches its host. Another host is read on a client of its own,

@@ -7,6 +7,8 @@ struct ComposerView: View {
     var features: [String]?
     private var availableFeatures: [String] { features ?? ChatController.shared.features }
     let send: (String, [StagedAttachment]) async -> Bool
+    /// Why the last send did not queue.
+    var failure: String? = nil
     @State var text = ""
     @State var attachments: [StagedAttachment] = []
     @State private var draftFiles = AttachmentDraftFiles()
@@ -31,8 +33,8 @@ struct ComposerView: View {
                     draftFiles.urls.remove(attachment.fileURL)
                 }
             }
-            if let importFailure {
-                Label(importFailure, systemImage: "exclamationmark.circle")
+            if let shown = importFailure ?? failure {
+                Label(shown, systemImage: "exclamationmark.circle")
                     .textRole(theme.type.caption).foregroundStyle(theme.color.danger)
                     .padding(.horizontal, theme.space.s3)
             }

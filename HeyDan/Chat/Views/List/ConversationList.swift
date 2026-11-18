@@ -41,7 +41,7 @@ struct ConversationList: View {
                                 .padding(.horizontal, theme.space.s4)
                                 .accessibilityLabel("Search chats")
                         }
-                        if chat.connectionState == .reconnecting || chat.connectionState == .disconnected || chat.error != nil {
+                        if chat.connectionState == .reconnecting || chat.connectionState == .disconnected {
                             Label(connectionNotice, systemImage: "wifi.slash")
                                 .textRole(theme.type.footnote, theme.weight.medium)
                                 .frame(maxWidth: .infinity, alignment: .leading)
