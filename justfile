@@ -260,3 +260,7 @@ app-test: gen
     # The notification tests call notificationSettings(), which can wait on a stuck dasd forever.
     xcrun simctl spawn "$udid" launchctl kickstart -k "user/$(id -u)/com.apple.dasd"
     timeout 600 xcodebuild test -project HeyDan.xcodeproj -scheme HeyDanTests -destination "id=$udid" -derivedDataPath "{{sim_build}}" -disableAutomaticPackageResolution -skipPackageUpdates -test-timeouts-enabled YES -default-test-execution-time-allowance 180
+
+# Capture the fixture gallery for the current commit on an existing Simulator.
+screens: gen
+    @python3 scripts/screens.py {{quote(sim_name)}} {{quote(sim_build)}}

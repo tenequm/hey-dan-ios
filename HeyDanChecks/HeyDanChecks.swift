@@ -593,6 +593,6 @@ extension XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         guard let dir = ProcessInfo.processInfo.environment["HEYDAN_CHECKS_OUT"], !dir.isEmpty else { return }
-        try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
+        XCTAssertNoThrow(try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png")))
     }
 }

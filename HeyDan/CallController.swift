@@ -208,6 +208,14 @@ final class CallController: NSObject {
         }
         #endif
         #if DEBUG && targetEnvironment(simulator)
+        if env["HEYDAN_FIXTURE_CHAT"] == "1", env["HEYDAN_PREVIEW_PHASE"] != nil {
+            let conversation = ThreadPreviewValues.conversation
+            let target = PairedCallTarget(host: URL(string: "https://app.example.com")!,
+                deviceId: FixtureAppService.pairing.deviceId, conversation: conversation)
+            pairedCallTarget = CallTarget(paired: target, service: FixtureAppService())
+            agentName = conversation.agent.name
+            showsPairedCall = true
+        }
         if let scenario = env["HEYDAN_PREVIEW_VOICE"].flatMap(PreviewVoice.init(rawValue:)),
            let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
             previewVoice = scenario

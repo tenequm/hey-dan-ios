@@ -7,6 +7,17 @@ actor FixtureAppService: AppService {
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Taylor tester",
         agents: [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
     init() {
+        let preview = ThreadPreviewValues.self
+        switch ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"] {
+        case "messages":
+            messages = [preview.editSequence2, preview.voiceCaller0, preview.voiceSpoken0, preview.host0]
+            question = preview.questionexpired
+        case "delivery":
+            messages = [preview.userWithFile0, preview.userUnknown0, preview.userFailed0]
+            question = preview.questionanswered
+        default: break
+        }
+        sequence = max(sequence, question.seq, messages.map(\.seq).max() ?? 0)
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CALL_REFUSAL"] == "1" {
             conversation.canCall = false
             conversation.callRefusal = ErrorBody(error: "voice_offline", message: "Voice is offline.")
