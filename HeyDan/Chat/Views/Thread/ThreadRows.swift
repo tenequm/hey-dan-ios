@@ -175,30 +175,33 @@ struct QuestionCard: View {
 }
 
 struct OutboxRow: View {
+    @Environment(\.theme) private var theme
     let entry: Outbox.Entry
     var retry: (String) -> Void
     var discard: (String) -> Void
     @State private var confirmsRetry = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(entry.request.text).textSelection(.enabled)
-            Text(entry.state.label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+        VStack(alignment: .trailing, spacing: theme.space.s1_5) {
+            if !entry.request.text.isEmpty { Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()) }
+            Label(entry.state.label, systemImage: entry.state == .failed ? "exclamationmark.circle" : "clock")
+                .textRole(theme.type.caption).foregroundStyle(entry.state == .failed ? theme.color.danger : theme.color.textSecondary)
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
                 Text(attachment.name)
             }
-            if let error = entry.lastServerError { Text(error.message).foregroundStyle(Theme.error) }
+            if let error = entry.lastServerError { Text(error.message).foregroundStyle(theme.color.danger) }
             if entry.state == .failed || entry.state == .outcomeUnknown {
-                Button("Send again") {
+                Button("Retry") {
                     if entry.state == .outcomeUnknown { confirmsRetry = true }
                     else { retry(entry.request.clientId) }
                 }
             }
             if entry.state == .held { Button("Discard", role: .destructive) { discard(entry.request.clientId) } }
         }
-        .font(Theme.sans(16)).foregroundStyle(Theme.text)
-        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+        .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)
+        .tint(theme.color.accentText)
+        .padding(.leading, theme.space.s10)
+        .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
         .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
             Button("Send again") { retry(entry.request.clientId) }
