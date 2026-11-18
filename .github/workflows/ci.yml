@@ -61,50 +61,63 @@ jobs:
         run: brew install coreutils
       - run: just test
 
+  probe:
+    name: Probe (temporary)
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - run: |
+          xcrun simctl list devices available | grep -A8 -- "-- iOS"
+          udid=$(xcrun simctl list devices available -j | jq -r '.devices["com.apple.CoreSimulator.SimRuntime.iOS-27-2"][] | select(.name == "iPhone 18 Pro Max") | .udid')
+          time xcrun simctl bootstatus "$udid" -b
+
   build:
     name: Device build
     needs: core
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - *checkout
       - *tools
-      - &packages
-        name: Cache Swift packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build/SourcePackages
-          key: packages-${{ hashFiles('HeyDan.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
       - run: just build
 
   simulator:
-    name: Simulator tests
+    name: Simulator (${{ matrix.name }})
     needs: core
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: app tests, chat, thread and pairing checks
+            app-tests: true
+            checks: ChatChecks ChatThreadChecks ChatPairingChecks
+          - name: composer and call checks
+            checks: ChatComposerChecks ChatCallChecks
+    env:
+      CHECKS: ${{ matrix.checks }}
+      # No CLI grants notification permission on a just-created Simulator (AGENTS.md); this test needs the grant.
+      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
     steps:
       - *checkout
-      - *tools
-      - *timeout
-      - *packages
-      - name: Create the Simulator
+      # A first boot takes minutes: it runs beside the installs and the build.
+      - name: Create and boot the Simulator
         run: |
           sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
-          xcrun simctl create "Hey Dan iPhone" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}"
+          udid=$(xcrun simctl create "Hey Dan iPhone" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}")
+          nohup xcrun simctl boot "$udid" > /dev/null 2>&1 &
+      - *tools
+      - *timeout
       - name: App tests
+        if: ${{ matrix.app-tests }}
         run: time just app-test
-      - name: ChatChecks
+      - name: UI checks
         if: ${{ !cancelled() }}
-        run: time just sim-checks ChatChecks
-      - name: ChatThreadChecks
-        if: ${{ !cancelled() }}
-        run: time just sim-checks ChatThreadChecks
-      - name: ChatComposerChecks
-        if: ${{ !cancelled() }}
-        run: time just sim-checks ChatComposerChecks
-      - name: ChatCallChecks
-        if: ${{ !cancelled() }}
-        run: time just sim-checks ChatCallChecks
-      - name: ChatPairingChecks
-        if: ${{ !cancelled() }}
-        run: time just sim-checks ChatPairingChecks
+        run: |
+          status=0
+          for check in $CHECKS; do
+            echo "== $check"
+            time just sim-checks "$check" || status=1
+          done
+          exit $status
