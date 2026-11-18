@@ -58,10 +58,17 @@ struct PairingView: View {
                             Text("Pairing link").padding(.horizontal, theme.space.s4)
                             HStack(spacing: theme.space.s3) {
                                 Text("Link")
-                                Text(link.isEmpty ? "Paste a pairing link" : host ?? "Link pasted")
+                                Text(link.isEmpty ? "https://host/app/pair#…" : host.map { "\($0)/app/pair#••••" } ?? "Link pasted")
                                     .foregroundStyle(link.isEmpty ? theme.color.placeholder : theme.color.textPrimary)
                                     .accessibilityIdentifier("pairing.link")
                                 Spacer()
+                                if !link.isEmpty {
+                                    Button("Clear link", systemImage: "xmark.circle") {
+                                        link = ""
+                                        message = nil
+                                    }
+                                    .labelStyle(.iconOnly).disabled(working)
+                                }
                             }
                             .textRole(theme.type.body)
                             .padding(theme.space.s4)
@@ -131,9 +138,9 @@ struct PanelActionStyle: ButtonStyle {
     var secondary = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.textRole(theme.type.body, theme.weight.semibold)
+        configuration.label.textRole(theme.type.body, theme.weight.medium)
             .foregroundStyle(ink)
-            .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget + theme.space.s2)
+            .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget + theme.space.s1)
             .background(fill, in: Capsule())
             .opacity(configuration.isPressed ? 0.75 : 1)
     }
