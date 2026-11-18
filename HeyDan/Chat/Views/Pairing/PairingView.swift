@@ -97,17 +97,17 @@ struct PairingView: View {
                 }
                 .buttonStyle(PanelActionStyle())
             } else {
-                Button {
-                    guard let pasted = UIPasteboard.general.string, !pasted.isEmpty else {
-                        message = "Copy a pairing link, then paste it here."
-                        return
+                PasteButton(payloadType: String.self) { @Sendable values in
+                    Task { @MainActor in
+                        guard let pasted = values.first else { return }
+                        link = pasted
+                        message = nil
                     }
-                    link = pasted
-                    message = nil
-                } label: {
-                    Label("Paste from clipboard", systemImage: "document.on.clipboard")
                 }
-                .buttonStyle(PanelActionStyle(secondary: true))
+                .labelStyle(.titleAndIcon).buttonBorderShape(.capsule)
+                .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget + theme.space.s1)
+                .background(theme.color.surfaceCard, in: Capsule())
+                .accessibilityLabel("Paste from clipboard")
                 .accessibilityIdentifier("pairing.paste").disabled(working)
                 Button(action: submit) {
                     if working { ProgressView() }

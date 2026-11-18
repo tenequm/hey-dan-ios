@@ -6,10 +6,11 @@ import XCTest
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_SHOW_PAIRING"] = "1"
         if offline { app.launchEnvironment["HEYDAN_OFFLINE_FOR"] = "60" }
+        seedPasteboard(value)
         app.launch()
-        UIPasteboard.general.string = value
         let paste = app.buttons["pairing.paste"]
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        XCTAssertTrue(paste.isEnabled)
         shot("pairing-empty")
         paste.tap()
         allowPaste(in: app)
@@ -32,6 +33,10 @@ import XCTest
 }
 
 extension XCTestCase {
+    @MainActor func seedPasteboard(_ text: String) {
+        UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+    }
+
     @MainActor func allowPaste(in app: XCUIApplication) {
         let system = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Paste"].firstMatch
         if system.waitForExistence(timeout: 2) { system.tap(); return }

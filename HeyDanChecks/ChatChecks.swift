@@ -1,4 +1,5 @@
 import AppIntentsTesting
+import UIKit
 import XCTest
 
 @MainActor
@@ -60,6 +61,11 @@ final class ChatChecks: XCTestCase {
 
     func testPastePair() throws {
         try stack()
+        let directory = try XCTUnwrap(env["HEYDAN_CHAT_CONTROL"])
+        let source = URL(fileURLWithPath: directory).appending(path: "pair-link")
+        seedPasteboard(try String(contentsOf: source, encoding: .utf8))
+        try FileManager.default.removeItem(at: source)
+        defer { UIPasteboard.general.items = [] }
         launch()
         openThread()
         let settings = app.buttons["Settings"]

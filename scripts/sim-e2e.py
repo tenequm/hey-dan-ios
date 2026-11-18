@@ -270,6 +270,10 @@ def ui_check(name, method, stack=False):
     try:
         with tempfile.TemporaryDirectory(prefix='chat-checks-', dir=BUILD) as temporary, push_driver(
                 Path(temporary), method.startswith('ChatChecks/testPush')):
+            if name == 'app-pair-screen':
+                link_file = Path(temporary) / 'pair-link'
+                with open(link_file, 'x', opener=lambda path, flags: os.open(path, flags, 0o600)) as out:
+                    out.write(pair_link())
             runner['TEST_RUNNER_HEYDAN_CHAT_CONTROL'] = temporary
             output = build('test-without-building', '-parallel-testing-enabled', 'NO',
                            '-resultBundlePath', Path(temporary) / 'checks.xcresult',
@@ -378,14 +382,10 @@ def chat_checks():
                'Expected pairing outcome observed' if observed else 'Pairing outcome not observed within 30s')
         if not observed:
             return
-    # The real pairing screen consumes a fresh code via pasteboard, never a runner variable.
+    # Only the temporary directory name enters the XCTest environment. The runner seeds the
+    # device-local pasteboard because simctl pbcopy can acknowledge a write without applying it.
     CHECK = 'app-pair-screen'
-    fresh = pair_link()
-    run('xcrun', 'simctl', 'pbcopy', UDID, stdin=fresh)
-    try:
-        ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
-    finally:
-        run('xcrun', 'simctl', 'pbcopy', UDID, stdin='')
+    ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
     logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
     CHECK = 'app-paired-voice'
     offset = len(logfile.read_text()) if logfile.exists() else 0
