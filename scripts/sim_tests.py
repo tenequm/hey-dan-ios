@@ -68,6 +68,12 @@ def ui_selector(check):
     return 'HeyDanChecks/HeyDanChecks/test' + check
 
 
+def selected_tests(inventory, selector):
+    # Xcode's flat list includes the plan heading and every excluded test marked "(disabled)".
+    return sum(line.strip().startswith(selector + '/') and not line.rstrip().endswith(' (disabled)')
+               for line in inventory.splitlines())
+
+
 def needs_call_link(selector):
     return selector.split('/')[:2] == ['HeyDanChecks', 'HeyDanChecks']
 
@@ -120,7 +126,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 subprocess.run(['timeout', '180', *command, '-enumerate-tests', '-test-enumeration-style', 'flat',
                                 '-test-enumeration-format', 'text', '-test-enumeration-output-path', inventory],
                                check=True, env=runner, stdout=subprocess.DEVNULL)
-                count = max(1, len(inventory.read_text().splitlines()))
+                count = max(1, selected_tests(inventory.read_text(), selector))
             # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
             deadline = str(240 + TEST_SECONDS * count)
             proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', deadline, *command,

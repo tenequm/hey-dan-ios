@@ -26,6 +26,14 @@ class SimulatorSelectionTests(unittest.TestCase):
             self.assertFalse(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
 
 
+    def test_deadline_counts_only_enabled_tests_in_the_selection(self):
+        inventory = ("Plan HeyDanSimulatorTests\n"
+                     "\tHeyDanChecks/ChatCallChecks/testCover()\n"
+                     "\tHeyDanChecks/ChatCallChecks/testOther() (disabled)\n"
+                     "\tHeyDanChecks/ChatChecks/testHistory() (disabled)\n")
+        self.assertEqual(sim_tests.selected_tests(inventory, 'HeyDanChecks/ChatCallChecks'), 1)
+        self.assertEqual(sim_tests.selected_tests(inventory, 'HeyDanChecks/ChatChecks'), 0)
+
     def test_result_bundle_retained_only_for_an_opted_in_failure(self):
         for keep, fail in ((False, True), (True, False), (True, True)):
             with self.subTest(keep=keep, fail=fail), tempfile.TemporaryDirectory() as build:
