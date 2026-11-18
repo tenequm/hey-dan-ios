@@ -98,9 +98,7 @@ struct ContentView: View {
                 .lineLimit(1).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             }
             Spacer(minLength: 0)
-            GlassIconButton(title: "settings", systemImage: "gearshape") { showsSettings = true }
-                .disabled(isCallActive)
-            GlassIconButton(title: "Call options", systemImage: "ellipsis") { showsOptions = true }
+            GlassIconButton(title: "settings", systemImage: "gearshape") { showsOptions = true }
                 .accessibilityIdentifier(AXID.controlsOptions)
         }
     }
@@ -399,6 +397,9 @@ struct ContentView: View {
         NavigationStack {
             Form {
                 if hintIsError { HStack { modeControl; voiceControl } }
+                if !isCallActive {
+                    NavigationLink("Voice lines and paired hosts") { SettingsView() }
+                }
                 if let shown = shownSettings {
                     let enabled = shown.enabled && !settingsBusy
                     if review.mode == .auto, reviewKeys == nil {
@@ -445,7 +446,7 @@ struct ContentView: View {
             .textRole(theme.type.body)
             .toggleStyle(.switch)
             .tint(theme.color.accentText)
-            .navigationTitle("Call options")
+            .navigationTitle("Call settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -720,10 +721,10 @@ private struct CallControlLabel: View {
         VStack(spacing: theme.space.s2) {
             Image(systemName: symbol)
                 .font(.system(size: theme.space.s6, weight: theme.weight.medium))
-                .foregroundStyle(danger ? theme.color.danger : theme.color.icon)
+                .foregroundStyle(danger ? theme.color.onAccent : theme.color.icon)
                 .frame(width: theme.space.s8 * 2, height: theme.space.s8 * 2)
-                .background(danger ? theme.color.dangerSurface : theme.color.glass, in: Circle())
-                .overlay { Circle().strokeBorder(danger ? theme.color.dangerBorder : theme.color.composerBorder) }
+                .background(danger ? theme.color.callEnd : theme.color.glass, in: Circle())
+                .overlay { Circle().strokeBorder(danger ? theme.color.callEnd : theme.color.composerBorder) }
             Text(title).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
         }
         .frame(maxWidth: .infinity).opacity(enabled ? 1 : 0.5)
@@ -1430,6 +1431,7 @@ private struct SettingsView: View {
     @Environment(CallController.self) private var call
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
+    @FocusState private var linkFocused: Bool
     @State private var note: Note?
     /// The line whose host is being asked who answers.
     @State private var naming: UUID?
@@ -1448,34 +1450,38 @@ private struct SettingsView: View {
                 Text(Pairings.shared.active == nil ? "Voice lines" : "Settings")
                     .textRole(theme.type.headline, theme.weight.medium)
                     .spacing(-0.01, size: 17)
-                Button("close") { dismiss() }
-                    .textRole(theme.type.label)
-                    .foregroundStyle(theme.color.textSecondary)
-                    .frame(minHeight: theme.control.touchTarget)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    GlassIconButton(title: "close", systemImage: "chevron.left") { dismiss() }
+                    Spacer()
+                    if Pairings.shared.active == nil {
+                        GlassIconButton(title: "Add a call link", systemImage: "plus") { linkFocused = true }
+                    }
+                }
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
-                    PairedSettingsSection()
+                    if Pairings.shared.active != nil { PairedSettingsSection() }
                     linesSection
                     addSection
-                    if Pairings.shared.active == nil, call.lines.selected != nil {
-                        Button {
-                            dismiss()
-                            Task { _ = await call.start(lineID: call.lines.selected?.id) }
-                        } label: {
-                            Label("Call", systemImage: "phone.fill")
-                                .textRole(theme.type.body, theme.weight.semibold)
-                                .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
-                                .background(theme.color.accent, in: Capsule())
-                                .foregroundStyle(theme.color.onAccent)
-                        }
-                        .disabled(call.isCallActive)
-                    }
+                    if Pairings.shared.active == nil { PairedSettingsSection() }
                 }
                 .padding(.bottom, theme.space.s5)
             }
             .scrollBounceBehavior(.basedOnSize)
+            if Pairings.shared.active == nil, let selected = call.lines.selected {
+                Button {
+                    dismiss()
+                    Task { _ = await call.start(lineID: selected.id) }
+                } label: {
+                    Label("Call \(selected.name)", systemImage: "phone.fill")
+                        .textRole(theme.type.body, theme.weight.semibold)
+                        .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
+                        .background(theme.color.accent, in: Capsule())
+                        .foregroundStyle(theme.color.onAccent)
+                }
+                .disabled(call.isCallActive)
+                .padding(.bottom, theme.space.s2)
+            }
         }
         .padding(.horizontal, theme.space.s5)
         .padding(.top, theme.space.s3)
@@ -1509,9 +1515,10 @@ private struct SettingsView: View {
                     .textRole(theme.type.caption)
                     .foregroundStyle(theme.color.textSecondary)
             } else {
-                VStack(spacing: theme.space.s1_5) {
+                VStack(spacing: 0) {
                     ForEach(call.lines.entries) { entry in row(entry) }
                 }
+                .background(theme.color.surfaceGrouped, in: RoundedRectangle(cornerRadius: theme.radius.l))
                 Text("the picked line is the one the action button and \"talk to hey dan\" call. a shortcut can call any line by name.")
                     .textRole(theme.type.micro)
                     .lineSpacing(theme.space.s1)
@@ -1528,21 +1535,21 @@ private struct SettingsView: View {
                 call.selectLine(entry.id)
             } label: {
                 HStack(spacing: theme.space.s3) {
-                    Circle()
-                        .strokeBorder(picked ? theme.color.accentText : theme.color.border, lineWidth: 2)
-                        .background(Circle().fill(picked ? theme.color.accentText : .clear).padding(theme.space.s1_5))
-                        .frame(width: 20, height: 20)
                     VStack(alignment: .leading, spacing: theme.space.s0_5) {
                         Text(entry.agent ?? "Unnamed line")
                             .textRole(theme.type.body, theme.weight.medium)
                             .foregroundStyle(entry.agent == nil ? theme.color.textSecondary : theme.color.textPrimary)
-                        Text(picked ? "\(entry.line.host) · picked" : entry.line.host)
+                        Text(entry.line.host)
                             .textRole(theme.type.micro)
                             .foregroundStyle(theme.color.textSecondary)
                     }
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
+                    if picked {
+                        Image(systemName: "checkmark").foregroundStyle(theme.color.accentText)
+                            .accessibilityHidden(true)
+                    }
                 }
                 .frame(minHeight: theme.control.touchTarget)
                 .contentShape(Rectangle())
@@ -1568,11 +1575,6 @@ private struct SettingsView: View {
         .padding(.leading, theme.space.s3)
         .padding(.trailing, theme.space.s0_5)
         .padding(.vertical, theme.space.s1)
-        .background(RoundedRectangle(cornerRadius: theme.radius.l).fill(theme.color.surfaceGrouped))
-        .overlay(
-            RoundedRectangle(cornerRadius: theme.radius.l)
-                .strokeBorder(picked ? theme.color.accent : theme.color.border, lineWidth: 1)
-        )
     }
 
     // MARK: Add
@@ -1590,6 +1592,7 @@ private struct SettingsView: View {
                 .foregroundStyle(theme.color.textPrimary)
                 .tint(theme.color.accentText)
                 .textContentType(.URL)
+                .focused($linkFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.done)

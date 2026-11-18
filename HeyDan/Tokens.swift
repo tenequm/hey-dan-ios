@@ -43,6 +43,7 @@ struct Tokens {
         var onProminent = rgba(0x0A0A0AFF) // Light: #FCFCFCFF
         var secondaryFill = rgba(0x111111FF) // Light: #FAFAFAFF
         var danger = rgba(0xFF6467FF) // Light: #C10007FF
+        var callEnd = rgba(0xFF453AFF)
         var dangerSurface = rgba(0x301214FF) // Light: #FCEBECFF
         var dangerBorder = rgba(0xFB414A52) // Light: #FB2C3652
         var warning = rgba(0xFFB900FF) // Light: #BB4D00FF
