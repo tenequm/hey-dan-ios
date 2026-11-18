@@ -8,6 +8,8 @@ enum AppError: Error, Sendable {
     case pairing(PairingFailure)
     /// Refused on this phone before any request: a message or file over the contract's limits.
     case limit(String)
+    /// Unpairing waits for the host's call to end: its hangup is signed with the key unpairing deletes.
+    case callActive
     enum TransportFailure: String, Sendable { case unavailable, offline, timeout, tls, cancelled, invalidResponse }
 }
 
@@ -61,12 +63,14 @@ extension AppError {
         case .notPaired: "not_paired"
         case .pairing: "pairing_failed"
         case .limit: "local_limit"
+        case .callActive: "call_active"
         }
     }
     var message: String {
         switch self {
         case .pairing(let failure): failure.localizedDescription
         case .limit(let message): message
+        case .callActive: "End the call to this host first."
         case .server(_, let body): body.message
         case .keyUnavailable: "Unlock your device and try again."
         case .notPaired: "Pair this device to continue."
@@ -88,7 +92,7 @@ extension AppError {
         case let .server(status, body): .server(status: status, code: body.error, message: body.message)
         case .transport(.invalidResponse): .malformedGrant
         case .transport: .pairedTransport
-        case .keyUnavailable, .notPaired, .pairing, .limit: .local(code: logName, message: message)
+        case .keyUnavailable, .notPaired, .pairing, .limit, .callActive: .local(code: logName, message: message)
         }
     }
 
@@ -97,7 +101,7 @@ extension AppError {
         case let .server(status, body): .server(status: status, code: body.error, message: body.message)
         case .transport(.invalidResponse): .malformed
         case .transport: .pairedTransport
-        case .keyUnavailable, .notPaired, .pairing, .limit: .local(code: logName, message: message)
+        case .keyUnavailable, .notPaired, .pairing, .limit, .callActive: .local(code: logName, message: message)
         }
     }
 }

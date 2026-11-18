@@ -282,8 +282,15 @@ import UIKit
         guard host == entry.host else { throw .notPaired }
         return (conversations.first { $0.agent.id == agentId }, client)
     }
+    /// One conversation by id, without sorting the list.
+    func conversation(_ id: String) -> Conversation? { reducer.conversations[id] }
     func unpair(host: URL) async {
         guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return }
+        // The call's hangup is signed with this host's key, which unpairing deletes.
+        if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired?.host == host {
+            error = .callActive
+            return
+        }
         do {
             let client: any AppService = self.host == host ? service : SignedClient(host: host, deviceId: entry.deviceId)
             do { try await client.unpair() }
@@ -294,9 +301,15 @@ import UIKit
     /// The pairing goes first, which stops this controller's writers for that device, then its thread and outbox.
     private func forget(host: URL, deviceId: String) async throws {
         try Pairings.shared.remove(host: host, deviceId: deviceId)
-        try await store.clear(host: host, deviceId: deviceId)
-        try await files.clear(host: host, deviceId: deviceId)
+        try await clearLocal(host: host, deviceId: deviceId)
         CallLog.log(.store, "unpaired")
+    }
+    /// Both wipes run even when one fails: nothing would ever clear a device's data once its pairing is gone.
+    func clearLocal(host: URL, deviceId: String) async throws {
+        var failure: (any Error)?
+        do { try await store.clear(host: host, deviceId: deviceId) } catch { failure = error }
+        do { try await files.clear(host: host, deviceId: deviceId) } catch { failure = failure ?? error }
+        if let failure { throw failure }
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }

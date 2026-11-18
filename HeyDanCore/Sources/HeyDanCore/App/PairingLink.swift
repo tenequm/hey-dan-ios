@@ -37,8 +37,8 @@ public struct PairingLink: Sendable, Equatable {
         }()
         guard parts.scheme?.lowercased() == "https" ||
                 (parts.scheme?.lowercased() == "http" && allowsLocalNetworking && loopback) else { return nil }
-        parts.path = ""; parts.fragment = nil
-        guard let url = parts.url else { return nil }
+        // Spelled as its key, so one host is one pairing and one device key however the link spells it.
+        guard let parsed = parts.url, let url = URL(string: PairedHost.key(parsed)) else { return nil }
         baseURL = url
         self.code = code
     }

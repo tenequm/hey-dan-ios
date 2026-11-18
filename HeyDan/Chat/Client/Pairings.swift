@@ -124,7 +124,10 @@ import UIKit
         next.entries.removeValue(forKey: host.absoluteString)
         if next.active == host.absoluteString { next.active = next.entries.keys.sorted().first }
         try commit(next)
-        if !fixture { try DeviceKey().remove(host: host) }
+        // The pairing is gone already: a key left behind is replaced by the next pairing, and the wipes must still run.
+        if !fixture {
+            do { try DeviceKey().remove(host: host) } catch { CallLog.log(.store, "pairings key_remove_failed \(error.logName)") }
+        }
     }
     func pair(_ text: String, configuration: URLSessionConfiguration = .ephemeral) async throws {
         guard !fixture else { throw PairingFailure.fixture }
@@ -154,6 +157,7 @@ import UIKit
                     build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
                     os: UIDevice.current.systemVersion))
             let pairing = try await client.pair(request)
+            let replaced = saved.entries[link.baseURL.absoluteString].flatMap { $0.deviceId == pairing.deviceId ? nil : $0.deviceId }
             do {
                 let previous = try IdentityKeychain.load(account: link.baseURL.absoluteString)
                 guard let blob = try IdentityKeychain.load(account: pending.absoluteString) else { throw AppError.keyUnavailable }
@@ -171,6 +175,11 @@ import UIKit
                 throw error
             }
             try? key.remove(host: pending)
+            // The replaced device's key is gone, so its queued sends can never go out: drop them with its cache.
+            if publishes, let replaced {
+                do { try await ChatController.shared.clearLocal(host: link.baseURL, deviceId: replaced) }
+                catch { CallLog.log(.store, "pair clear_replaced_failed") }
+            }
             CallLog.log(.net, "pair ok")
         } catch {
             try? key.remove(host: pending)

@@ -16,7 +16,8 @@ struct ComposerView: View {
     @State private var importURLs: [URL] = []
     @State private var staging = false
     @State private var sending = false
-    @State private var importFailed = false
+    @State private var importFailure: String?
+    private static let unreadable = "Could not read the selected attachment. Try selecting it again."
     @FocusState private var textFocused: Bool
     @State private var showsDictationHint = false
 
@@ -30,8 +31,8 @@ struct ComposerView: View {
                     draftFiles.urls.remove(attachment.fileURL)
                 }
             }
-            if importFailed {
-                Label("Could not read the selected attachment. Try selecting it again.", systemImage: "exclamationmark.circle")
+            if let importFailure {
+                Label(importFailure, systemImage: "exclamationmark.circle")
                     .textRole(theme.type.caption).foregroundStyle(theme.color.danger)
                     .padding(.horizontal, theme.space.s3)
             }
@@ -110,13 +111,13 @@ struct ComposerView: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): importURLs = urls
-            case .failure: importFailed = true
+            case .failure: importFailure = Self.unreadable
             }
         }
         .task(id: importURLs) {
             guard !importURLs.isEmpty else { return }
             staging = true
-            importFailed = false
+            importFailure = nil
             defer { staging = false }
             for url in importURLs {
                 do {
@@ -124,14 +125,18 @@ struct ComposerView: View {
                     if Task.isCancelled { AttachmentStaging.remove(attachment); return }
                     draftFiles.urls.insert(attachment.fileURL)
                     attachments.append(attachment)
-                } catch { if !Task.isCancelled { importFailed = true } }
+                } catch {
+                    if !Task.isCancelled {
+                        if case AppError.limit(let message) = error { importFailure = message } else { importFailure = Self.unreadable }
+                    }
+                }
             }
             importURLs = []
         }
         .task(id: photos) {
             guard !photos.isEmpty else { return }
             staging = true
-            importFailed = false
+            importFailure = nil
             defer { staging = false }
             for photo in photos {
                 do {
@@ -139,8 +144,8 @@ struct ComposerView: View {
                         if Task.isCancelled { AttachmentStaging.remove(picked.attachment); return }
                         draftFiles.urls.insert(picked.attachment.fileURL)
                         attachments.append(picked.attachment)
-                    } else { importFailed = true }
-                } catch { if !Task.isCancelled { importFailed = true } }
+                    } else { importFailure = Self.unreadable }
+                } catch { if !Task.isCancelled { importFailure = Self.unreadable } }
             }
             photos = []
         }

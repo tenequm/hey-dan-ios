@@ -2,9 +2,18 @@ import CryptoKit
 import Foundation
 import HeyDanCore
 
+extension Outbox {
+    nonisolated static var fileLimitMessage: String { "Files must be at most \(maximumFileBytes / 1024 / 1024) MiB." }
+}
+
 actor OutboxFile {
     private let root: URL
-    init(root: URL = StoreLocation.root) { self.root = root }
+    private let downloads: URL
+    /// Downloads can be fetched again, so they live where the system may purge them; the outbox must not.
+    init(root: URL = StoreLocation.root, downloads: URL = StoreLocation.downloads) {
+        self.root = root
+        self.downloads = downloads
+    }
 
     func directory(host: URL, deviceId: String) -> URL {
         StoreLocation.directory(root: root, host: host)
@@ -43,10 +52,10 @@ actor OutboxFile {
                 let access = attachment.fileURL.startAccessingSecurityScopedResource()
                 defer { if access { attachment.fileURL.stopAccessingSecurityScopedResource() } }
                 let size = try attachment.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size <= Outbox.maximumFileBytes else {
-                    throw AppError.limit("Files must be at most \(Outbox.maximumFileBytes / 1024 / 1024) MiB.")
-                }
+                guard size <= Outbox.maximumFileBytes else { throw AppError.limit(Outbox.fileLimitMessage) }
                 let data = try Data(contentsOf: attachment.fileURL)
+                // The size key can be missing; the bytes read are what would be saved and sent.
+                guard data.count <= Outbox.maximumFileBytes else { throw AppError.limit(Outbox.fileLimitMessage) }
                 let name = UUID().uuidString
                 try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 result.append(Outbox.Attachment(localFileName: name, name: attachment.name,
