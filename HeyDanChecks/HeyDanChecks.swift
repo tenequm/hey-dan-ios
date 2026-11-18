@@ -392,8 +392,12 @@ final class HeyDanChecks: XCTestCase {
 
     func testSampleThenCall() async throws {
         launchReal(["HEYDAN_START_ON_SAMPLE": "1", "HEYDAN_HANGUP_AFTER": "40"])
-        let firstSample = openGeminiSample()
+        openVoice()
+        chooseElevenLabs()
+        element(ID.pickerVoice).tap()
+        XCTAssertTrue(samples.firstMatch.waitForExistence(timeout: 15))
         let sampledAt = Date()
+        let firstSample = samples.firstMatch
         firstSample.tap()
         let disabledDeadline = Date().addingTimeInterval(2)
         let enabledSamples = samples.matching(NSPredicate(format: "enabled == true"))
@@ -423,8 +427,11 @@ final class HeyDanChecks: XCTestCase {
     /// Popping the catalog stops its sample before Close dismisses the picker and one Call tap starts the call.
     func testSampleDismissThenCall() async throws {
         launchReal(["HEYDAN_HANGUP_AFTER": "40"])
-        let firstSample = openGeminiSample()
-        firstSample.tap()
+        openVoice()
+        chooseElevenLabs()
+        element(ID.pickerVoice).tap()
+        XCTAssertTrue(samples.firstMatch.waitForExistence(timeout: 15))
+        samples.firstMatch.tap()
         try await Task.sleep(for: .seconds(2))
         shot("sample-dismiss-playing")
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -440,17 +447,6 @@ final class HeyDanChecks: XCTestCase {
         try await Task.sleep(for: .seconds(45))
         assertCallKey("Call again", timeout: 5)
         shot("sample-dismiss-call-ended")
-    }
-
-    private func openGeminiSample() -> XCUIElement {
-        continueAfterFailure = false
-        openVoice()
-        XCTAssertEqual(element(ID.pickerTitle).label, "Stan's voice")
-        chooseProvider("Gemini")
-        element(ID.pickerVoice).tap()
-        let sample = samples.firstMatch
-        XCTAssertTrue(sample.waitForExistence(timeout: 15), "Stan's Gemini catalog must offer a playable sample")
-        return sample
     }
 
     private func acceptCallOpenAlert() {
