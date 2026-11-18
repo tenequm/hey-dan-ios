@@ -5,9 +5,19 @@ struct UnpairSheet: View {
     @Environment(\.dismiss) private var dismiss
     let entry: Pairings.Entry
     let finished: (String?) -> Void
+    @State private var contentHeight: CGFloat = 340
     @State private var working = false
 
     var body: some View {
+        ScrollView { content }
+            .scrollBounceBehavior(.basedOnSize)
+            .presentationDetents([.height(contentHeight)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(theme.color.surfaceSheet)
+            .interactiveDismissDisabled(working)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: theme.space.s3) {
             HStack {
                 VStack(alignment: .leading, spacing: theme.space.s1) {
@@ -31,8 +41,9 @@ struct UnpairSheet: View {
             .buttonStyle(PanelActionStyle(destructive: true))
             Button("Cancel") { dismiss() }.buttonStyle(PanelActionStyle(secondary: true))
         }
-        .disabled(working).interactiveDismissDisabled(working)
+        .disabled(working)
         .foregroundStyle(theme.color.textPrimary).padding(theme.space.s4)
-        .presentationSizing(.fitted).presentationDragIndicator(.visible).presentationBackground(theme.color.surfaceSheet)
+        .padding(.top, theme.space.s2)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0.rounded(.up) }
     }
 }
