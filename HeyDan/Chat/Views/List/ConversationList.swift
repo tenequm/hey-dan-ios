@@ -251,7 +251,7 @@ struct ConversationListSpecimen: View {
 
     init(name: String) {
         let chat = ChatController(service: FixtureAppService(), store: SwiftDataThreadStore(inMemory: true), monitorsNetwork: false)
-        chat.host = URL(string: "https://home.example.net")
+        chat.host = FixtureContent.host
         chat.connectionState = name == "List/Reconnecting" ? .reconnecting : .connected
         if name != "List/Empty" {
             let samples = [
