@@ -93,7 +93,7 @@ struct ThreadContent: View {
                     case .entity(.unknown): EmptyView()
                     }
                 }
-                if let status { StatusPill(status: status) }
+                if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()
             .padding(16)

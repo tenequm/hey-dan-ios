@@ -10,18 +10,32 @@ extension AXID {
 }
 
 struct StatusPill: View {
+    enum Style { case inline, capsule }
     let status: Status
+    var style: Style = .inline
+    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if status.state == .working || status.state == .waiting {
-            HStack(spacing: 8) {
-                PulseDot(color: Theme.think, still: reduceMotion).accessibilityHidden(true)
-                if let label = status.label { Text(label) }
+            let ink = status.state == .working ? theme.color.statusWorking : theme.color.statusInput
+            HStack(spacing: theme.space.s2) {
+                if status.state == .working && !reduceMotion {
+                    ProgressView().controlSize(.small).tint(ink)
+                } else {
+                    Image(systemName: status.state == .working ? "circle.dashed" : "questionmark.bubble").foregroundStyle(ink)
+                }
+                Text(status.label ?? status.state.rawValue.capitalized)
+                if style == .capsule, status.state == .working {
+                    Text(Date(timeIntervalSince1970: Double(status.at) / 1000), style: .timer)
+                        .monospacedDigit().fixedSize().foregroundStyle(theme.color.textSecondary)
+                }
             }
-            .font(Theme.sans(13))
-            .foregroundStyle(Theme.muted)
-            .padding(8)
+            .textRole(theme.type.label, theme.weight.medium)
+            .foregroundStyle(style == .inline ? ink : theme.color.textPrimary)
+            .padding(.horizontal, style == .inline ? 0 : theme.space.s4)
+            .frame(minHeight: style == .inline ? nil : theme.control.touchTarget)
+            .background { if style == .capsule { Capsule().fill(theme.color.glass).strokeBorder(theme.color.composerBorder) } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(status.label ?? status.state.rawValue)
             .accessibilityIdentifier(AXID.status)
