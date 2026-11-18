@@ -12,9 +12,19 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
+import sim_tests
 spec =importlib.util.spec_from_file_location('sim_e2e', Path(__file__).with_name('sim-e2e.py'))
 harness = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness)
+
+class SimulatorSelectionTests(unittest.TestCase):
+    def test_only_voice_class_and_its_methods_seed_the_link(self):
+        for selector in ('HeyDanChecks', 'HeyDanChecks/HeyDanChecks', 'LiveActivityOnLockScreen',
+                         'HeyDanChecks/testLiveActivityOnLockScreen'):
+            self.assertTrue(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
+        for selector in ('ChatChecks', 'ChatThreadChecks/testRichCardTable'):
+            self.assertFalse(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
+
 
 # Real app log lines (trimmed), so a changed log line or SDK error description fails here first.
 JEV_CALL = '''\

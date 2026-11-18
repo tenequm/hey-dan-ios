@@ -64,6 +64,10 @@ def ui_selector(check):
     return 'HeyDanChecks/HeyDanChecks/test' + check
 
 
+def needs_call_link(selector):
+    return selector.split('/')[:2] == ['HeyDanChecks', 'HeyDanChecks']
+
+
 def main(mode, name, folder, bundle, check=None, capture_dir=None):
     env = {k: v for k, v in os.environ.items() if k in
            ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME')}
@@ -116,7 +120,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             raise RuntimeError('Simulator push checks need HEYDAN_BUNDLE_ID in Local.xcconfig')
         if mode == 'sim-checks':
             subprocess.run([*sim, 'privacy', udid, 'grant', 'microphone', bundle], check=True)
-            if selector.startswith('HeyDanChecks/HeyDanChecks/test'):
+            if needs_call_link(selector):
                 link = subprocess.check_output(['just', '_test-link'], text=True).strip()
                 subprocess.run([*sim, 'launch', '--terminate-running-process', udid, bundle], check=True,
                                env={**env, 'SIMCTL_CHILD_HEYDAN_CALL_LINK': link}, stdout=subprocess.DEVNULL)
