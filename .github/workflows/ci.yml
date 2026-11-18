@@ -9,7 +9,7 @@ on:
       - LICENSE
       - "*.example"
   push:
-    branches: [main, "ci/**"]
+    branches: [main]
     paths-ignore: *docs
   workflow_dispatch:
 
