@@ -7,9 +7,10 @@ import? 'local.just'
 bundle_id := `cat Config.xcconfig Local.xcconfig 2>/dev/null | awk -F= '{gsub(/[[:space:]]/, "")} $1 == "HEYDAN_BUNDLE_ID" {v = $2} END {print v}'`
 team_id := `cat Config.xcconfig Local.xcconfig 2>/dev/null | awk -F= '{gsub(/[[:space:]]/, "")} $1 == "DEVELOPMENT_TEAM" {v = $2} END {print v}'`
 
-# Regenerate HeyDan.xcodeproj from project.yml (only its Package.resolved is committed).
+# Regenerate HeyDan.xcodeproj from project.yml (only its Package.resolved is committed). The cache skips the rewrite,
+# and with it xcodebuild's re-planning, when the spec and the file list are unchanged.
 gen:
-    xcodegen generate
+    if [ -d HeyDan.xcodeproj ]; then xcodegen generate --use-cache; else xcodegen generate; fi
 
 test:
     cd HeyDanCore && swift test
@@ -17,7 +18,7 @@ test:
 
 # Compile-check for a device without signing.
 build: gen
-    xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build
 
 # HEYDAN_SIM picks another Simulator and HEYDAN_DERIVED_DATA its build folder, so two runs can share the Mac.
 sim_name := env("HEYDAN_SIM", "Hey Dan iPhone")
@@ -213,29 +214,27 @@ server-logs cid:
 # per Simulator) or ActionButtonStartsCall; HEYDAN_CHECK_LOCKED=1 locks first. Every HEYDAN_* variable reaches the
 # app, as with `just sim`; screenshots land in build/checks. Calls are real: set HEYDAN_HANGUP_AFTER.
 # The call link is seeded by one plain launch (the Simulator's keychain keeps it), never through the test runner's
-# environment: a result bundle records that. The bundle itself lives in a temporary folder, gone on exit.
-sim-checks check="LiveActivityOnLockScreen": gen
+# environment: a result bundle records that. HEYDAN_KEEP_FAILED_RESULTS=1 keeps a failing bundle in a private
+# directory under the build folder for sim-checks or app-test. It can contain message text or pairing links.
+sim-checks check="LiveActivityOnLockScreen":
+    @python3 scripts/sim_tests.py sim-checks {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}} {{quote(check)}}
+
+# App-hosted tests and UI checks share the same Simulator test products.
+app-test:
+    @python3 scripts/sim_tests.py app-test {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}}
+
+# Treehouse runs this in every slot it hands out: copy the owner's untracked config from the main checkout.
+# .env.local stays out (release account, test call link): copy it by hand for testflight, calls and HeyDanChecks.
+lane-ready:
     #!/usr/bin/env bash
     set -euo pipefail
-    udid=$(xcrun simctl list devices available -j | jq -r --arg n "{{sim_name}}" '.devices[][] | select(.name == $n) | .udid' | head -1)
-    [ -n "$udid" ] || { echo "no Simulator named {{sim_name}}" >&2; exit 1; }
-    xcrun simctl bootstatus "$udid" -b >/dev/null
-    link=$(just _test-link)
-    results=$(mktemp -d)
-    trap '[ -n "$results" ] && rm -rf -- "$results"' EXIT
-    mkdir -p build/checks
-    for name in $(compgen -e | grep '^HEYDAN_' | grep -vxE 'HEYDAN_(E2E_)?CALL_LINK' || true); do export "TEST_RUNNER_$name=${!name}"; done
-    xcodebuild build-for-testing -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" -derivedDataPath "{{sim_build}}" -quiet
-    xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
-    xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
-    SIMCTL_CHILD_HEYDAN_CALL_LINK="$link" xcrun simctl launch --terminate-running-process "$udid" {{bundle_id}} >/dev/null
-    sleep 3
-    xcrun simctl terminate "$udid" {{bundle_id}}
-    status=0
-    # --foreground keeps xcodebuild in the terminal's group, so Ctrl-C still reaches it.
-    TEST_RUNNER_HEYDAN_CHECKS_OUT="$PWD/build/checks" \
-        timeout --foreground --kill-after=10 600 xcodebuild test-without-building -project HeyDan.xcodeproj -scheme HeyDanChecks -destination "id=$udid" \
-        -derivedDataPath "{{sim_build}}" -resultBundlePath "$results/HeyDanChecks.xcresult" \
-        -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -only-testing "HeyDanChecks/HeyDanChecks/test{{check}}" 2>&1 \
-        | grep -E '^check:|error|passed|failed' || status=${PIPESTATUS[0]}
-    exit "$status"
+    main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+    [ "$main" != "$PWD" ] || exit 0
+    for f in Local.xcconfig local.just; do
+        if [ -f "$main/$f" ]; then cp -p "$main/$f" "$f"; fi
+    done
+
+# Capture the fixture gallery for the current commit on an existing Simulator.
+[positional-arguments]
+screens *args:
+    @python3 -B scripts/screens.py {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}} "$@"

@@ -26,7 +26,7 @@ public struct VoiceLine: Sendable, Equatable {
 
     public var callLink: String { endpoint(nil).absoluteString }
 
-    /// Admits the call, opens its room and dispatches the worker; answers a `CallGrant`. Asks for
+    /// Admits the call, opens its room and dispatches the worker; answers a `VoiceLineGrant`. Asks for
     /// `VoiceProtocol.requestedVersion`, which a protocol 4 host ignores.
     public var tokenRequest: URLRequest {
         var request = URLRequest(url: endpoint("livekit/token", version: VoiceProtocol.requestedVersion))
@@ -63,7 +63,7 @@ public struct VoiceLine: Sendable, Equatable {
 
 /// The host's answer to `tokenRequest`: where to join, the caller's room token, the call's id for hangup, and the
 /// protocol the host speaks.
-public struct CallGrant: Decodable, Sendable, Equatable {
+public struct VoiceLineGrant: Decodable, Sendable, Equatable {
     public let url: String
     public let token: String
     public let callId: String
@@ -95,6 +95,10 @@ func hostAnswer<Answer: Decodable>(status: Int, body: Data) throws(CallFailure) 
 public enum CallFailure: Error, Equatable, Sendable {
     /// The host never answered: on this line that almost always means the tailnet is down.
     case unreachable
+    case pairedTransport
+    case server(status: Int, code: String, message: String)
+    /// A paired call stopped on this phone before any request: the device key is locked or the host is unpaired.
+    case local(code: String, message: String)
     /// Found before the call starts: no tailnet interface on the phone, and the line's host is tailnet-only.
     case tailscaleOff
     case noLine
@@ -119,6 +123,8 @@ public enum CallFailure: Error, Equatable, Sendable {
     public var logName: String {
         switch self {
         case let .refused(status, _): "refused-\(status)"
+        case .server(let status, _, _): "server-\(status)"
+        case .local(let code, _): "local-\(code)"
         case .transport: "transport"
         case .callKitRefused: "callKitRefused"
         default: "\(self)"
@@ -127,9 +133,11 @@ public enum CallFailure: Error, Equatable, Sendable {
 
     public var message: String {
         switch self {
+        case .server(_, _, let message), .local(_, let message): message
+        case .pairedTransport: "Could not reach the call service. Check your internet connection and try again."
         case .unreachable: "Can't reach the voice line. Check that Tailscale is connected, then try again."
         case .tailscaleOff: "Tailscale looks off. Turn it on, then call again."
-        case .noLine: "Add your call link in Settings first."
+        case .noLine: "Pair a host or add your call link in Settings first."
         case .lineGone: "That line is gone - pick another in Settings."
         case let .callKitRefused(detail): "Could not start the call: \(detail)"
         case .setupFailed: "The call could not start. Try again."

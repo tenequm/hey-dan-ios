@@ -176,9 +176,9 @@ struct VoiceSettingsTests {
         let page = try JSONDecoder().decode(CatalogPage.self, from: Data(json.utf8))
         #expect(page.provider == "gemini")
         #expect(page.voices == [
-            CatalogVoice(id: "achernar", name: "Achernar", language: "en-US", gender: "female",
+            VoiceLineCatalogVoice(id: "achernar", name: "Achernar", language: "en-US", gender: "female",
                          description: "Storyteller & Narrator. Soft, calm, and soothing voice with a higher pitch."),
-            CatalogVoice(id: "en-us-techagent-4", name: "Tech Advisor 4", language: "en-US", gender: "male",
+            VoiceLineCatalogVoice(id: "en-us-techagent-4", name: "Tech Advisor 4", language: "en-US", gender: "male",
                          description: "Tech Support Agent / Tech Advisor. Confident and clear."),
         ])
         #expect(page.next == "eyJvIjoxMDB9")
@@ -190,7 +190,7 @@ struct VoiceSettingsTests {
         """#
         let page = try JSONDecoder().decode(CatalogPage.self, from: Data(json.utf8))
         #expect(page.provider == "elevenlabs")
-        #expect(page.voices == [CatalogVoice(id: "bIHbv24MWmeRgasZH58o", name: "Will", language: "en", gender: "male",
+        #expect(page.voices == [VoiceLineCatalogVoice(id: "bIHbv24MWmeRgasZH58o", name: "Will", language: "en", gender: "male",
                                             preview: URL(string: "https://example.invalid/w.mp3"))])
         #expect(page.next == nil)
     }
@@ -217,7 +217,7 @@ struct VoiceSettingsTests {
     ])
     func optionalCatalogMetadataAbsentOrNull(json: String) throws {
         let page = try JSONDecoder().decode(CatalogPage.self, from: Data(json.utf8))
-        #expect(page == CatalogPage(provider: "future", voices: [CatalogVoice(id: "future-voice", name: "Future")]))
+        #expect(page == CatalogPage(provider: "future", voices: [VoiceLineCatalogVoice(id: "future-voice", name: "Future")]))
     }
 
     @Test func unknownProviderModelAndVoiceIDsDecodeVerbatim() throws {

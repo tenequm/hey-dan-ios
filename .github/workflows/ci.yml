@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: &docs
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - "*.example"
+  push:
+    branches: [main]
+    paths-ignore: *docs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  core:
+    name: Core tests
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - &setup
+        uses: ./.github/actions/setup
+      - run: just test
+
+  build:
+    name: Device build
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - *checkout
+      - *setup
+      - &cache-config
+        name: Configure compilation cache
+        id: compiler
+        run: |
+          xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')
+          echo "prefix=xcode-$xcode-$RUNNER_ARCH-$GITHUB_JOB" >> "$GITHUB_OUTPUT"
+          cat > "$RUNNER_TEMP/compile-cache.xcconfig" <<'EOF'
+          COMPILATION_CACHE_ENABLE_CACHING = YES
+          COMPILATION_CACHE_KEEP_CAS_DIRECTORY = YES
+          EOF
+          echo "XCODE_XCCONFIG_FILE=$RUNNER_TEMP/compile-cache.xcconfig" >> "$GITHUB_ENV"
+      - &compile-cache
+        name: Restore compilation cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/CompilationCache.noindex
+          key: ${{ steps.compiler.outputs.prefix }}-${{ hashFiles('project.yml', 'Config.xcconfig', '**/Package.resolved', 'HeyDanCore/Package.swift', 'justfile', 'scripts/sim_tests.py', '**/*.swift') }}
+          restore-keys: |
+            ${{ steps.compiler.outputs.prefix }}-
+      - run: just build
+
+  app-tests:
+    name: App tests
+    runs-on: xcode-27
+    timeout-minutes: 25
+    env:
+      # No CLI grants notification permission on a Simulator that never ran the app (AGENTS.md); this test needs it.
+      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+    steps:
+      - *checkout
+      - uses: ./.github/actions/setup
+        with:
+          simulator: true
+      - *cache-config
+      - *compile-cache
+      - run: just app-test

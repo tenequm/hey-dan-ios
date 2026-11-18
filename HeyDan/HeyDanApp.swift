@@ -12,10 +12,18 @@ import SwiftUI
 
 @main
 struct HeyDanApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var pairedHost: Pairings.Entry?
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #if DEBUG
+    private let uiTest = ProcessInfo.processInfo.environment["HEYDAN_UITEST"] == "1"
+    #endif
+
     init() {
         // Before anything touches LiveKit: its logger is fixed on first use. Debug builds keep the SDK's own story of
         // every call (subsystem io.livekit.sdk) next to the app's; Release keeps LiveKit's default, info and above.
         #if DEBUG
+        if uiTest { UIView.setAnimationsEnabled(false) }
         LiveKitSDK.setLogLevel(.debug)
         #endif
         #if targetEnvironment(simulator)
@@ -26,12 +34,74 @@ struct HeyDanApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                #if DEBUG
+                #if targetEnvironment(simulator)
+                if let path = ProcessInfo.processInfo.environment["HEYDAN_CAPTURE_REQUEST"] {
+                    ScreenCaptureFixture(requestURL: URL(fileURLWithPath: path))
+                } else { debugRoot }
+                #else
+                debugRoot
+                #endif
+                #else
+                root
+                #endif
+            }
+                .environment(\.pairingConfirmation, $pairedHost)
+                .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
+                .fullScreenCover(isPresented: Binding(
+                    get: { CallController.shared.showsPairedCall },
+                    set: { if $0 { CallController.shared.showsPairedCall = true } else { CallController.shared.closePairedCall() } }
+                )) {
+                    if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
+                }
+                .environment(\.theme, Theme.dark)
+                .preferredColorScheme(.dark)
+                .environment(ChatController.shared)
                 .environment(CallController.shared)
                 #if DEBUG
                 .task { await Self.debugScript() }
+                .transaction { if uiTest { $0.disablesAnimations = true; $0.animation = nil } }
                 #endif
         }
+    }
+
+    #if DEBUG
+    @ViewBuilder private var debugRoot: some View {
+        if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
+            if name.hasPrefix("List/") { ConversationListSpecimen(name: name) }
+            else { Gallery(name: name) }
+        } else { root }
+    }
+    #endif
+
+    @ViewBuilder private var root: some View {
+        if let pairedHost {
+            PairingView(paired: pairedHost)
+        } else if showsPairingForChecks {
+            PairingView()
+        } else if ChatController.shared.pairing != nil {
+            ConversationList()
+        } else {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
+                || ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] != nil
+                || ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
+                PairingView()
+            } else { ContentView() }
+            #else
+            ContentView()
+            #endif
+        }
+    }
+
+    /// Pairing checks open the pairing screen even on a Simulator an earlier check left paired.
+    private var showsPairingForChecks: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
+        #else
+        false
+        #endif
     }
 }
 
@@ -58,8 +128,62 @@ extension HeyDanApp {
         if let steps = env["HEYDAN_VOICE_STEPS"], !steps.isEmpty { VoiceDebug.schedule(steps, launched: launched) }
         #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
-        guard env["HEYDAN_AUTOCALL"] == "1" else { return }
-        if let link = env["HEYDAN_CALL_LINK"] {
+        if env["HEYDAN_CHAT_CHECKS"] == "1", env["HEYDAN_CHECK_REVOKED_REQUEST"] == "1" {
+            let path = URL.cachesDirectory.appending(path: "revoked-request.json").path
+            let chat = ChatController.shared
+            let deadline = ContinuousClock.now + .seconds(30)
+            while chat.conversations.isEmpty, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            do {
+                guard let client = chat.service as? SignedClient else { return }
+                let request = try client.checkRevocationRequest()
+                let data = try JSONSerialization.data(withJSONObject: ["url": request.url!.absoluteString,
+                    "authorization": request.value(forHTTPHeaderField: "Authorization")!])
+                guard FileManager.default.createFile(atPath: path, contents: data,
+                    attributes: [.posixPermissions: 0o600, .protectionKey: FileProtectionType.complete]) else { return }
+            } catch { CallLog.log(.net, "check revocation prepare_failed") }
+            return
+        }
+        if env["HEYDAN_CHAT_CHECKS"] == "1", env["HEYDAN_CHECK_VOICE"] == "1" || env["HEYDAN_CHECK_HISTORY"] == "1" {
+            let chat = ChatController.shared
+            let deadline = ContinuousClock.now + .seconds(30)
+            while chat.conversations.isEmpty, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard let conversation = chat.conversations.first else { return }
+            if env["HEYDAN_CHECK_HISTORY"] == "1" {
+                do {
+                    let newest = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(limit: 1))
+                    guard let last = newest.items.compactMap(\.order).last else { return }
+                    let before = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(before: last, limit: 1))
+                    guard let previous = before.items.compactMap(\.order).last, previous < last else { return }
+                    let after = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(after: previous, limit: 1))
+                    CallLog.log(.net, "check history before=true after=\(after.items.compactMap(\.order).first == last)")
+                } catch { CallLog.log(.net, "check history failed") }
+                return
+            }
+            do {
+                let original = try await chat.service.voice(conversationId: conversation.id)
+                let saved = original.saved
+                let restore: TTSPatch = saved.provider.map { .choice(TTSChoice(provider: $0, model: saved.model, voice: saved.voice)) } ?? .reset
+                var matched = false
+                do {
+                    let choice = original.effective
+                    _ = try await chat.service.updateVoice(conversationId: conversation.id,
+                        request: .choice(choice))
+                    let readback = try await chat.service.voice(conversationId: conversation.id)
+                    matched = readback.saved == SavedTTSChoice(provider: choice.provider, model: choice.model, voice: choice.voice)
+                } catch { CallLog.log(.net, "check voice save_failed") }
+                _ = try await chat.service.updateVoice(conversationId: conversation.id, request: restore)
+                let restored = try await chat.service.voice(conversationId: conversation.id)
+                CallLog.log(.net, "check voice saved=\(matched) restored=\(restored.saved == saved)")
+            } catch { CallLog.log(.net, "check voice failed") }
+            return
+        }
+        let pairedFeed = env["HEYDAN_CHAT_CHECKS"] == "1" && env["HEYDAN_PAIRED_FEED"] == "1"
+        guard pairedFeed || env["HEYDAN_AUTOCALL"] == "1" else { return }
+        if !pairedFeed, let link = env["HEYDAN_CALL_LINK"] {
             guard let requested = VoiceLine(callLink: link), CallController.shared.line == requested else {
                 CallLog.log(.call, "debug autocall refused: supplied line invalid or not selected", level: .error)
                 return
@@ -81,10 +205,29 @@ extension HeyDanApp {
             #if targetEnvironment(simulator)
             let gated = env["HEYDAN_FEED_ON_VOICE"] == "1"
             if gated { VoiceDebug.gateFeed(launched: launched) }
-            feed = Task.detached { await AudioFeed.run(path: path, after: delay, gated: gated) }
+            feed = Task.detached {
+                if pairedFeed {
+                    while await CallController.shared.pairedCallTarget == nil, !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                await AudioFeed.run(path: path, after: delay, gated: gated)
+            }
             #else
             feed = Task.detached { await AudioFeed.run(path: path, after: delay) }
             #endif
+        }
+        if pairedFeed {
+            let deadline = ContinuousClock.now + .seconds(60)
+            while CallController.shared.pairedCallTarget == nil, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            guard CallController.shared.pairedCallTarget != nil else { return }
+            while CallController.shared.isCallActive, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return
         }
         #if targetEnvironment(simulator)
         if env["HEYDAN_START_ON_SAMPLE"] == "1" {
@@ -544,13 +687,30 @@ enum IntentCall {
         let controller = CallController.shared
         // A process launched before the first unlock after a restart could not read the lines; unlocked, it can.
         controller.readLinesIfNeeded()
+        // Only when a paired agent could answer: the picked saved line calls without waiting on the pairings' keychain.
+        let savedLine = lineID.map { id in controller.lines.entries.contains { $0.id == id } } ?? !controller.lines.entries.isEmpty
+        if !savedLine { try await readyPairings() }
         CallLog.log(.intent, "start line=\(lineID.map(CallController.short) ?? "picked") lines=\(controller.lines.entries.count)")
-        if controller.lines.entries.isEmpty {
+        if controller.lines.entries.isEmpty && Pairings.shared.entries.isEmpty {
             CallLog.log(.intent, "no line: \(inBackground ? "failed" : "the app shows its settings")")
             if inBackground { throw CallNotStarted(message: CallFailure.noLine.message) }
             return
         }
-        guard let id = await controller.start(lineID: lineID) else {
+        // Before resolving a paired agent, which can switch the app's active pairing.
+        if controller.isCallActive {
+            CallLog.log(.intent, "a call is on already: not started")
+            return
+        }
+        let started: UUID?
+        if let target = try await pairedTarget(id: lineID) {
+            started = await controller.start(target: target)
+        } else {
+            if let lineID, !controller.lines.entries.contains(where: { $0.id == lineID }) {
+                throw CallNotStarted(message: "This agent is no longer saved. Choose an agent again.")
+            }
+            started = await controller.start(lineID: lineID)
+        }
+        guard let id = started else {
             if case let .ended(ending) = controller.phase, ending.cause == .failure { throw notStarted(ending, inBackground) }
             CallLog.log(.intent, "a call is on already: not started")
             return
@@ -564,6 +724,47 @@ enum IntentCall {
             .intent, "wait done phase=\(controller.phase.logName) ms=\(CallLog.ms(since: began))", level: failed == nil ? .default : .error
         )
         if let failed { throw notStarted(failed, inBackground) }
+    }
+
+    static func readyPairings() async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while Pairings.shared.state == .unreadable, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        if Pairings.shared.state == .unreadable {
+            throw CallNotStarted(message: AppError.keyUnavailable.message)
+        }
+    }
+
+    static func pairedTarget(id: UUID?) async throws -> CallTarget? {
+        let pairings = Pairings.shared
+        let selected = pairings.entries.lazy.filter { $0.features.contains("calls") }
+            .compactMap { entry -> (Pairings.Entry, HeyDanCore.Agent)? in
+                guard let agent = entry.agents.first(where: {
+                    PairedAgentID.make(host: entry.host, agentId: $0.id) == id
+                }) else { return nil }
+                return (entry, agent)
+            }.first
+        guard let (entry, agent) = selected ?? (id == nil ? defaultPairedAgent() : nil) else { return nil }
+        let found: (conversation: Conversation?, service: any AppService)
+        do { found = try await ChatController.shared.pairedConversation(agentId: agent.id, entry: entry) }
+        catch { throw CallNotStarted(message: error.message) }
+        guard let conversation = found.conversation else {
+            throw CallNotStarted(message: "This agent has no conversation yet.")
+        }
+        guard conversation.canCall else {
+            throw CallNotStarted(message: conversation.callRefusal?.message ?? "Calling is unavailable.")
+        }
+        return CallTarget(paired: PairedCallTarget(host: entry.host, deviceId: entry.deviceId,
+            conversation: conversation), service: found.service)
+    }
+
+    /// An empty destination keeps calling the saved line picked in the app; only a phone with no saved line calls
+    /// the active host's first agent.
+    static func defaultPairedAgent() -> (Pairings.Entry, HeyDanCore.Agent)? {
+        guard CallController.shared.lines.entries.isEmpty, let entry = Pairings.shared.active,
+              entry.features.contains("calls"), let agent = entry.agents.first else { return nil }
+        return (entry, agent)
     }
 
     /// A CallKit refusal in the background is no fault of the line: the caller needs the way that works, not a retry.
@@ -595,19 +796,26 @@ struct VoiceLineEntity {
     let agent: String
     var person: IntentPerson
 
-    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(agent)") }
+    /// A paired agent and a saved line for the same agent read alike: the subtitle tells them apart.
+    let source: String
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(agent)", subtitle: "\(source)") }
 
-    init(id: UUID, agent: String) {
+    init(id: UUID, agent: String, source: String) {
         self.id = id
         self.agent = agent
+        self.source = source
         person = IntentPerson(identifier: .applicationDefined(id.uuidString), name: .displayName(agent), handle: nil)
     }
 }
 
 struct VoiceLineQuery: EntityStringQuery {
     func suggestedEntities() async -> [VoiceLineEntity] {
-        await MainActor.run {
-            CallController.shared.lines.entries.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
+        try? await IntentCall.readyPairings()
+        return await MainActor.run {
+            CallController.shared.lines.entries.map { VoiceLineEntity(line: $0) }
+                + Pairings.shared.entries.filter { $0.features.contains("calls") }.flatMap { entry in
+                    entry.agents.map { VoiceLineEntity(entry: entry, agent: $0) }
+                }
         }
     }
 
@@ -621,9 +829,19 @@ struct VoiceLineQuery: EntityStringQuery {
 
     /// The line picked in the app, so a new shortcut starts with it filled in.
     func defaultResult() async -> VoiceLineEntity? {
-        await MainActor.run {
-            CallController.shared.lines.selected.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
+        try? await IntentCall.readyPairings()
+        return await MainActor.run {
+            if let line = CallController.shared.lines.selected { return VoiceLineEntity(line: line) }
+            return IntentCall.defaultPairedAgent().map { VoiceLineEntity(entry: $0.0, agent: $0.1) }
         }
+    }
+}
+
+private extension VoiceLineEntity {
+    init(line: VoiceLines.Entry) { self.init(id: line.id, agent: line.name.capitalizedFirst, source: "Call link") }
+    init(entry: Pairings.Entry, agent: HeyDanCore.Agent) {
+        self.init(id: PairedAgentID.make(host: entry.host, agentId: agent.id), agent: agent.name,
+            source: entry.host.host() ?? "Paired host")
     }
 }
 

@@ -9,11 +9,43 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
+import sim_tests
 spec =importlib.util.spec_from_file_location('sim_e2e', Path(__file__).with_name('sim-e2e.py'))
 harness = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness)
+
+class SimulatorSelectionTests(unittest.TestCase):
+    def test_only_voice_class_and_its_methods_seed_the_link(self):
+        for selector in ('HeyDanChecks', 'HeyDanChecks/HeyDanChecks', 'LiveActivityOnLockScreen',
+                         'HeyDanChecks/testLiveActivityOnLockScreen'):
+            self.assertTrue(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
+        for selector in ('ChatChecks', 'ChatThreadChecks/testRichCardTable'):
+            self.assertFalse(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
+
+
+    def test_deadline_counts_only_enabled_tests_in_the_selection(self):
+        inventory = ("Plan HeyDanSimulatorTests\n"
+                     "\tHeyDanChecks/ChatCallChecks/testCover()\n"
+                     "\tHeyDanChecks/ChatCallChecks/testOther() (disabled)\n"
+                     "\tHeyDanChecks/ChatChecks/testHistory() (disabled)\n")
+        self.assertEqual(sim_tests.selected_tests(inventory, 'HeyDanChecks/ChatCallChecks'), 1)
+        self.assertEqual(sim_tests.selected_tests(inventory, 'HeyDanChecks/ChatChecks'), 0)
+
+    def test_result_bundle_retained_only_for_an_opted_in_failure(self):
+        for keep, fail in ((False, True), (True, False), (True, True)):
+            with self.subTest(keep=keep, fail=fail), tempfile.TemporaryDirectory() as build:
+                try:
+                    with sim_tests.test_results(Path(build), keep) as results:
+                        (Path(results) / 'test.xcresult').mkdir()
+                        if fail:
+                            raise RuntimeError('test failed')
+                except RuntimeError:
+                    self.assertTrue(fail)
+                self.assertEqual(bool(list(Path(build).glob('failed-tests-*/*.xcresult'))), keep and fail)
+
 
 # Real app log lines (trimmed), so a changed log line or SDK error description fails here first.
 JEV_CALL = '''\
@@ -78,10 +110,34 @@ class Grade(unittest.TestCase):
         self.assertTrue(grade['connect_timeout'] and grade['ended'])
         self.assertFalse(harness.grade(JEV_CALL)['connect_timeout'])
 
+    def test_paired_call_requires_mode_specific_marks_and_paired_end(self):
+        caller = '\ncheck thread voice=caller id=msg_a\n'
+        spoken = '\ncheck thread voice=spoken id=msg_b\n'
+        for original in (JEV_CALL, PLAIN_CALL):
+            paired = original.replace('end reason=hangup status=204', 'end reason=hangup status=204 paired=true')
+            with self.subTest(mode=harness.grade(original)['mode']):
+                self.assertTrue(harness.grade_paired(paired + caller + spoken))
+                self.assertEqual(harness.grade_paired(paired + caller), original == JEV_CALL)
+                self.assertFalse(harness.grade_paired(paired + spoken))
+                self.assertFalse(harness.grade_paired(original + caller + spoken))
+
     def test_refused_autocall(self):
         self.assertTrue(harness.grade(REFUSED)['refused'])
         self.assertFalse(harness.grade(JEV_CALL)['refused'])
 
+
+class ChatResults(unittest.TestCase):
+    def test_placeholder_bundle_skips_only_the_push_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / 'results').mkdir()
+            with patch.object(harness, 'OUT', output), patch.object(harness, 'BUNDLE', 'com.example.HeyDan', create=True), \
+                 patch.object(harness, 'RECORDS', {}), patch.dict(os.environ, {}, clear=True), \
+                 patch.object(harness, 'ui_check') as ui_check:
+                harness.chat_checks()
+                ui_check.assert_called_once_with('app-fixture-unread', 'ChatChecks/testFixtureUnreadRelaunch')
+                self.assertEqual(harness.RECORDS['app-push-communication']['status'], 'skip')
+                self.assertIn('Local.xcconfig', harness.RECORDS['app-push-communication']['detail'])
 
 @unittest.skipUnless(shutil.which('timeout'), 'GNU timeout is not installed')
 class Run(unittest.TestCase):

@@ -1,0 +1,40 @@
+name: Set up the toolchain
+description: Selects Xcode and installs just, XcodeGen and GNU timeout; optionally names a Simulator for the recipes.
+inputs:
+  simulator:
+    description: Rename one of the image's Simulators to the recipes' default, "Hey Dan iPhone".
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # One of the paths the xcode-27 image lists (actions/runner-images, images/macos/xcode-27-arm64-Readme.md).
+        XCODE: /Applications/Xcode_27.2.app
+        JUST_VERSION: 1.59.0
+        JUST_SHA256: 6574cea774ed4cae12e24b6aa11857de33e80dab4667cf628fd5840df96a2a9d
+        XCODEGEN_VERSION: 2.47.0
+        XCODEGEN_SHA256: 6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd
+        HOMEBREW_NO_AUTO_UPDATE: 1
+        HOMEBREW_NO_INSTALL_CLEANUP: 1
+      run: |
+        echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+        mkdir -p "$RUNNER_TEMP/tools/bin" && cd "$RUNNER_TEMP/tools"
+        curl -fsSL --retry 3 -o just.tar.gz "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-aarch64-apple-darwin.tar.gz"
+        curl -fsSL --retry 3 -o xcodegen.zip "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+        printf '%s  %s\n' "$JUST_SHA256" just.tar.gz "$XCODEGEN_SHA256" xcodegen.zip | shasum -a 256 -c
+        tar -xzf just.tar.gz -C bin just
+        unzip -q xcodegen.zip
+        echo "$PWD/bin" >> "$GITHUB_PATH"
+        echo "$PWD/xcodegen/bin" >> "$GITHUB_PATH"
+        # The image has no `timeout`; the Simulator scripts and two harness tests need it.
+        brew install coreutils
+    # One of the image's own Simulators: its first boot takes about 90 s, a created one's over 5 minutes. The
+    # script boots it after the build, which takes two to three times as long beside a booted Simulator here.
+    - if: inputs.simulator == 'true'
+      shell: bash
+      run: |
+        sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+        udid=$(xcrun simctl list devices available -j | jq -r --arg runtime "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}" \
+          '.devices[$runtime][] | select(.name == "iPhone 18 Pro Max") | .udid')
+        xcrun simctl rename "$udid" "Hey Dan iPhone"

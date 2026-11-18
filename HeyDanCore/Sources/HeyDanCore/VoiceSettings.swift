@@ -207,7 +207,7 @@ public enum TTSPatch: Encodable, Sendable, Equatable {
     }
 }
 
-public struct CatalogVoice: Decodable, Sendable, Equatable {
+public struct VoiceLineCatalogVoice: Decodable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let language: String?
@@ -227,10 +227,10 @@ public struct CatalogVoice: Decodable, Sendable, Equatable {
 
 public struct CatalogPage: Decodable, Sendable, Equatable {
     public let provider: String
-    public let voices: [CatalogVoice]
+    public let voices: [VoiceLineCatalogVoice]
     public let next: String?
 
-    public init(provider: String, voices: [CatalogVoice], next: String? = nil) {
+    public init(provider: String, voices: [VoiceLineCatalogVoice], next: String? = nil) {
         self.provider = provider
         self.voices = voices
         self.next = next
@@ -242,6 +242,10 @@ public enum TTSPatchError: Error, Sendable, Equatable {
 }
 
 public enum TTSServiceFailure: Error, Sendable, Equatable {
+    case server(status: Int, code: String, message: String)
+    /// Stopped on this phone before any request: the device key is locked or the host is unpaired.
+    case local(code: String, message: String)
+    case pairedTransport
     case invalid(field: String)
     case providerUnavailable(provider: String)
     case badRequest
@@ -288,6 +292,8 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
 
     public var message: String {
         switch self {
+        case .server(_, _, let message), .local(_, let message): message
+        case .pairedTransport: "Could not reach the voice service. Check your internet connection and try again."
         case let .invalid(field) where ["provider", "model", "voice"].contains(field):
             "The selected \(field) is not valid. Choose another and try again."
         case .invalid: "The selected voice setting is not valid. Choose another and try again."

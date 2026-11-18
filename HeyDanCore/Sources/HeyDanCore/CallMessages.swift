@@ -324,30 +324,13 @@ public struct CommandWords: Sendable, Equatable {
         let discard: [Word]?
     }
 
-    /// The words short hints quote: the flagged ones in order, else the first.
-    public var sendHints: [String] { Self.hints(send) }
-    public var discardHints: [String] { Self.hints(discard) }
-
-    /// `"zulu" or "copy"`: the send words short hints quote.
-    public var sendHint: String { Self.join(sendHints) }
-
-    /// The voice commands panel's line: every send word, and the discard words short hints quote.
-    public var explainer: String {
-        let send = "say \(Self.join(self.send.map(\.say))) to send now"
-        return discard.isEmpty ? "\(send)." : "\(send), \(Self.join(discardHints)) to drop it."
-    }
-
-    /// `"a"`, `"a" or "b"`, `"a", "b" or "c"`; unquoted, for VoiceOver.
-    public static func join(_ words: [String], quoted: Bool = true) -> String {
-        let shown = quoted ? words.map { "\"\($0)\"" } : words
-        guard let last = shown.last else { return "" }
-        let rest = shown.dropLast()
+    /// Short hints quote the flagged send words in order, or the first word if none are flagged.
+    public var sendHint: String {
+        let flagged = send.filter(\.hint)
+        let words = (flagged.isEmpty ? Array(send.prefix(1)) : flagged).map { "\"\($0.say)\"" }
+        guard let last = words.last else { return "" }
+        let rest = words.dropLast()
         return rest.isEmpty ? last : "\(rest.joined(separator: ", ")) or \(last)"
-    }
-
-    private static func hints(_ words: [Word]) -> [String] {
-        let flagged = words.filter(\.hint)
-        return (flagged.isEmpty ? Array(words.prefix(1)) : flagged).map(\.say)
     }
 }
 

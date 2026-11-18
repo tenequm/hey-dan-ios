@@ -14,6 +14,9 @@ import UIKit
 final class CallController: NSObject {
     static let shared = CallController()
 
+    private(set) var pairedCallTarget: CallTarget?
+    var showsPairedCall = false
+
     enum Phase: Equatable {
         case idle
         case connecting
@@ -103,23 +106,17 @@ final class CallController: NSObject {
         }
     }
 
-    /// A host's grant on a protocol this app speaks, with that protocol's names: held as one so neither is set alone.
-    private struct AcceptedGrant {
-        let grant: CallGrant
-        let names: VoiceProtocol.Names
-    }
-
     /// Everything one call owns, created when it starts and dropped in one assignment when it ends,
     /// so a late callback from an earlier call can never touch the current one.
     private struct ActiveCall {
         let id: UUID
-        /// The line the call was admitted on: a link saved mid-call must not redirect its hangup.
-        let line: VoiceLine
+        /// Keep admission identity fixed even if the selected pairing or saved line changes.
+        let target: CallTarget
         let claimedAt = ContinuousClock.now
         var callId: String?
         /// Set before the room exists: before CallKit when the precheck said Tailscale is off, and setup then uses it
         /// instead of asking again.
-        var grant: AcceptedGrant?
+        var grant: CallTarget.Grant?
         /// The worker's names on the protocol the host said it speaks.
         var names: VoiceProtocol.Names? { grant?.names }
         /// Stream events received per topic, for the end-of-call summary.
@@ -221,7 +218,14 @@ final class CallController: NSObject {
         // `just sim` hands the call link in at launch: the Simulator's pasteboard does not take a CLI copy.
         if let link = env["HEYDAN_CALL_LINK"] { saveCallLink(link) }
         // Screenshots: fake lines named for the agents listed, never a real link; the first listed is picked.
-        if let names = env["HEYDAN_PREVIEW_LINES"] {
+        if FixtureContent.capturing {
+            lines = VoiceLines()
+            for (agent, host) in [("Dan", "voice.home.example.ts.net"), ("Stan", "voice-test.home.example.ts.net")] {
+                if let line = VoiceLine(callLink: "https://\(host)/voice?t=fixture") { _ = lines.add(line, agent: agent) }
+            }
+            if let first = lines.entries.first { lines.select(first.id) }
+            showLine(lines.selected)
+        } else if let names = env["HEYDAN_PREVIEW_LINES"] {
             _ = keep { next in
                 let ids = names.split(separator: ",").compactMap { name in
                     VoiceLine(callLink: "https://lines.example/voice?t=fake-\(name.lowercased())").map {
@@ -271,18 +275,33 @@ final class CallController: NSObject {
             phase = .ended(.failure(lines.entries.isEmpty ? .noLine : .lineGone))
             return nil
         }
+        showLine(entry)
+        return await start(target: CallTarget(line: entry.line))
+    }
+
+    func start(target: CallTarget) async -> UUID? {
+        guard !isCallActive else {
+            trace(.call, "start refused: call active")
+            return nil
+        }
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
-        call = ActiveCall(id: id, line: entry.line)
+        pairedCallTarget = target.paired == nil ? nil : target
+        showsPairedCall = target.paired != nil
+        call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
         liveVoice = nil
-        showLine(entry)
+        if let paired = target.paired { agentName = paired.conversation.agent.name }
         phase = .connecting
         transcript = Transcript()
         commands = nil
         commandWords = .builtIn
         editReview { $0.startCall() }
-        trace(.call, "claim line=\(Self.short(entry.id)) mode=\(reviewSession.pick.rawValue)")
+        if target.line != nil {
+            trace(.call, "claim line=\(Self.short(shownLineID)) mode=\(reviewSession.pick.rawValue) paired=false")
+        } else {
+            trace(.call, "claim paired=true mode=\(reviewSession.pick.rawValue)")
+        }
         #if DEBUG && targetEnvironment(simulator)
         previewVoiceUpdate?.cancel()
         previewVoiceUpdate = nil
@@ -299,19 +318,21 @@ final class CallController: NSObject {
         #endif
         // Manual never opens the microphone before talk: the track is published muted.
         if review.mode == .review { isMuted = true }
-        await place(id, on: entry.line)
+        await place(id, on: target)
         return id
     }
 
-    private func place(_ id: UUID, on line: VoiceLine) async {
+    private func place(_ id: UUID, on target: CallTarget) async {
         await VoiceSample.stop()
         trace(.audio, "sample stop drained", id)
         guard call?.id == id else { return }
         // Before the microphone prompt and CallKit: with Tailscale off the token request would only fail at its timeout.
-        let checking = ContinuousClock.now
-        let tailnet = await Tailnet.check(host: line.host)
-        trace(.net, "tailscale precheck \(tailnet.logName) ms=\(CallLog.ms(since: checking))", id, level: tailnet == .off ? .error : .default)
-        if tailnet == .off, await !grantEarly(id, line) { return }
+        if let line = target.line {
+            let checking = ContinuousClock.now
+            let tailnet = await Tailnet.check(host: line.host)
+            trace(.net, "tailscale precheck \(tailnet.logName) ms=\(CallLog.ms(since: checking))", id, level: tailnet == .off ? .error : .default)
+            if tailnet == .off, await !grantEarly(id, target) { return }
+        }
         guard call?.id == id else { return }
         let granted = await AVAudioApplication.requestRecordPermission()
         trace(.audio, "mic permission granted=\(granted)", id)
@@ -331,15 +352,15 @@ final class CallController: NSObject {
 
     /// A precheck can misread, so it never blocks a call alone: the host gets a short try, and only when that cannot
     /// reach it does the call end on the Tailscale hint. False when the call is over.
-    private func grantEarly(_ id: UUID, _ line: VoiceLine) async -> Bool {
+    private func grantEarly(_ id: UUID, _ target: CallTarget) async -> Bool {
         let asked = ContinuousClock.now
         do {
-            let accepted = try await requestGrant(line, over: Self.quickHTTP)
+            let accepted = try await target.grant(over: Self.quickHTTP, endingOver: Self.http)
             guard call?.id == id else {
-                endOnHost(line, callId: accepted.grant.callId)
+                endOnHost(target, callId: accepted.callId)
                 return false
             }
-            call?.callId = accepted.grant.callId
+            call?.callId = accepted.callId
             call?.grant = accepted
             trace(.net, "token ok despite the precheck protocol=\(accepted.names.version) ms=\(CallLog.ms(since: asked))", id)
             return true
@@ -383,17 +404,11 @@ final class CallController: NSObject {
         Task { try? await callKit.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) }
     }
 
-    /// Changes auto mode's wake switch, whether a pause sends after the wake phrase, or the typing sound. Mid-call
-    /// the worker has to take it: true once it did, and only then is it kept for the next call; until it answers
-    /// `commands` shows the change, and a refusal puts back what the worker runs (no answer: what its state says it
-    /// runs). Without commands on the call (none yet, or none at all) it only becomes the pick the next call starts
-    /// with.
+    /// During a call the worker must accept the change before it is kept for the next call.
     @discardableResult
-    func updateSettings(wake: Bool? = nil, pauseSends: Bool? = nil, typing: Bool? = nil) async -> Bool {
+    func updateSettings(typing: Bool) async -> Bool {
         var picks = commands.map { SettingsPicks(wake: $0.wake, pauseSends: $0.pauseSends, typing: $0.typing) } ?? settingsPicks
-        if let wake { picks.wake = wake }
-        if let pauseSends { picks.pauseSends = pauseSends }
-        if let typing { picks.typing = typing }
+        picks.typing = typing
         guard let id = call?.id, commands != nil else {
             keepPicks(picks)
             return true
@@ -465,34 +480,34 @@ final class CallController: NSObject {
     // MARK: - Call lifecycle
 
     private func connect(_ id: UUID) {
-        guard let line = call?.line else { return }
+        guard let target = call?.target else { return }
         call?.connectTask = Task {
             do {
-                let accepted: AcceptedGrant
+                let accepted: CallTarget.Grant
                 if let early = call?.grant {
                     accepted = early
                 } else {
                     let asked = ContinuousClock.now
-                    do { accepted = try await requestGrant(line, over: Self.http) } catch {
+                    do { accepted = try await target.grant(over: Self.http, endingOver: Self.http) } catch {
                         trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
                         throw error
                     }
-                    guard call?.id == id else { return endOnHost(line, callId: accepted.grant.callId) }
-                    call?.callId = accepted.grant.callId
+                    guard call?.id == id else { return endOnHost(target, callId: accepted.callId) }
+                    call?.callId = accepted.callId
                     call?.grant = accepted
                     trace(.net, "token ok protocol=\(accepted.names.version) ms=\(CallLog.ms(since: asked))", id)
                 }
-                let (grant, names) = (accepted.grant, accepted.names)
+                let grant = accepted, names = accepted.names
                 if let agent = grant.agent, !agent.isEmpty { setAgentName(agent, for: id) }
                 let room = Room(delegate: self, roomOptions: RoomOptions(defaultAudioPublishOptions: Self.micPublishOptions))
                 call?.room = room
                 await listen(to: room, names: names, for: id)
                 guard call?.id == id else { return }
                 let connecting = ContinuousClock.now
-                trace(.room, "connect start", id)
-                do { try await room.connect(url: grant.url, token: grant.token) } catch {
+                trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
+                do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
                     trace(.room, "connect failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: connecting))", id, level: .error)
-                    throw CallFailure.roomConnect
+                    throw target.paired == nil ? CallFailure.roomConnect : CallFailure.pairedTransport
                 }
                 guard call?.id == id else { return }
                 call?.roomConnected = true
@@ -528,29 +543,9 @@ final class CallController: NSObject {
         }
     }
 
-    /// The host's grant and the names of the protocol it speaks. A grant on a protocol this app does not speak is never
-    /// joined: its call ends on the host right away.
-    private func requestGrant(_ line: VoiceLine, over http: URLSession) async throws(CallFailure) -> AcceptedGrant {
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await http.data(for: line.tokenRequest)
-        } catch {
-            throw CallFailure(transportError: error)
-        }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        CallLog.log(.net, "token status=\(status) bytes=\(data.count)", level: status == 200 ? .info : .error)
-        let grant = try CallGrant(status: status, body: data)
-        guard let names = grant.names else {
-            endOnHost(line, callId: grant.callId, reason: .updating)
-            throw .unsupportedProtocol(grant.protocolVersion)
-        }
-        return AcceptedGrant(grant: grant, names: names)
-    }
-
     private func setAgentName(_ name: String, for id: UUID) {
         agentName = name
-        if let line = call?.line, let lineID = lines.id(of: line) { nameLine(lineID, agent: name) }
+        if let line = call?.target.line, let lineID = lines.id(of: line) { nameLine(lineID, agent: name) }
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.localizedCallerName = name
@@ -643,7 +638,14 @@ final class CallController: NSObject {
         ended.agentTimer?.cancel()
         ended.activationTimer?.cancel()
         ended.interimTimer?.cancel()
-        if let callId = ended.callId { endOnHost(ended.line, callId: callId, reason: hostReason) }
+        if let callId = ended.callId {
+            endOnHost(ended.target, callId: callId, reason: hostReason)
+        } else if ended.target.paired != nil {
+            Task {
+                do { try await ended.target.cancel() }
+                catch { CallLog.log(.net, "call cancel failed \(CallLog.describe(error))", level: .error) }
+            }
+        }
         if let room = ended.room {
             let topics = ended.names?.streamTopics ?? []
             Task {
@@ -664,19 +666,27 @@ final class CallController: NSObject {
         isMuted = false
         lastEnded = (id, ending)
         phase = .ended(ending)
+        if ended.target.paired != nil, !showsPairedCall { showSavedLine() }
     }
 
-    private func endOnHost(_ line: VoiceLine, callId: String, reason: VoiceLine.EndReason? = nil) {
-        let request = line.endRequest(callId: callId, reason: reason)
-        let tag = "cid=\(callId.prefix(8)) end reason=\(reason?.rawValue ?? "hangup")"
+    /// Dismisses a paired call's screen. Once that call is over, the root screen is about the saved line again: its
+    /// name, an idle phase and an empty transcript, so its Call key and its words agree.
+    func closePairedCall() {
+        showsPairedCall = false
+        if !isCallActive { showSavedLine() }
+    }
+
+    private func showSavedLine() {
+        showLine(shownLineID.flatMap(lines.entry))
+        if case .ended = phase {
+            phase = .idle
+            transcript = Transcript()
+        }
+    }
+
+    private func endOnHost(_ target: CallTarget, callId: String, reason: VoiceLine.EndReason? = nil) {
         Task {
-            let asked = ContinuousClock.now
-            do {
-                let (_, response) = try await Self.http.data(for: request)
-                CallLog.log(.net, "\(tag) status=\((response as? HTTPURLResponse)?.statusCode ?? 0) ms=\(CallLog.ms(since: asked))")
-            } catch {
-                CallLog.log(.net, "\(tag) failed \(CallLog.describe(error))", level: .error)
-            }
+            try? await target.end(callId: callId, reason: reason, over: Self.http)
         }
     }
 
@@ -1737,7 +1747,7 @@ private enum LineStore {
 // MARK: - Live voice
 
 extension CallController {
-    var liveLine: VoiceLine? { call?.line }
+    var liveVoiceService: (any VoicePickerService)? { call?.target.voicePickerService }
 
     var liveCallID: UUID? {
         #if DEBUG && targetEnvironment(simulator)

@@ -14,8 +14,9 @@ final class HeyDanChecks: XCTestCase {
 
     func testE2EMicrophonePermission() {
         continueAfterFailure = false
+        app.resetAuthorizationStatus(for: .microphone)
         app.launchEnvironment = ["HEYDAN_E2E_MIC_PERMISSION": "1"]
-        app.launch()
+        app.launchForChecks()
         XCTAssertTrue(allowSpringBoardPermission(), "Microphone permission alert must be accepted")
         app.terminate()
     }
@@ -324,22 +325,14 @@ final class HeyDanChecks: XCTestCase {
     }
 
     func testCallOptions() throws {
-        for phase in ["waiting", "manual"] {
-            fixture("saved", phase: phase)
+        for phase in ["waiting", "manual", "connecting"] {
+            fixture("saved", voice: "pending", phase: phase)
             XCTAssertTrue(element(ID.controlsMode).waitForExistence(timeout: 5))
-            XCTAssertTrue(element(ID.controlsVoice).exists)
             element(ID.controlsOptions).tap()
             XCTAssertTrue(element(ID.optionsTyping).waitForExistence(timeout: 5))
-            XCTAssertTrue(element(ID.optionsTyping).isEnabled)
-            if phase == "waiting" {
-                XCTAssertTrue(element(ID.optionsWake).exists)
-                XCTAssertTrue(element(ID.optionsPauseSends).exists)
-                XCTAssertTrue(element(ID.optionsWake).isEnabled)
-                XCTAssertTrue(element(ID.optionsPauseSends).isEnabled)
-            } else {
-                XCTAssertFalse(element(ID.optionsWake).exists)
-                XCTAssertFalse(element(ID.optionsPauseSends).exists)
-            }
+            XCTAssertEqual(element(ID.optionsTyping).isEnabled, phase != "connecting")
+            XCTAssertTrue(app.staticTexts["Call options"].exists)
+            assertText(ID.optionsVoice, "Alnilam")
             shot("options-\(phase)")
         }
     }
@@ -402,7 +395,7 @@ final class HeyDanChecks: XCTestCase {
         openVoice()
         chooseElevenLabs()
         element(ID.pickerVoice).tap()
-        XCTAssertTrue(samples.firstMatch.waitForExistence(timeout: 15))
+        try requireSamples()
         let sampledAt = Date()
         let firstSample = samples.firstMatch
         firstSample.tap()
@@ -431,13 +424,20 @@ final class HeyDanChecks: XCTestCase {
         shot("sample-call-ended")
     }
 
+    /// Only ElevenLabs voices carry previews; when the test line's catalog offers none, the sample checks cannot run.
+    private func requireSamples() throws {
+        guard samples.firstMatch.waitForExistence(timeout: 15) else {
+            throw XCTSkip("No voice with a preview is available on the test line's catalog.")
+        }
+    }
+
     /// Popping the catalog stops its sample before Close dismisses the picker and one Call tap starts the call.
     func testSampleDismissThenCall() async throws {
         launchReal(["HEYDAN_HANGUP_AFTER": "40"])
         openVoice()
         chooseElevenLabs()
         element(ID.pickerVoice).tap()
-        XCTAssertTrue(samples.firstMatch.waitForExistence(timeout: 15))
+        try requireSamples()
         samples.firstMatch.tap()
         try await Task.sleep(for: .seconds(2))
         shot("sample-dismiss-playing")
@@ -465,9 +465,9 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private enum ID {
-        static let controlsMode = "controls.mode", controlsVoice = "controls.voice",
-            controlsOptions = "controls.options", keysCall = "keys.call", optionsWake = "options.wake",
-            optionsPauseSends = "options.pauseSends", optionsTyping = "options.typing", pickerTitle = "picker.title",
+        static let controlsMode = "controls.mode", optionsVoice = "options.voice",
+            controlsOptions = "controls.options", keysCall = "keys.call",
+            optionsTyping = "options.typing", pickerTitle = "picker.title",
             pickerClose = "picker.close", pickerSaved = "picker.saved", pickerLive = "picker.live", pickerNext = "picker.next",
             pickerProvider = "picker.provider", pickerVoice = "picker.voice", pickerSearch = "picker.search",
             pickerUseForCall = "picker.useForCall", pickerSave = "picker.save", pickerResult = "picker.result",
@@ -518,8 +518,10 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private func openVoice(loaded: Bool = true) {
-        XCTAssertTrue(element(ID.controlsVoice).waitForExistence(timeout: 10))
-        element(ID.controlsVoice).tap()
+        XCTAssertTrue(element(ID.controlsOptions).waitForExistence(timeout: 10))
+        element(ID.controlsOptions).tap()
+        XCTAssertTrue(element(ID.optionsVoice).waitForExistence(timeout: 5))
+        element(ID.optionsVoice).tap()
         XCTAssertTrue(element(ID.pickerTitle).waitForExistence(timeout: 5))
         guard loaded else { return }
         let ready = NSPredicate { [self] _, _ in element(ID.pickerSaved).exists && !text(ID.pickerSaved).contains("Loading") }
@@ -553,7 +555,7 @@ final class HeyDanChecks: XCTestCase {
         let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK", "HEYDAN_E2E_CALL_LINK"])
         app.launchEnvironment = env.filter { $0.key.hasPrefix("HEYDAN_") && !withheld.contains($0.key) && !excluding.contains($0.key) }
             .merging(extra) { $1 }
-        app.launch()
+        app.launchForChecks()
     }
 
     private func foreground() {
@@ -573,13 +575,32 @@ final class HeyDanChecks: XCTestCase {
         XCUIDevice.shared.press(.home)
     }
 
-    private func shot(_ name: String) {
-        let screenshot = XCUIScreen.main.screenshot()
+}
+
+extension XCUIApplication {
+    @MainActor func launchForChecks() {
+        launchEnvironment["HEYDAN_UITEST"] = "1"
+        launch()
+    }
+}
+
+extension XCTestCase {
+    /// The fixture host lists push, so the notification prompt can cover the list on a fresh Simulator.
+    @MainActor func launchChat(_ environment: [String: String]) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment = environment
+        app.launchForChecks()
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        return app
+    }
+
+    @MainActor func shot(_ name: String, screenshot: XCUIScreenshot = XCUIScreen.main.screenshot()) {
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        guard let dir = env["HEYDAN_CHECKS_OUT"], !dir.isEmpty else { return }
+        guard let dir = ProcessInfo.processInfo.environment["HEYDAN_CHECKS_OUT"], !dir.isEmpty else { return }
         try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
     }
 }

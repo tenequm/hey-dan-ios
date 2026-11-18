@@ -2,11 +2,16 @@ import HeyDanCore
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.theme) private var theme
+    var pairedTarget: CallTarget?
+    var minimize: (() -> Void)?
     @Environment(CallController.self) private var call
     @State private var showsSettings = false
-    @State private var showsOptions = false
+    @State private var presentsCallOptions = false
+    @State private var optionsHeight: CGFloat = 240
+    @State private var optionsVoice: VoiceSettingsModel?
     @State private var voiceTarget: VoiceTarget?
-    @State private var pendingVoiceTarget: VoiceTarget?
+    @State private var optionsDestination: OptionsDestination?
     @State private var settingsBusy = false
     /// Right after "call" the same key reads "cancel": taps are ignored for a moment so a double tap cannot cancel.
     @State private var cancelArmed = false
@@ -18,44 +23,53 @@ struct ContentView: View {
 
     private struct VoiceTarget: Identifiable {
         let id = UUID()
-        let line: VoiceLine
+        let model: VoiceSettingsModel
         let agentName: String
         let callID: UUID?
     }
 
+    private enum OptionsDestination {
+        case voice(VoiceTarget)
+        case settings
+    }
+
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: theme.space.s4) {
             header
             screen
             controls
-            keys
+            if let rv = reviewKeys {
+                HStack(spacing: theme.space.s3_5) { reviewKeyPair(rv) }
+            }
         }
-        .padding(12)
+        .padding(.horizontal, theme.space.s4)
+        .padding(.bottom, theme.space.s3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Theme.card.shadow(.inner(color: .white.opacity(0.12), radius: 0, y: 1)))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border, lineWidth: 1))
-                .shadow(color: .black.opacity(0.5), radius: 22, y: 18)
-        }
-        .padding(8)
-        .background(Theme.page.ignoresSafeArea())
-        .foregroundStyle(Theme.text)
+        .background(theme.color.surface.ignoresSafeArea())
+        .foregroundStyle(theme.color.textPrimary)
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .sheet(isPresented: $showsSettings) { SettingsView() }
-        .sheet(isPresented: $showsOptions, onDismiss: {
-            guard let target = pendingVoiceTarget else { return }
-            pendingVoiceTarget = nil
-            voiceTarget = target
-        }) { optionsSheet }
-        .sheet(item: $voiceTarget) { target in
-            VoicePickerSheet(line: target.line, agentName: target.agentName, callID: target.callID)
+        .sheet(isPresented: $showsSettings) {
+            NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
         }
-        .onAppear {
-            if preview == nil, call.line == nil {
+        .sheet(isPresented: $presentsCallOptions, onDismiss: {
+            switch optionsDestination {
+            case let .voice(target): voiceTarget = target
+            case .settings: showsSettings = true
+            case nil: break
+            }
+            optionsDestination = nil
+        }) { callOptions }
+        .sheet(item: $voiceTarget) { target in
+            VoicePickerSheet(model: target.model, agentName: target.agentName, callID: target.callID)
+        }
+        // Only once the pairings are read: a paired phone with no saved line shows the conversation list, not Settings.
+        .onChange(of: Pairings.shared.state, initial: true) { _, state in
+            if state == .none, preview == nil, pairedTarget == nil, call.line == nil, !call.isCallActive {
                 showsSettings = true
             }
+        }
+        .onAppear {
             #if DEBUG && targetEnvironment(simulator)
             if ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_SETTINGS"] == "1" { showsSettings = true }
             #endif
@@ -79,85 +93,47 @@ struct ContentView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 12) {
-            badge
-            VStack(alignment: .leading, spacing: 2) {
-                Text("hey dan")
-                    .font(Theme.sans(17, .medium))
-                    .spacing(-0.01, size: 17)
-                Text(subtitle)
-                    .font(Theme.mono(12))
-                    .spacing(0.02, size: 12)
-                    .foregroundStyle(Theme.muted)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-            }
-            Spacer(minLength: 8)
-            if let liveSince, isCallActive {
-                TimelineView(.periodic(from: liveSince, by: 1)) { context in
-                    Text(clock(context.date.timeIntervalSince(liveSince)))
-                        .font(Theme.mono(14))
-                        .monospacedDigit()
-                        .spacing(0.04, size: 14)
+        ZStack {
+            VStack(spacing: 0) {
+                Text(displayName).textRole(theme.type.headline, theme.weight.semibold)
+                HStack(spacing: theme.space.s1) {
+                    if let host = pairedTarget?.paired?.host.host() { Text(host) }
+                    if let liveSince, isCallActive {
+                        Text(liveSince, style: .timer).monospacedDigit().fixedSize()
+                    } else { Text(callLabel) }
                 }
+                .lineLimit(1).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             }
-            Button("settings", systemImage: "gearshape") { showsSettings = true }
-                .labelStyle(.iconOnly)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.muted)
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-                .disabled(isCallActive)
-                .opacity(isCallActive ? 0.4 : 1)
+            .padding(.horizontal, minimize == nil ? 0 : theme.control.touchTarget)
+            if let minimize {
+                GlassIconButton(title: "Close", systemImage: "chevron.down", action: minimize)
+                    .accessibilityIdentifier("chat.call.close")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
-    private var badge: some View {
-        let pulsing = switch phase {
-        case .idle, .connecting, .reconnecting: true
-        default: false
-        }
-        return DotMatrix(pattern: isLive ? Claw.open : Claw.closed)
-            .modifier(Breathing(active: pulsing, period: 2 * .pi / 2.2, dimmest: 0.55, brightest: 0.9))
-            .frame(width: 46, height: 46)
-        .modifier(InsetWell())
-        .overlay(alignment: .topTrailing) {
-            Circle()
-                .fill(isLive ? Theme.ok : Theme.ledOff)
-                .frame(width: 12, height: 12)
-                .overlay(Circle().strokeBorder(Theme.card, lineWidth: 3))
-                .shadow(color: isLive ? Theme.ok.opacity(0.6) : .clear, radius: 3)
-                .offset(x: 4, y: -4)
-        }
-        .animation(.easeInOut(duration: 0.25), value: isLive)
-    }
-
-    private var subtitle: AttributedString {
-        let lead = switch phase {
-        case .idle: "ready to call "
-        case .reconnecting where onCall: "on a call with "
-        case .connecting, .reconnecting: "calling "
-        case .live: "on a call with "
-        case let .ended(ending): isFailure(ending) ? "could not call " : "call ended with "
-        }
-        var agent = AttributedString(name)
-        agent.foregroundColor = Theme.orange
-        agent.font = Theme.mono(12, medium: true)
-        return AttributedString(lead) + agent
-    }
+    private var displayName: String { pairedTarget?.paired?.conversation.agent.name ?? call.agentName }
 
     // MARK: Screen
 
     private var screen: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 8) {
-                chip
-                hint
+        VStack(spacing: theme.space.s4) {
+            Text(displayName.prefix(1).uppercased())
+                .textRole(theme.type.display, theme.weight.bold)
+                .foregroundStyle(theme.color.textPrimary)
+                .frame(width: theme.control.touchTarget * 2, height: theme.control.touchTarget * 2)
+                .background(theme.color.surfaceGrouped, in: Circle())
+                .overlay { Circle().strokeBorder(theme.color.border) }
+                .accessibilityHidden(true)
+            chip
+            if phase == .live(.speaking) {
+                Image(systemName: "waveform")
+                    .font(.system(size: theme.space.s6))
+                    .foregroundStyle(theme.color.accent)
+                    .accessibilityHidden(true)
             }
-            .padding(EdgeInsets(top: 10, leading: 2, bottom: 12, trailing: 2))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .top) { Theme.screenRule.frame(height: 1) }
-            .overlay(alignment: .bottom) { Theme.screenRule.frame(height: 1) }
+            hint
             let panel = reviewKeys?.panel
             if let panel {
                 DraftPanel(
@@ -175,12 +151,11 @@ struct ContentView: View {
                 awake: onCall && commands?.wake == true && commands?.waiting == false,
                 frozen: preview?.caret ?? false,
                 // A draft on screen is the thing to read: no empty state competes with it.
-                empty: panel == nil ? emptyDescription : nil
+                empty: panel == nil && !hintIsError ? emptyDescription : nil
             )
         }
-        .padding(EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: 12))
-        .frame(maxWidth: .infinity, minHeight: 144, maxHeight: .infinity, alignment: .top)
-        .modifier(InsetWell())
+        .padding(.horizontal, theme.space.s2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var emptyDescription: String {
@@ -198,28 +173,17 @@ struct ContentView: View {
     }
 
     private var chip: some View {
-        let style = chipStyle
-        return HStack(spacing: 8) {
-            switch style.mark {
-            case .none: EmptyView()
-            case .pulse: PulseDot(color: style.palette.dot ?? style.palette.ink)
-            case .still: PulseDot(color: Theme.stillDot, still: true)
-            case .alert: Image(systemName: "exclamationmark.circle").font(.system(size: 15, weight: .semibold))
-            }
-            let text = reviewReadout.map { asWritten($0.chip, keep: keepWords) } ?? chipText
-            if style.shimmer {
-                ShimmerText(text: text, base: Theme.think, highlight: Theme.text)
-            } else {
-                Text(text)
-            }
-        }
-        .font(Theme.mono(17, medium: true))
-        .spacing(0.02, size: 17)
-        .foregroundStyle(style.palette.ink)
-        .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 12))
-        .frame(minHeight: 34)
-        .background(RoundedRectangle(cornerRadius: 4).fill(style.palette.fill))
-        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(style.palette.outline, lineWidth: 1))
+        CallStateChip(label: reviewReadout.map { asWritten($0.chip, keep: keepWords) } ?? chipText,
+                      dot: chipColor)
+    }
+
+    private var chipColor: Color {
+        if hintIsError || reviewReadout?.tone == .error { return theme.color.danger }
+        if phase == .connecting || phase == .reconnecting { return theme.color.warning }
+        if isMuted { return theme.color.iconMuted }
+        if phase == .live(.speaking) { return theme.color.accent }
+        if isLive { return phase == .live(.thinking) ? theme.color.statusWorking : theme.color.statusConnected }
+        return theme.color.iconMuted
     }
 
     @ViewBuilder private var hint: some View {
@@ -242,49 +206,18 @@ struct ContentView: View {
                 Text(hintText)
             }
         }
-        .font(Theme.mono(13))
-        .lineSpacing(4)
-        .foregroundStyle(hintIsError ? Theme.error : Theme.screenDim)
-        .frame(minHeight: 36, alignment: .topLeading)
+        .textRole(theme.type.label)
+        .lineSpacing(theme.space.s1)
+        .foregroundStyle(hintIsError ? theme.color.danger : theme.color.textSecondary)
+        .padding(hintIsError ? theme.space.s3 : 0)
+        .frame(maxWidth: .infinity, alignment: hintIsError ? .leading : .center)
+        .background {
+            if hintIsError {
+                RoundedRectangle(cornerRadius: theme.radius.l)
+                    .fill(theme.color.dangerSurface).strokeBorder(theme.color.dangerBorder)
+            }
+        }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private struct ChipStyle {
-        enum Mark { case none, pulse, still, alert }
-        var palette = ChipPalette.quiet
-        var mark = Mark.none
-        var shimmer = false
-    }
-
-    private var chipStyle: ChipStyle {
-        if let rv = reviewReadout { return reviewChipStyle(rv.tone) }
-        if case .live(.listening) = phase, isMuted { return ChipStyle(mark: .still) }
-        // Waiting for the wake phrase: the line is open but nothing is taken.
-        if waitingWake { return ChipStyle(mark: .still) }
-        switch phase {
-        case .live(.speaking):
-            return ChipStyle(palette: .speaking, mark: .pulse)
-        case .live(.listening):
-            return ChipStyle(palette: .you, mark: .pulse)
-        case .live(.thinking):
-            return ChipStyle(palette: .thinking, mark: .pulse, shimmer: true)
-        case let .ended(ending) where isFailure(ending):
-            return ChipStyle(palette: .error, mark: .alert)
-        default:
-            return ChipStyle()
-        }
-    }
-
-    /// The page's readout tones; one with no tone of its own pulses orange while the call is live.
-    private func reviewChipStyle(_ tone: ReviewView.Tone) -> ChipStyle {
-        switch tone {
-        case .you: ChipStyle(palette: .you, mark: .pulse)
-        case .off: ChipStyle(mark: .still)
-        case .think: ChipStyle(palette: .thinking, mark: .pulse, shimmer: true)
-        case .error: ChipStyle(palette: .error, mark: .alert)
-        case .idle, .ended: ChipStyle()
-        case .none: isLive ? ChipStyle(palette: .speaking, mark: .pulse) : ChipStyle()
-        }
     }
 
     private var chipText: String {
@@ -311,7 +244,7 @@ struct ContentView: View {
         case .live(.listening): listeningHint
         case .live(.thinking): isMuted ? "unmute to keep talking." : "you can keep talking."
         case .live(.speaking): "speech is ignored until \(name) finishes."
-        case let .ended(ending): isFailure(ending) ? ending.message.lowercased() : endedHint(ending)
+        case let .ended(ending): isFailure(ending) ? ending.message : endedHint(ending)
         }
     }
 
@@ -332,29 +265,76 @@ struct ContentView: View {
     // MARK: Controls
 
     private var controls: some View {
-        VStack(spacing: 4) {
-            GlassEffectContainer(spacing: 8) {
+        VStack(spacing: theme.space.s2) {
+            if hintIsError && reviewKeys == nil {
+                HStack(spacing: theme.space.s3) {
+                    optionsControl.fixedSize()
+                    Button { Task { await startDisplayedCall() } } label: {
+                        Text("Call again").textRole(theme.type.body, theme.weight.medium)
+                            .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
+                            .background(theme.color.accent, in: Capsule())
+                            .foregroundStyle(theme.color.onAccent)
+                    }
+                    .accessibilityIdentifier(AXID.keysCall)
+                    .disabled(!hasLine)
+                }
+            } else {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { controlButtons }
-                    VStack(spacing: 8) { controlButtons }
+                    HStack { controlButtons }
+                    ScrollView(.horizontal) { HStack { controlButtons } }
                 }
             }
-            .controlSize(.large)
-            .buttonSizing(.flexible)
-            .buttonBorderShape(.capsule)
-            .font(Theme.sans(14, .medium))
-            .tint(Theme.text)
             if reviewKeys?.panel == nil, let note = review.note {
-                Text(asWritten(note, keep: keepWords))
-                    .font(Theme.mono(11))
-                    .foregroundStyle(Theme.muted)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(asWritten(note, keep: keepWords)).textRole(theme.type.caption)
+                    .foregroundStyle(theme.color.textSecondary)
+            }
+            if hintIsError, let minimize {
+                Button(action: minimize) {
+                    Text("Back to conversation").textRole(theme.type.body, theme.weight.medium)
+                        .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
+                        .background(theme.color.secondaryFill, in: Capsule())
+                }
             }
         }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private var controlButtons: some View {
+        if reviewKeys == nil {
+            Button { call.setMuted(!isMuted) } label: {
+                CallControlLabel(title: isMuted ? "Unmute" : "Mute", symbol: isMuted ? "mic.slash" : "mic")
+            }
+            .disabled(!isCallActive || switchingToReview)
+            .accessibilityLabel(isMuted ? "Unmute microphone" : "Mute microphone")
+            .accessibilityValue(micLabel)
+        }
+        modeControl
+        optionsControl
+
+        if reviewKeys == nil {
+            Button {
+                if isCallActive { call.hangUp() } else { Task { await startDisplayedCall() } }
+            } label: {
+                CallControlLabel(title: callKey.title.capitalized, symbol: isCallActive ? "phone.down.fill" : "phone.fill",
+                                 danger: isCallActive)
+            }
+            .accessibilityIdentifier(AXID.keysCall)
+            .accessibilityLabel(callKey.spoken)
+            .disabled((!isCallActive && !hasLine) || (isSettingUp && !cancelArmed))
+        }
+    }
+
+    private var optionsControl: some View {
+        Button {
+            optionsVoice = voiceService.map { VoiceSettingsModel(service: $0) }
+            presentsCallOptions = true
+        } label: {
+            CallControlLabel(title: "Options", symbol: "ellipsis")
+        }
+        .accessibilityIdentifier(AXID.controlsOptions)
+    }
+
+    private var modeControl: some View {
         Menu {
             Picker("Turn mode", selection: Binding(
                 get: { review.mode },
@@ -371,48 +351,13 @@ struct ContentView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(modeLabel)
-                    .modifier(Breathing(active: pendingMode != nil, period: 1.4, dimmest: 0.55))
-                Image(systemName: "chevron.down").font(.caption2)
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(modeDisabled ? Theme.muted : Theme.text)
+            CallControlLabel(title: modeLabel, symbol: "hand.raised")
         }
-        .buttonStyle(.glass)
-        .frame(minWidth: 44, minHeight: 44)
         .disabled(modeDisabled)
         .accessibilityIdentifier(AXID.controlsMode)
         .accessibilityLabel("Turn mode")
         .accessibilityValue(modeLabel)
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
-
-        Button {
-            guard let line = voiceLine else { return }
-            let target = VoiceTarget(line: line, agentName: call.agentName, callID: call.liveCallID)
-            if showsOptions {
-                pendingVoiceTarget = target
-                showsOptions = false
-            } else {
-                voiceTarget = target
-            }
-        } label: {
-            Text("Voice")
-                .foregroundStyle(voiceLine == nil ? Theme.muted : Theme.text)
-        }
-        .buttonStyle(.glass)
-        .frame(minWidth: 44, minHeight: 44)
-        .disabled(voiceLine == nil)
-        .accessibilityIdentifier(AXID.controlsVoice)
-        .accessibilityLabel("Voice")
-        .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
-
-        Button("Options") { showsOptions = true }
-            .buttonStyle(.glass)
-            .frame(minWidth: 44, minHeight: 44)
-            .accessibilityIdentifier(AXID.controlsOptions)
-            .accessibilityLabel("Call options")
-            .accessibilityHint("Change voice commands and the typing sound.")
     }
 
     private var pendingMode: TurnMode? { review.pending?.op == .mode ? review.pending?.to : nil }
@@ -424,9 +369,21 @@ struct ContentView: View {
     /// The control row capitalizes hands-free, which `Review.modeName` writes lowercase.
     private func modeTitle(_ mode: TurnMode) -> String { mode == .auto ? "Hands-free" : Review.modeName(mode) }
 
-    /// The line the screen is about, as the Call key and the agent name: after a call to another line ends, that
-    /// line stays shown until the pick changes.
-    private var voiceLine: VoiceLine? { call.liveLine ?? call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line }
+    /// A redial starts from the conversation as the list has it now; the host still decides whether it may call.
+    private func startDisplayedCall() async {
+        if let target = pairedTarget, let paired = target.paired, let service = target.service {
+            let chat = ChatController.shared
+            let live = chat.host == paired.host ? chat.conversation(paired.conversation.id) : nil
+            _ = await call.start(target: CallTarget(paired: PairedCallTarget(host: paired.host, deviceId: paired.deviceId,
+                conversation: live ?? paired.conversation), service: service))
+        } else { _ = await call.start(lineID: call.shownLineID) }
+    }
+
+    private var voiceService: (any VoicePickerService)? {
+        if let service = call.liveVoiceService { return service }
+        if let pairedTarget { return pairedTarget.voicePickerService }
+        return (call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line).map(VoiceSettingsModel.lineService)
+    }
 
     private var modeDisabled: Bool {
         phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
@@ -440,138 +397,127 @@ struct ContentView: View {
         )
     }
 
-    private var optionsSheet: some View {
-        NavigationStack {
-            Form {
-                if let shown = shownSettings {
-                    let enabled = shown.enabled && !settingsBusy
-                    if review.mode == .auto, reviewKeys == nil {
-                        Section("Voice commands") {
-                            Toggle("wait for \"\(wakePhrase)\"", isOn: settingBinding(shown.wake) { change(wake: $0) })
-                                .frame(minHeight: 44)
-                                .accessibilityIdentifier(AXID.optionsWake)
-                                .accessibilityHint("Nothing is sent until you say \(wakePhrase); then say \(CommandWords.join(commandWords.sendHints, quoted: false)) to send.")
-                            if shown.wake {
-                                Toggle("a pause also sends", isOn: settingBinding(shown.pauseSends) { change(pauseSends: $0) })
-                                    .frame(minHeight: 44)
-                                    .accessibilityIdentifier(AXID.optionsPauseSends)
-                                    .accessibilityHint("After the wake phrase a pause sends too, not only \(CommandWords.join(commandWords.sendHints, quoted: false)).")
-                            }
+    private var callOptions: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: theme.space.s4) {
+                HStack {
+                    VStack(alignment: .leading, spacing: theme.space.s1) {
+                        Text("Call options").textRole(theme.type.headline, theme.weight.bold)
+                            .accessibilityAddTraits(.isHeader)
+                        Text("\(displayName) · this call").textRole(theme.type.label)
+                            .foregroundStyle(theme.color.textSecondary)
+                    }
+                    Spacer()
+                    GlassIconButton(title: "Close", systemImage: "xmark") { presentsCallOptions = false }
+                }
+                SettingsSection {
+                    Button {
+                        guard let model = optionsVoice else { return }
+                        let picker = model.loading ? VoiceSettingsModel(service: model.service) : model
+                        optionsDestination = .voice(VoiceTarget(model: picker, agentName: displayName, callID: call.liveCallID))
+                        presentsCallOptions = false
+                    } label: {
+                        SettingsRow(title: "Voice", icon: "waveform", detail: optionsVoiceName, navigates: true)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(optionsVoice == nil)
+                    .accessibilityIdentifier(AXID.optionsVoice)
+                    Divider().overlay(theme.color.border)
+                        .padding(.leading, theme.space.s4 + theme.control.glassIcon + theme.space.s3)
+                    Toggle(isOn: Binding(get: { commands?.typing ?? call.settingsPicks.typing }, set: { typing in
+                        settingsBusy = true
+                        Task {
+                            await call.updateSettings(typing: typing)
+                            settingsBusy = false
                         }
-                        .disabled(!enabled)
+                    })) {
+                        SettingsRow(title: "Typing sound", icon: "keyboard", subtitle: "Quiet keys while \(displayName) works on your turn")
                     }
-                    Section {
-                        Toggle("typing sound", isOn: settingBinding(shown.typing) { change(typing: $0) })
-                            .frame(minHeight: 44)
-                            .accessibilityIdentifier(AXID.optionsTyping)
-                            .accessibilityHint("A quiet keyboard sound while the agent works on your turn.")
-                    }
-                    .disabled(!enabled)
-                } else {
-                    Section {
-                        Text("Options are unavailable until the voice service shares its settings.")
-                            .foregroundStyle(Theme.muted)
-                    }
+                    .toggleStyle(.switch).tint(theme.color.accent)
+                    .padding(.trailing, theme.space.s4)
+                    .disabled(settingsBusy || !canChangeTyping)
+                    .accessibilityIdentifier(AXID.optionsTyping)
                 }
-                if review.mode == .auto, reviewKeys == nil {
-                    Section("Spoken commands") {
-                        Text(commandWords.explainer)
-                            .foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if let note = review.note {
-                    Section {
-                        Text(asWritten(note, keep: keepWords)).foregroundStyle(Theme.muted)
+                if pairedTarget == nil {
+                    SettingsSection {
+                        Button {
+                            optionsDestination = .settings
+                            presentsCallOptions = false
+                        } label: {
+                            SettingsRow(title: "Voice lines and paired hosts", icon: "phone", navigates: true)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier(AXID.optionsSettings)
                     }
                 }
             }
-            .font(Theme.sans(16))
-            .toggleStyle(.switch)
-            .tint(Theme.orange)
-            .navigationTitle("Call options")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(role: .close) { showsOptions = false }
-                        .accessibilityLabel("Close")
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-            }
-            .controlSize(.large)
-            .buttonSizing(.flexible)
-            .buttonBorderShape(.capsule)
-            .buttonStyle(.glass)
+            .foregroundStyle(theme.color.textPrimary)
+            .padding(theme.space.s4)
+            .padding(.vertical, theme.space.s2)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { optionsHeight = $0.rounded(.up) }
         }
-        .foregroundStyle(Theme.text)
-        .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
+        .task(id: voiceService?.identity) {
+            if optionsVoice?.service.identity != voiceService?.identity {
+                optionsVoice = voiceService.map { VoiceSettingsModel(service: $0) }
+            }
+            if call.liveCallID == nil || call.liveVoice == nil { await optionsVoice?.load() }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .presentationDetents([.height(optionsHeight)])
         .presentationDragIndicator(.visible)
-        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        .presentationBackground(theme.color.surfaceSheet)
+        .preferredColorScheme(.dark)
     }
 
-    private var shownSettings: (wake: Bool, pauseSends: Bool, typing: Bool, enabled: Bool)? {
-        if let commands { return (commands.wake, commands.pauseSends, commands.typing, isLive) }
-        let picks = call.settingsPicks
-        switch phase {
-        case .idle, .ended: return (picks.wake, picks.pauseSends, picks.typing, true)
-        // The worker has not said yet whether it takes commands: the picks stay in view, not changeable.
-        case .connecting: return (picks.wake, picks.pauseSends, picks.typing, false)
-        case .live, .reconnecting: return nil
+    private var optionsVoiceName: String {
+        if let live = call.liveVoice, call.liveCallID != nil {
+            return VoiceLabel(live.activeDetails, providerDefault: live.active.voice == nil).title
         }
+        if let view = optionsVoice?.view {
+            return VoiceLabel(view.details?.effective, providerDefault: view.effective.voice == nil).title
+        }
+        return optionsVoice?.loading == true ? "Loading…" : "Unavailable"
     }
 
-    /// Reads what the controller holds; a change only asks, so a refused one never shows as taken.
-    private func settingBinding(_ value: Bool, set: @escaping @MainActor @Sendable (Bool) -> Void) -> Binding<Bool> {
-        Binding(get: { value }, set: { new in MainActor.assumeIsolated { set(new) } })
-    }
-
-    private func change(wake: Bool? = nil, pauseSends: Bool? = nil, typing: Bool? = nil) {
-        settingsBusy = true
-        Task {
-            await call.updateSettings(wake: wake, pauseSends: pauseSends, typing: typing)
-            settingsBusy = false
+    private var canChangeTyping: Bool {
+        if commands != nil { return isLive }
+        switch phase {
+        case .idle, .ended: return true
+        case .connecting, .live, .reconnecting: return false
         }
     }
 
     // MARK: Keys
-
-    private var keys: some View {
-        HStack(alignment: .top, spacing: 14) {
-            if let rv = reviewKeys {
-                reviewKeyPair(rv)
-            } else {
-                autoKeys
-            }
-        }
-    }
 
     /// Review relabels the same two caps: discard is the quiet choice next to send, every other left key keeps the accent.
     @ViewBuilder private func reviewKeyPair(_ rv: ReviewView) -> some View {
         let primaryDisabled = (!isCallActive && !hasLine) || (isSettingUp && !cancelArmed)
         let leftArmed = (leftArmedAs ?? leftIdentity) == leftIdentity
         let rightArmed = (rightArmedAs ?? rightIdentity) == rightIdentity
-        VStack(spacing: 6) {
+        VStack(spacing: theme.space.s1_5) {
             Button(asWritten(rv.left.label, keep: [])) { run(rv.left.action) }
-                .buttonStyle(KeyCapStyle(finish: rv.left.action == .discard ? .light : .orange))
+                .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+                .tint(rv.left.action == .discard ? theme.color.secondaryFill : theme.color.accent)
                 .accessibilityIdentifier(AXID.keysCall)
                 .disabled(rv.left.disabled || !leftArmed || ((rv.left.action == .call || rv.left.action == .cancel) && primaryDisabled))
             keyLabel(Text(review.ended && review.draft != nil ? "draft kept" : callLabel))
         }
-        VStack(spacing: 6) {
+        VStack(spacing: theme.space.s1_5) {
             Button {
                 run(rv.right.action)
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: theme.space.s1_5) {
                     Image(systemName: rv.right.action == .done ? "stop.fill" : rv.right.action == .send ? "arrow.up" : "mic.fill")
-                        .font(.system(size: rv.right.action == .done ? 12 : 15, weight: .semibold))
+                        .font(.system(size: rv.right.action == .done ? theme.type.caption.size : theme.type.body.size, weight: theme.weight.semibold))
                     Text(asWritten(rv.right.label, keep: []))
                 }
             }
-            .buttonStyle(KeyCapStyle(finish: rv.right.action == .send && !rv.right.disabled ? .orange : rv.right.action == .talk ? .dark : .light))
+            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+            .tint(rv.right.action == .send && !rv.right.disabled ? theme.color.accent : theme.color.surfaceGrouped)
             .disabled(rv.right.disabled || !rightArmed)
-            keyLabel(HStack(spacing: 6) {
-                LED(on: rv.capturing || review.micError == .stop)
+            keyLabel(HStack(spacing: theme.space.s1_5) {
+                Circle().fill(rv.capturing || review.micError == .stop ? theme.color.statusConnected : theme.color.iconMuted)
+                    .frame(width: theme.space.s2, height: theme.space.s2)
                 Text(asWritten(rv.mic, keep: []))
             })
         }
@@ -580,7 +526,7 @@ struct ContentView: View {
 
     private func run(_ action: ReviewView.Action) {
         switch action {
-        case .call: Task { await call.start(lineID: call.shownLineID) }
+        case .call: Task { await startDisplayedCall() }
         case .cancel, .end: call.hangUp()
         case .discard: Task { await call.discard() }
         case .talk: Task { await call.talk() }
@@ -589,43 +535,11 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var autoKeys: some View {
-        VStack(spacing: 6) {
-            Button(callKey.title) {
-                if isCallActive { call.hangUp() } else { Task { await call.start(lineID: call.shownLineID) } }
-            }
-            .buttonStyle(KeyCapStyle(finish: .orange))
-            .accessibilityIdentifier(AXID.keysCall)
-            .disabled((!isCallActive && !hasLine) || (isSettingUp && !cancelArmed))
-            .accessibilityLabel(callKey.spoken)
-            keyLabel(Text(callLabel))
-        }
-        VStack(spacing: 6) {
-            Button {
-                call.setMuted(!isMuted)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: isMuted ? "mic.slash.fill" : "mic.fill").font(.system(size: 15))
-                    Text(isMuted ? "unmute" : "mute")
-                }
-            }
-            .buttonStyle(KeyCapStyle(finish: isMuted ? .dark : .light))
-            // Mid-switch the microphone stays as the switch left it.
-            .disabled(!isCallActive || switchingToReview)
-            .accessibilityLabel(isMuted ? "Unmute microphone" : "Mute microphone")
-            keyLabel(HStack(spacing: 6) {
-                LED(on: onCall && !isMuted && !pausedForReply)
-                Text(micLabel)
-            })
-        }
-        .frame(width: min(muteWidth, 180))
-    }
-
     private func keyLabel(_ content: some View) -> some View {
         content
-            .font(Theme.mono(11))
+            .textRole(theme.type.micro)
             .spacing(0.06, size: 11)
-            .foregroundStyle(Theme.muted)
+            .foregroundStyle(theme.color.textSecondary)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
     }
@@ -712,7 +626,7 @@ struct ContentView: View {
     // MARK: State
 
     private var name: String { call.agentName.lowercased() }
-    private var hasLine: Bool { call.line != nil || preview != nil }
+    private var hasLine: Bool { pairedTarget != nil || call.line != nil || preview != nil }
     private var phase: CallController.Phase { preview?.phase ?? call.phase }
     private var isMuted: Bool { preview?.muted ?? call.isMuted }
     private var liveSince: Date? { preview.map(\.liveSince) ?? call.liveSince }
@@ -777,7 +691,44 @@ private func clock(_ seconds: TimeInterval, pad: Bool = true) -> String {
 // MARK: - Review mode
 
 /// The review draft under the readout: dashed, never styled as sent, its header outside its own scroller.
+struct CallStateChip: View {
+    @Environment(\.theme) private var theme
+    let label: String
+    let dot: Color
+
+    var body: some View {
+        HStack(spacing: theme.space.s1_5) {
+            Circle().fill(dot).frame(width: theme.space.s2, height: theme.space.s2)
+            Text(label).textRole(theme.type.footnote, theme.weight.medium)
+        }
+        .padding(.horizontal, theme.space.s3).frame(minHeight: theme.space.s8)
+        .background(theme.color.surfaceGrouped, in: Capsule())
+    }
+}
+
+private struct CallControlLabel: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.isEnabled) private var enabled
+    let title: String
+    let symbol: String
+    var danger = false
+
+    var body: some View {
+        VStack(spacing: theme.space.s2) {
+            Image(systemName: symbol)
+                .font(.system(size: theme.space.s6, weight: theme.weight.medium))
+                .foregroundStyle(danger ? theme.color.onAccent : theme.color.icon)
+                .frame(width: theme.space.s8 * 2, height: theme.space.s8 * 2)
+                .background(danger ? theme.color.callEnd : theme.color.glass, in: Circle())
+                .overlay { Circle().strokeBorder(danger ? theme.color.callEnd : theme.color.composerBorder) }
+            Text(title).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+        }
+        .frame(maxWidth: .infinity).opacity(enabled ? 1 : 0.5)
+    }
+}
+
 private struct DraftPanel: View {
+    @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     let panel: ReviewView.Panel
     /// A preview's stand-in for the words being heard.
@@ -802,7 +753,7 @@ private struct DraftPanel: View {
     var body: some View {
         let text = hearing ? words : panel.text
         VStack(alignment: .leading, spacing: 0) {
-            FlowLayout(spacing: 10, lineSpacing: 2) {
+            FlowLayout(spacing: theme.space.s2_5, lineSpacing: theme.space.s0_5) {
                 Text(panel.title)
                     .foregroundStyle(titleInk)
                     .accessibilityAddTraits(.updatesFrequently)
@@ -815,33 +766,33 @@ private struct DraftPanel: View {
                 }
                 if let endCall { PanelButton(title: "end call", systemImage: "phone.down", action: endCall) }
             }
-            .font(Theme.mono(11))
+            .textRole(theme.type.micro)
             .spacing(0.04, size: 11)
-            .foregroundStyle(Theme.screenDim)
-            .padding(EdgeInsets(top: 7, leading: 12, bottom: 3, trailing: 12))
+            .foregroundStyle(theme.color.textSecondary)
+            .padding(EdgeInsets(top: theme.space.s2, leading: theme.space.s3, bottom: theme.space.s1, trailing: theme.space.s3))
             if let note {
                 Text(asWritten(note, keep: keep))
-                    .font(Theme.mono(11))
-                    .foregroundStyle(Theme.orange)
-                    .padding(EdgeInsets(top: 0, leading: 12, bottom: 4, trailing: 12))
+                    .textRole(theme.type.micro)
+                    .foregroundStyle(theme.color.accentText)
+                    .padding(EdgeInsets(top: 0, leading: theme.space.s3, bottom: theme.space.s1, trailing: theme.space.s3))
                     .fixedSize(horizontal: false, vertical: true)
             }
             ScrollView {
                 Group {
                     if text.isEmpty {
                         Text(panel.tone == .hearing ? "Speak now…" : panel.tone == .finishing ? "…" : "No words.")
-                            .foregroundStyle(Theme.screenDim)
+                            .foregroundStyle(theme.color.textSecondary)
                     } else {
                         Text(text)
-                            .foregroundStyle(hearing ? Theme.screenSoft : Theme.text)
+                            .foregroundStyle(hearing ? theme.color.textSecondary : theme.color.textPrimary)
                             .textSelection(.enabled)
                     }
                 }
-                .font(Theme.sans(17))
+                .textRole(theme.type.headline)
                 .lineHeight(.multiple(factor: 1.5))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(EdgeInsets(top: 0, leading: 12, bottom: 9, trailing: 12))
+                .padding(EdgeInsets(top: 0, leading: theme.space.s3, bottom: theme.space.s2_5, trailing: theme.space.s3))
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
             }
             // A frozen draft opens at its first word; heard words follow the tail.
@@ -852,7 +803,7 @@ private struct DraftPanel: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.outline, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Review draft")
         .task(id: copied) {
@@ -864,29 +815,30 @@ private struct DraftPanel: View {
 
     private var titleInk: Color {
         switch panel.tone {
-        case .draft: Theme.orange
-        case .failed, .long, .empty: Theme.error
-        case .hearing, .finishing: Theme.text
+        case .draft: theme.color.accentText
+        case .failed, .long, .empty: theme.color.danger
+        case .hearing, .finishing: theme.color.textPrimary
         }
     }
 }
 
 private struct PanelButton: View {
+    @Environment(\.theme) private var theme
     let title: String
     let systemImage: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage).font(.system(size: 11))
+            HStack(spacing: theme.space.s1_5) {
+                Image(systemName: systemImage).font(.system(size: theme.type.micro.size))
                 Text(title)
             }
-            .foregroundStyle(Theme.text)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.text, lineWidth: 1))
-            .padding(.vertical, 8)
+            .foregroundStyle(theme.color.textPrimary)
+            .padding(.horizontal, theme.space.s2)
+            .padding(.vertical, theme.space.s0_5)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color.textPrimary, lineWidth: 1))
+            .padding(.vertical, theme.space.s2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -896,6 +848,7 @@ private struct PanelButton: View {
 /// The delivery notice and the transcript: the only views that read the call's transcript, so a caption re-runs
 /// them and not the whole screen.
 private struct TranscriptPane: View {
+    @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     /// A preview's stand-in, shown in place of the call's transcript.
     let standIn: Transcript?
@@ -907,13 +860,13 @@ private struct TranscriptPane: View {
 
     var body: some View {
         let transcript = standIn ?? call.transcript
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: theme.space.s2_5) {
             if let notice = Self.deliveryNotice(transcript) {
                 Text(notice)
-                    .font(Theme.mono(12))
+                    .textRole(theme.type.caption)
                     .spacing(0.04, size: 12)
-                    .foregroundStyle(Theme.error)
-                    .padding(.horizontal, 2)
+                    .foregroundStyle(theme.color.danger)
+                    .padding(.horizontal, theme.space.s0_5)
                     .fixedSize(horizontal: false, vertical: true)
             }
             TranscriptConsole(
@@ -947,6 +900,7 @@ private struct TranscriptPane: View {
 /// The live transcript inside the screen, as the page's console draws it: no bubbles, a speaker row over each
 /// block, history a step dimmer than the newest words. It follows the newest line until the reader scrolls up.
 private struct TranscriptConsole: View {
+    @Environment(\.theme) private var theme
     let transcript: Transcript
     let agentName: String
     /// When the call went live; line times count from here.
@@ -964,16 +918,16 @@ private struct TranscriptConsole: View {
 
     var body: some View {
         if transcript.lines.isEmpty, let empty {
-            VStack(spacing: 4) {
+            VStack(spacing: theme.space.s1) {
                 Text("Nothing said yet")
-                    .font(Theme.sans(14, .medium))
-                    .foregroundStyle(Theme.text)
+                    .textRole(theme.type.footnote, theme.weight.medium)
+                    .foregroundStyle(theme.color.textPrimary)
                 Text(empty)
-                    .font(Theme.sans(14))
-                    .foregroundStyle(Theme.screenDim)
+                    .textRole(theme.type.footnote)
+                    .foregroundStyle(theme.color.textSecondary)
             }
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, theme.space.s4)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if transcript.lines.isEmpty {
             Color.clear
@@ -988,7 +942,7 @@ private struct TranscriptConsole: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: 4) {
+                    LazyVStack(alignment: .leading, spacing: theme.space.s4) {
                         ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                             if line.kind == .unheard {
                                 UnheardNote(agentName: agentName)
@@ -1008,7 +962,7 @@ private struct TranscriptConsole: View {
                         }
                     }
                     .scrollTargetLayout()
-                    .padding(EdgeInsets(top: 16, leading: 4, bottom: 4, trailing: 4))
+                    .padding(EdgeInsets(top: theme.space.s4, leading: theme.space.s1, bottom: theme.space.s1, trailing: theme.space.s1))
                     Color.clear.frame(height: 0).id(Self.bottom)
                 }
             }
@@ -1047,14 +1001,14 @@ private struct TranscriptConsole: View {
                         proxy.scrollTo(Self.bottom, anchor: .bottom)
                     }
                     .labelStyle(.iconOnly)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.text)
+                    .font(.system(size: theme.type.footnote.size, weight: theme.weight.semibold))
+                    .foregroundStyle(theme.color.textPrimary)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Theme.page).shadow(color: .black.opacity(0.5), radius: 4, y: 2))
-                    .overlay(Circle().strokeBorder(Theme.border, lineWidth: 1))
-                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(theme.color.glass).shadow(color: theme.color.shadow, radius: theme.space.s1, y: theme.space.s0_5))
+                    .overlay(Circle().strokeBorder(theme.color.border, lineWidth: 1))
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
                     .contentShape(Rectangle())
-                    .padding(.bottom, 10)
+                    .padding(.bottom, theme.space.s2_5)
                 }
             }
         }
@@ -1089,21 +1043,23 @@ private struct TranscriptConsole: View {
 }
 
 private struct UnheardNote: View {
+    @Environment(\.theme) private var theme
     let agentName: String
 
     var body: some View {
         Text("not heard - \(agentName.lowercased()) was speaking.")
-            .font(Theme.mono(12))
-            .foregroundStyle(Theme.screenSoft)
-            .padding(.vertical, 3)
-            .padding(.horizontal, 8)
+            .textRole(theme.type.caption)
+            .foregroundStyle(theme.color.textSecondary)
+            .padding(.vertical, theme.space.s1)
+            .padding(.horizontal, theme.space.s2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .leading) { Theme.orange.frame(width: 2) }
-            .padding(.vertical, 2)
+            .overlay(alignment: .leading) { theme.color.accentText.frame(width: 2) }
+            .padding(.vertical, theme.space.s0_5)
     }
 }
 
 private struct CaptionLine: View {
+    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let line: Transcript.Line
     /// Part of the newest block: full contrast. History steps back by colour.
@@ -1119,7 +1075,7 @@ private struct CaptionLine: View {
     let frozen: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: theme.space.s1_5) {
             if !continued { header }
             if caretSince != nil, frozen {
                 words(caret: true)
@@ -1134,7 +1090,7 @@ private struct CaptionLine: View {
                 words(caret: false)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, theme.space.s1_5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
@@ -1153,11 +1109,11 @@ private struct CaptionLine: View {
     }
 
     private var header: some View {
-        FlowLayout(spacing: 8, lineSpacing: 3) {
+        FlowLayout(spacing: theme.space.s2, lineSpacing: theme.space.s1) {
             Text(speaker)
-                .foregroundStyle(line.speaker == .agent ? Theme.orange : Theme.screenDim)
-            Text(time).foregroundStyle(Theme.screenDim)
-            if let note { Text(note).foregroundStyle(Theme.screenDim) }
+                .foregroundStyle(theme.color.textSecondary)
+            Text(time).foregroundStyle(theme.color.textSecondary)
+            if let note { Text(note).foregroundStyle(theme.color.textSecondary) }
             if line.wake {
                 if line.wakeOnly {
                     MarkTag(text: "wake phrase", style: .wake)
@@ -1170,7 +1126,7 @@ private struct CaptionLine: View {
             if line.unspoken { MarkTag(text: "reply not spoken", style: .lost) }
             if line.preWake { MarkTag(text: "words before the wake phrase ignored", style: .dropped) }
         }
-        .font(Theme.mono(11))
+        .textRole(theme.type.micro)
         .spacing(0.04, size: 11)
     }
 
@@ -1180,29 +1136,29 @@ private struct CaptionLine: View {
         case .lost(.stt), .lost(.empty): "Speech could not be transcribed."
         default: "No transcript."
         }
-        var words = Text(empty ? placeholder : line.text).foregroundStyle(empty ? Theme.screenDim : ink)
+        var words = Text(empty ? placeholder : line.text).foregroundStyle(empty ? theme.color.textSecondary : ink)
         if case .dropped(.discarded) = line.mark {
             words = words.strikethrough(color: ink.opacity(0.45))
         }
-        let text = caret ? Text("\(words)\(Text(Self.caret).baselineOffset(-2.25))") : words
+        let text = caret ? Text("\(words)\(Text(caretImage).baselineOffset(-2.25))") : words
         return text
-            .font(Theme.sans(15))
-            .lineHeight(.multiple(factor: 1.5))
+            .textRole(line.speaker == .caller ? theme.type.headline : theme.type.title,
+                      line.speaker == .caller ? theme.weight.regular : theme.weight.medium)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private var ink: Color {
         var color: Color
         if case .lost = line.mark {
-            color = Theme.text
+            color = theme.color.textPrimary
         } else if line.unspoken {
-            color = Theme.text
+            color = theme.color.textPrimary
         } else if case .dropped = line.mark {
-            color = Theme.screenDim
+            color = theme.color.textSecondary
         } else if line.wakeOnly {
-            color = Theme.screenDim
+            color = theme.color.textSecondary
         } else {
-            color = live ? Theme.text : Theme.screenSoft
+            color = line.speaker == .caller ? theme.color.textSecondary : theme.color.textPrimary
         }
         // Interim caller words step back until the transcription's final replaces them.
         if line.speaker == .caller, !line.isFinal, line.mark == nil { color = color.opacity(0.6) }
@@ -1210,9 +1166,9 @@ private struct CaptionLine: View {
     }
 
     /// A block 0.55em wide and 1em tall, 3pt after the last word.
-    private static var caret: Image {
+    private var caretImage: Image {
         Image(size: CGSize(width: 11.25, height: 15)) { context in
-            context.fill(Path(CGRect(x: 3, y: 0, width: 8.25, height: 15)), with: .color(Theme.orange.opacity(0.9)))
+            context.fill(Path(CGRect(x: 3, y: 0, width: 8.25, height: 15)), with: .color(theme.color.accentText.opacity(0.9)))
         }
     }
 
@@ -1251,27 +1207,28 @@ private struct CaptionLine: View {
 
 /// A turn's mark beside the speaker: outlined in its colour, the wake that is still listening filled orange.
 private struct MarkTag: View {
+    @Environment(\.theme) private var theme
     enum Style { case sent, dropped, lost, wake, awake }
     let text: String
     let style: Style
 
     var body: some View {
         let ink: Color = switch style {
-        case .sent: Theme.screenDim
-        case .dropped: Theme.screenSoft
-        case .lost: Theme.error
-        case .wake: Theme.text
-        case .awake: Theme.screen
+        case .sent: theme.color.textSecondary
+        case .dropped: theme.color.textSecondary
+        case .lost: theme.color.danger
+        case .wake: theme.color.textPrimary
+        case .awake: theme.color.surface
         }
         let boxed = style != .sent
         Text(text)
             .foregroundStyle(ink)
             .lineHeight(.multiple(factor: 1.5))
-            .padding(.horizontal, boxed ? 5 : 0)
+            .padding(.horizontal, boxed ? theme.space.s1_5 : 0)
             .background {
                 switch style {
                 case .sent: EmptyView()
-                case .awake: RoundedRectangle(cornerRadius: 3).fill(Theme.orange)
+                case .awake: RoundedRectangle(cornerRadius: 3).fill(theme.color.accentText)
                 default: RoundedRectangle(cornerRadius: 3).strokeBorder(ink, lineWidth: 1)
                 }
             }
@@ -1307,9 +1264,9 @@ private struct Preview {
     var endedAt: Date? { wasLive ? shownAt : nil }
     var thinkingSince: Date? { phase == .live(.thinking) ? start.addingTimeInterval(71) : nil }
 
-    static func fromEnvironment() -> Preview? {
+    @MainActor static func fromEnvironment() -> Preview? {
         #if DEBUG && targetEnvironment(simulator)
-            guard var name = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_PHASE"] else { return nil }
+            guard var name = ScreenCaptureFixture.phase ?? ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_PHASE"] else { return nil }
             // "thinking-muted", "speaking-muted": the same stage with the microphone muted.
             let mutedVariant = name.hasSuffix("-muted")
             if mutedVariant { name.removeLast("-muted".count) }
@@ -1425,6 +1382,13 @@ private struct Preview {
             func spoke(_ segment: String, _ text: String, at seconds: TimeInterval) {
                 transcript.caption(segment: segment, text: text, isFinal: true, fromCaller: false, at: at(seconds))
             }
+            if FixtureContent.capturing {
+                said("caller", FixtureContent.caller, at: 5)
+                transcript.apply(.status(TurnStatus(turn: 1, status: .sent, text: FixtureContent.caller)), at: at(6))
+                transcript.apply(ReplyInfo(reply: 1, turn: 1), at: at(9))
+                spoke("reply", FixtureContent.reply, at: 9)
+                return transcript
+            }
             let backup = "Can you check whether the backup ran last night?"
             said("SG_1", backup, at: 5)
             transcript.apply(.status(TurnStatus(turn: 1, status: .sent, text: backup)), at: at(6))
@@ -1452,23 +1416,15 @@ private struct Preview {
     #endif
 }
 
-/// The mascot as a pincer in dots: the notch opens while the call is live.
-private enum Claw {
-    static let open = [
-        ".........", "...##....", "..###....", ".###+....", ".##+++##.",
-        ".###+###.", "..#####..", "...###...", ".........",
-    ]
-    static let closed = [
-        ".........", "...###...", "..####...", ".###+.##.", ".##+++##.",
-        ".###+###.", "..#####..", "...###...", ".........",
-    ]
-}
-
 /// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.
-private struct SettingsView: View {
+struct VoiceLinesSettings: View {
+    var showsPairedHosts = true
+    var onCall: (() -> Void)?
+    @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
+    @FocusState private var linkFocused: Bool
     @State private var note: Note?
     /// The line whose host is being asked who answers.
     @State private var naming: UUID?
@@ -1482,31 +1438,50 @@ private struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: theme.space.s4) {
             ZStack {
-                Text("settings")
-                    .font(Theme.sans(17, .medium))
+                Text("Voice lines")
+                    .textRole(theme.type.headline, theme.weight.medium)
                     .spacing(-0.01, size: 17)
-                Button("close") { dismiss() }
-                    .font(Theme.mono(13))
-                    .foregroundStyle(Theme.muted)
-                    .frame(minHeight: 44)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    GlassIconButton(title: "close", systemImage: "chevron.left") { dismiss() }
+                    Spacer()
+                    if Pairings.shared.active == nil {
+                        GlassIconButton(title: "Add a call link", systemImage: "plus") { linkFocused = true }
+                    }
+                }
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: theme.space.s6) {
+                    if showsPairedHosts, Pairings.shared.active != nil { PairedHostSettingsRows() }
                     linesSection
                     addSection
+                    if showsPairedHosts, Pairings.shared.active == nil { PairedHostSettingsRows() }
                 }
-                .padding(.bottom, 20)
+                .padding(.bottom, theme.space.s5)
             }
             .scrollBounceBehavior(.basedOnSize)
+            if Pairings.shared.active == nil, let selected = call.lines.selected {
+                Button {
+                    if let onCall { onCall() } else { dismiss() }
+                    Task { _ = await call.start(lineID: selected.id) }
+                } label: {
+                    Label("Call \(selected.name)", systemImage: "phone.fill")
+                        .textRole(theme.type.body, theme.weight.semibold)
+                        .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
+                        .background(theme.color.accent, in: Capsule())
+                        .foregroundStyle(theme.color.onAccent)
+                }
+                .disabled(call.isCallActive)
+                .padding(.bottom, theme.space.s2)
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .foregroundStyle(Theme.text)
-        .presentationDetents([.medium, .large])
-        .presentationBackground(Theme.card)
+        .padding(.horizontal, theme.space.s5)
+        .padding(.top, theme.space.s3)
+        .foregroundStyle(theme.color.textPrimary)
+        .toolbarVisibility(.hidden, for: .navigationBar)
+        .presentationDetents(Pairings.shared.active == nil ? [.large] : [.medium, .large])
+        .presentationBackground(theme.color.surfaceSheet)
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .confirmationDialog(
@@ -1520,27 +1495,28 @@ private struct SettingsView: View {
             Text("Its call link leaves this phone. Shortcuts that call this line stop working.")
         }
         .sheet(item: $voiceLine) { entry in
-            VoicePickerSheet(line: entry.line, agentName: entry.name, callID: nil)
+            VoicePickerSheet(service: VoiceSettingsModel.lineService(entry.line), agentName: entry.name, callID: nil)
         }
     }
 
     // MARK: Lines
 
     private var linesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            label("voice lines")
+        VStack(alignment: .leading, spacing: theme.space.s2) {
+            label("Saved lines")
             if call.lines.entries.isEmpty {
                 Text("no lines yet. add the call link nanoclaw gave you below.")
-                    .font(Theme.mono(12))
-                    .foregroundStyle(Theme.muted)
+                    .textRole(theme.type.caption)
+                    .foregroundStyle(theme.color.textSecondary)
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: 0) {
                     ForEach(call.lines.entries) { entry in row(entry) }
                 }
+                .background(theme.color.surfaceGrouped, in: RoundedRectangle(cornerRadius: theme.radius.l))
                 Text("the picked line is the one the action button and \"talk to hey dan\" call. a shortcut can call any line by name.")
-                    .font(Theme.mono(11))
-                    .lineSpacing(3)
-                    .foregroundStyle(Theme.muted)
+                    .textRole(theme.type.micro)
+                    .lineSpacing(theme.space.s1)
+                    .foregroundStyle(theme.color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -1548,28 +1524,28 @@ private struct SettingsView: View {
 
     private func row(_ entry: VoiceLines.Entry) -> some View {
         let picked = entry.id == call.lines.selected?.id
-        return HStack(spacing: 4) {
+        return HStack(spacing: theme.space.s1) {
             Button {
                 call.selectLine(entry.id)
             } label: {
-                HStack(spacing: 12) {
-                    Circle()
-                        .strokeBorder(picked ? Theme.orange : Theme.outline, lineWidth: 2)
-                        .background(Circle().fill(picked ? Theme.orange : .clear).padding(5))
-                        .frame(width: 20, height: 20)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.agent?.lowercased() ?? "unnamed line")
-                            .font(Theme.sans(16, .medium))
-                            .foregroundStyle(entry.agent == nil ? Theme.muted : Theme.text)
-                        Text(picked ? "\(entry.line.host) · picked" : entry.line.host)
-                            .font(Theme.mono(11))
-                            .foregroundStyle(Theme.muted)
+                HStack(spacing: theme.space.s3) {
+                    VStack(alignment: .leading, spacing: theme.space.s0_5) {
+                        Text(entry.agent ?? "Unnamed line")
+                            .textRole(theme.type.body, theme.weight.medium)
+                            .foregroundStyle(entry.agent == nil ? theme.color.textSecondary : theme.color.textPrimary)
+                        Text(entry.line.host)
+                            .textRole(theme.type.micro)
+                            .foregroundStyle(theme.color.textSecondary)
                     }
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
+                    if picked {
+                        Image(systemName: "checkmark").foregroundStyle(theme.color.accentText)
+                            .accessibilityHidden(true)
+                    }
                 }
-                .frame(minHeight: 44)
+                .frame(minHeight: theme.control.touchTarget)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1583,54 +1559,50 @@ private struct SettingsView: View {
                 Button("Delete...", systemImage: "trash", role: .destructive) { deleting = entry }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.muted.opacity(naming == entry.id ? 0.4 : 1))
-                    .frame(width: 44, height: 44)
+                    .font(.system(size: theme.type.body.size))
+                    .foregroundStyle(theme.color.textSecondary.opacity(naming == entry.id ? 0.4 : 1))
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Actions for \(entry.name)")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 2)
-        .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(picked ? Theme.orange.opacity(0.07) : .clear))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(picked ? Theme.orange.opacity(0.55) : Theme.border, lineWidth: 1)
-        )
+        .padding(.leading, theme.space.s3)
+        .padding(.trailing, theme.space.s0_5)
+        .padding(.vertical, theme.space.s1)
     }
 
     // MARK: Add
 
     private var addSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            label("add a line")
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: theme.space.s2) {
+            label("Add a call link")
+            HStack(spacing: theme.space.s2_5) {
                 SecureField(
                     "",
                     text: $link,
-                    prompt: Text("https://voice.example.com/voice?t=...").foregroundStyle(Theme.screenDim)
+                    prompt: Text("https://voice.example.com/voice?t=...").foregroundStyle(theme.color.placeholder)
                 )
-                .font(Theme.mono(14))
-                .foregroundStyle(Theme.text)
-                .tint(Theme.orange)
+                .textRole(theme.type.footnote)
+                .foregroundStyle(theme.color.textPrimary)
+                .tint(theme.color.accentText)
                 .textContentType(.URL)
+                .focused($linkFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.done)
                 .onSubmit(add)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, theme.space.s3)
                 .frame(height: 46)
-                .modifier(InsetWell(radius: 6))
+                .background(theme.color.surfaceInput, in: RoundedRectangle(cornerRadius: theme.radius.field))
                 Button("add", action: add)
-                    .buttonStyle(KeyCapStyle(finish: .orange, height: 42))
+                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(theme.color.accent)
                     .frame(width: 72)
                     .disabled(link.isEmpty)
             }
             noteText
-                .font(Theme.mono(12))
-                .lineSpacing(3)
-                .foregroundStyle(Theme.muted)
+                .textRole(theme.type.caption)
+                .lineSpacing(theme.space.s1)
+                .foregroundStyle(theme.color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1638,12 +1610,12 @@ private struct SettingsView: View {
     @ViewBuilder private var noteText: some View {
         switch note {
         case .invalid:
-            Text("that is not a call link. it looks like https://<host>/voice?t=<token>.").foregroundStyle(Theme.error)
+            Text("that is not a call link. it looks like https://<host>/voice?t=<token>.").foregroundStyle(theme.color.danger)
         case .notSaved:
-            Text("the keychain did not take the link. try again.").foregroundStyle(Theme.error)
+            Text("the keychain did not take the link. try again.").foregroundStyle(theme.color.danger)
         case .unreadable:
             Text("the saved lines could not be read from the keychain, so nothing is saved over them. restart the phone, then add the link again.")
-                .foregroundStyle(Theme.error)
+                .foregroundStyle(theme.color.danger)
         case .asking:
             Text("asking the host who answers…")
         case let .named(agent):
@@ -1657,9 +1629,9 @@ private struct SettingsView: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(Theme.mono(11))
+            .textRole(theme.type.micro)
             .spacing(0.06, size: 11)
-            .foregroundStyle(Theme.muted)
+            .foregroundStyle(theme.color.textSecondary)
     }
 
     private func add() {

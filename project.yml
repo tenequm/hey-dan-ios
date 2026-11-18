@@ -10,13 +10,16 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.5.2"
+    MARKETING_VERSION: "0.6.0"
     # `just testflight` overrides this with a timestamp; uploads need a fresh build number.
     CURRENT_PROJECT_VERSION: "1"
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
     from: 2.17.0
+  MarkdownView:
+    url: https://github.com/Lakr233/MarkdownView
+    exactVersion: 4.8.5
   HeyDanCore:
     path: HeyDanCore
 targets:
@@ -27,14 +30,22 @@ targets:
       - path: HeyDan
         excludes: [Fonts]
       # A folder reference keeps each font's OFL.txt beside it in the bundle.
-      - path: HeyDan/Fonts
+      - path: HeyDan/Fonts/DMSans
         type: folder
         buildPhase: resources
       - path: HeyDanActivity/CallActivityAttributes.swift
     dependencies:
+      - package: MarkdownView
       - package: LiveKit
       - package: HeyDanCore
       - target: HeyDanActivity
+      - target: HeyDanNotificationService
+    entitlements:
+      path: HeyDan/HeyDan.entitlements
+      properties:
+        aps-environment: $(APS_ENVIRONMENT)
+        com.apple.developer.usernotifications.communication: true
+        com.apple.security.application-groups: [group.$(HEYDAN_BUNDLE_ID)]
     # The Simulator has no FaceTime app, and callservicesd ends every CallKit call it cannot open
     # `facetime://?showInCallUI=1` for ("no UI to host the call"). Simulator builds (Debug and Release) answer for that
     # scheme themselves, so CallKit keeps the call; no device build ever has it. Signing runs after this phase.
@@ -48,6 +59,11 @@ targets:
         showEnvVars: false
         script: |
           touch "$DERIVED_FILE_DIR/simulator-in-call-ui.stamp"
+          if [ "$CONFIGURATION" = Debug ]; then
+            plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          else
+            plutil -remove NSAppTransportSecurity "$TARGET_BUILD_DIR/$INFOPLIST_PATH" 2>/dev/null || true
+          fi
           [ "$PLATFORM_NAME" = iphonesimulator ] || exit 0
           plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"simulator-in-call-ui","CFBundleURLSchemes":["facetime"]}]' \
               "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
@@ -55,6 +71,8 @@ targets:
       path: HeyDan/Info.plist
       properties:
         CFBundleDisplayName: Hey Dan
+        HeyDanBadgeGroup: group.$(HEYDAN_BUNDLE_ID)
+        HeyDanAPSEnvironment: $(APS_ENVIRONMENT)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSMicrophoneUsageDescription: Hey Dan sends your voice to your NanoClaw agent during a call.
@@ -65,15 +83,22 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
+        NSUserActivityTypes: [INSendMessageIntent]
         UIAppFonts:
-          - Fonts/HankenGrotesk/HankenGrotesk[wght].ttf
-          - Fonts/IBMPlexMono/IBMPlexMono-Regular.ttf
-          - Fonts/IBMPlexMono/IBMPlexMono-Medium.ttf
+          - DMSans/DMSans-Regular.ttf
+          - DMSans/DMSans-Medium.ttf
+          - DMSans/DMSans-SemiBold.ttf
+          - DMSans/DMSans-Bold.ttf
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID)
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
   # The call's Live Activity: lock screen and Dynamic Island.
   HeyDanActivity:
     type: app-extension
@@ -100,7 +125,55 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Activity
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) ACTIVITY_EXTENSION
-  # Simulator checks of what used to need the phone (`just sim-checks`); never part of the app's build.
+  HeyDanNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - HeyDanNotificationService
+      - HeyDan/Shared/MessageNotification.swift
+      - HeyDan/Tokens.swift
+      - HeyDan/Theme.swift
+    dependencies:
+      - package: HeyDanCore
+    entitlements:
+      path: HeyDanNotificationService/HeyDanNotificationService.entitlements
+      properties:
+        com.apple.developer.usernotifications.communication: true
+        com.apple.security.application-groups: [group.$(HEYDAN_BUNDLE_ID)]
+    info:
+      path: HeyDanNotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Hey Dan
+        HeyDanBadgeGroup: group.$(HEYDAN_BUNDLE_ID)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).NotificationService
+        TARGETED_DEVICE_FAMILY: "1"
+  HeyDanTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: HeyDanTests
+      - path: HeyDanCore/Tests/HeyDanCoreTests/Resources/app-contract.fixtures.json
+        buildPhase: resources
+    dependencies:
+      - target: HeyDan
+      - package: HeyDanCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Tests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
+        INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/HeyDan.app/HeyDan
+        BUNDLE_LOADER: $(TEST_HOST)
+  # Simulator checks of what used to need the phone in hand.
   HeyDanChecks:
     type: bundle.ui-testing
     platform: iOS
@@ -113,12 +186,33 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Checks
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
+        INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TEST_TARGET_NAME: HeyDan
 schemes:
+  HeyDanTests:
+    build:
+      targets:
+        HeyDanTests: [test]
+    test:
+      config: Debug
+      targets: [HeyDanTests]
   HeyDanChecks:
     build:
       targets:
         HeyDanChecks: [test]
     test:
       config: Debug
+      preferredScreenCaptureFormat: screenshots
+      captureScreenshotsAutomatically: false
       targets: [HeyDanChecks]
+  HeyDanSimulatorTests:
+    build:
+      targets:
+        HeyDanTests: [test]
+        HeyDanChecks: [test]
+    test:
+      config: Debug
+      preferredScreenCaptureFormat: screenshots
+      captureScreenshotsAutomatically: false
+      targets: [HeyDanTests, HeyDanChecks]
