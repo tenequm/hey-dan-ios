@@ -56,7 +56,7 @@ struct ThreadView: View {
                 }
                 .lineLimit(1)
             }
-            ThreadCallButton(conversation: conversation)
+            ToolbarItemGroup(placement: .topBarTrailing) { ThreadCallButton(conversation: conversation) }
         }
         .tint(theme.color.accentText)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
