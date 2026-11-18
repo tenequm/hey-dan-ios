@@ -87,8 +87,11 @@ extension ChatController {
         runnerID = runID
         runner = Task {
             await deliver(token: token, host: host, deviceId: pairing.deviceId)
-            if token == generation, runnerID == runID { runner = nil }
-            if !active { endBackgroundDelivery() }
+            // Only the current runner: a stale one cancelled by a pairing switch must not end the new run's task.
+            if token == generation, runnerID == runID {
+                runner = nil
+                if !active { endBackgroundDelivery() }
+            }
         }
     }
     /// Only for sends that can go out now: a backoff or a held entry waits for the foreground.
