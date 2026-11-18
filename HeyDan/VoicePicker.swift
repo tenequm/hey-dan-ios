@@ -442,6 +442,7 @@ enum VoiceSample {
 }
 
 struct VoicePickerSheet: View {
+    @Environment(\.theme) private var theme
     let agentName: String
     let callID: UUID?
     @Environment(\.dismiss) private var dismiss
@@ -473,14 +474,22 @@ struct VoicePickerSheet: View {
         storedLineID = service.line.flatMap { line in CallController.shared.lines.entries.first { $0.line == line }?.id }
         model = VoiceSettingsModel(service: service)
         sample = SamplePlayback()
+        if case .paired = service.identity, callID == nil { _detent = State(initialValue: .large) }
     }
 
     var body: some View {
         NavigationStack(path: $path) {
-            summary
-                .navigationDestination(for: String.self) { _ in catalog }
+            Group {
+                if case let .paired(host, _, _) = model.service.identity, callID == nil {
+                    pairedSummary(host: host)
+                } else { summary }
+            }
+            .navigationDestination(for: String.self) { _ in catalog }
         }
         .controlSize(.regular)
+        .tint(theme.color.accentText)
+        .foregroundStyle(theme.color.textPrimary)
+        .presentationBackground(theme.color.surfaceSheet)
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackgroundInteraction(.enabled(upThrough: .medium))
@@ -526,11 +535,107 @@ struct VoicePickerSheet: View {
         }
     }
 
+    private func pairedSummary(host: URL) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: theme.space.s6) {
+                HStack {
+                    VStack(alignment: .leading, spacing: theme.space.s1) {
+                        Text("\(agentName)'s voice").textRole(theme.type.body, theme.weight.bold)
+                            .accessibilityIdentifier(AXID.pickerTitle)
+                        Text("Saved on \(host.host() ?? "host") · used by every paired phone")
+                            .textRole(theme.type.label).foregroundStyle(theme.color.textSecondary)
+                    }
+                    Spacer()
+                    GlassIconButton(title: "Close", systemImage: "xmark") {
+                        if model.hasUnsavedChanges { closing = true } else { dismiss() }
+                    }
+                    .accessibilityIdentifier(AXID.pickerClose)
+                }
+                if model.loading { ProgressView("Loading voice settings") }
+                if let failure = model.loadFailure {
+                    Text(failure.message).foregroundStyle(theme.color.danger)
+                    Button("Retry") { Task { await model.load() } }.accessibilityIdentifier(AXID.pickerRetry)
+                }
+                if let view = model.view, let draft = model.draft {
+                    SettingsSection("Provider") {
+                        ForEach(view.providers, id: \.id) { provider in
+                            choice(provider.name, subtitle: provider.available ? "Configured on the host" : "Not configured on the host",
+                                   selected: provider.id == draft.provider) { model.selectProvider(provider.id) }
+                                .disabled(!provider.available || model.saving || model.invalidated)
+                        }
+                        fieldFailure("provider")
+                    }
+                    .accessibilityIdentifier(AXID.pickerProvider)
+                    SettingsSection("Voice") {
+                        ForEach(model.voices.prefix(3), id: \.id) { voice in
+                            choice(voice.name, subtitle: voice.description ?? voice.language, selected: draft.voice == voice.id) {
+                                model.setVoice(voice)
+                            }
+                        }
+                        Button { path.append("catalog") } label: {
+                            SettingsRow(title: "Choose a voice", icon: "waveform", detail: model.draftVoiceLabel.title, navigates: true)
+                        }
+                        .accessibilityIdentifier(AXID.pickerVoice)
+                        fieldFailure("voice")
+                    }
+                    .disabled(model.saving || model.invalidated)
+                    SettingsSection {
+                        Picker("Model", selection: Binding(get: { model.draft?.model ?? model.provider?.default.model }, set: model.setModel)) {
+                            ForEach(model.provider?.models ?? [], id: \.self) { Text(model.modelName($0)).tag(Optional($0)) }
+                            if let id = draft.model, !(model.provider?.models.contains(id) ?? false) { Text(model.modelName(id)).tag(Optional(id)) }
+                        }
+                        .padding(theme.space.s4).accessibilityIdentifier(AXID.pickerModel)
+                        fieldFailure("model")
+                        Menu {
+                            Button("All languages") { model.language = "" }
+                            ForEach(model.languages, id: \.self) { code in Button(code) { model.language = code } }
+                            Button("Enter language code...") { customLanguage = model.language; languagePrompt = true }
+                        } label: {
+                            SettingsRow(title: "Language", icon: "globe", detail: model.language.isEmpty ? "All" : model.language, navigates: true)
+                        }
+                    }
+                    .disabled(model.saving || model.invalidated)
+                    if let saved = model.savedVoice {
+                        voiceRow("Saved for next calls", saved.name, caption: saved.label.caption(saved.id))
+                            .accessibilityIdentifier(AXID.pickerSaved)
+                        if model.namesUnavailable {
+                            Button("Retry voice names") { Task { await model.load() } }.accessibilityIdentifier(AXID.pickerNameRetry)
+                        }
+                    }
+                    Button("Reset saved voice to server default", role: .destructive) { resetting = true }
+                        .disabled(model.saving || model.invalidated).accessibilityIdentifier(AXID.pickerReset)
+                }
+            }
+            .buttonStyle(.plain).padding(theme.space.s4)
+        }
+        .background(theme.color.surfaceSheet)
+        .toolbarVisibility(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .bottom) { commits.background(theme.color.surfaceSheet) }
+        .task(id: "\(path.isEmpty)-\(model.draft?.provider ?? "")-\(model.language)") {
+            if path.isEmpty, model.provider != nil { await model.loadCatalog(debounce: false) }
+        }
+    }
+
+    private func choice(_ title: String, subtitle: String?, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: theme.space.s3) {
+                VStack(alignment: .leading, spacing: theme.space.s1) {
+                    Text(title).textRole(theme.type.body)
+                    if let subtitle { Text(subtitle).textRole(theme.type.footnote).foregroundStyle(theme.color.textSecondary) }
+                }
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(theme.color.accentText) }
+            }
+            .padding(.horizontal, theme.space.s4).padding(.vertical, theme.space.s3).contentShape(Rectangle())
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
     private var summary: some View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    Text("\(agentName)'s voice").font(.headline).accessibilityIdentifier(AXID.pickerTitle)
+                    Text("\(agentName)'s voice").textRole(theme.type.headline, theme.weight.bold).accessibilityIdentifier(AXID.pickerTitle)
                     if let saved = model.savedVoice {
                         voiceRow("Saved for next calls", saved.name, caption: saved.label.caption(saved.id), loading: model.loading)
                             .accessibilityIdentifier(AXID.pickerSaved)
@@ -553,12 +658,12 @@ struct VoicePickerSheet: View {
                                 .accessibilityIdentifier(AXID.pickerNext)
                         }
                         Text("The current spoken line finishes unchanged. These are configured voices; the worker may use a fallback.")
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .textRole(theme.type.footnote).foregroundStyle(theme.color.textSecondary)
                     }
                 }
                 if model.loading { ProgressView("Loading voice settings") }
                 if let failure = model.loadFailure {
-                    Text(failure.message).foregroundStyle(.red)
+                    Text(failure.message).foregroundStyle(theme.color.danger)
                     Button("Retry") { Task { await model.load() } }.accessibilityIdentifier(AXID.pickerRetry)
                 }
                 if let view = model.view, let draft = model.draft {
@@ -600,10 +705,11 @@ struct VoicePickerSheet: View {
                     .disabled(model.saving || model.invalidated)
                     if callID != nil && !liveAvailable {
                         Text(callID == call.liveCallID ? "This worker does not report voice settings. Live switching is unavailable." : "This call has ended. You can still save for next calls.")
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .textRole(theme.type.footnote).foregroundStyle(theme.color.textSecondary)
                     }
                 }
             }
+            .scrollContentBackground(.hidden).background(theme.color.surfaceSheet)
             .clipped()
         }
         .navigationTitle("\(agentName)'s voice")
@@ -632,18 +738,18 @@ struct VoicePickerSheet: View {
 
     @ViewBuilder private func fieldFailure(_ field: String) -> some View {
         if case let .invalid(name) = model.saveFailure, name == field || name == "tts" {
-            Text(model.saveFailure?.message ?? "").font(.footnote).foregroundStyle(.red)
+            Text(model.saveFailure?.message ?? "").textRole(theme.type.footnote).foregroundStyle(theme.color.danger)
         }
     }
 
     private var commits: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: theme.space.s2) {
             if model.saveResult != nil || liveResult != nil {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: theme.space.s2) {
                     if let result = model.saveResult { Text("Save: \(result)") }
                     if let result = liveResult { Text("This call: \(result)") }
                 }
-                .font(.footnote)
+                .textRole(theme.type.footnote)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine).accessibilityIdentifier(AXID.pickerResult)
             }
@@ -660,15 +766,15 @@ struct VoicePickerSheet: View {
     @ViewBuilder private var commitButtons: some View {
         if callID != nil {
             Button(requesting ? "Requesting..." : "Use for this call") { Task { await useForCall() } }
-                .buttonStyle(.glassProminent).frame(minHeight: 44)
+                .buttonStyle(.glassProminent).frame(minHeight: theme.control.touchTarget)
                 .disabled(!liveAvailable || requesting || model.draft == nil || model.provider?.available != true)
                 .accessibilityIdentifier(AXID.pickerUseForCall)
             Button(model.saving ? "Saving..." : "Save for next calls") { Task { await model.save() } }
-                .buttonStyle(.glass).frame(minHeight: 44).disabled(!model.canSave)
+                .buttonStyle(.glass).frame(minHeight: theme.control.touchTarget).disabled(!model.canSave)
                 .accessibilityIdentifier(AXID.pickerSave)
         } else {
-            Button(model.saving ? "Saving..." : "Save for next calls") { Task { await model.save() } }
-                .buttonStyle(.glassProminent).frame(minHeight: 44).disabled(!model.canSave)
+            Button(model.saving ? "Saving..." : "Save voice") { Task { await model.save() } }
+                .buttonStyle(PanelActionStyle()).disabled(!model.canSave)
                 .accessibilityIdentifier(AXID.pickerSave)
         }
     }
@@ -711,9 +817,10 @@ struct VoicePickerSheet: View {
                     ProgressView("More voices").id(next).onAppear { Task { await model.loadNext() } }
                 }
             }
-            if samplesUnavailable { Text("Use for this call to hear it on the next reply").font(.footnote) }
-            if let failure = sample.failure { Text(failure).foregroundStyle(.red) }
+            if samplesUnavailable { Text("Use for this call to hear it on the next reply").textRole(theme.type.footnote) }
+            if let failure = sample.failure { Text(failure).foregroundStyle(theme.color.danger) }
         }
+        .scrollContentBackground(.hidden).background(theme.color.surfaceSheet)
         .navigationTitle("Choose a voice")
         .searchable(text: $model.query, prompt: "Search voices")
         .accessibilityIdentifier(AXID.pickerSearch)
@@ -748,23 +855,23 @@ struct VoicePickerSheet: View {
                 path.removeLast()
             } label: {
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: theme.space.s1) {
                         Text(voice.name)
                         let traits = [voice.language, voice.gender?.capitalized].compactMap(\.self)
-                        if !traits.isEmpty { Text(traits.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
-                        if let description = voice.description { Text(description).font(.caption).foregroundStyle(.secondary) }
-                        if voice.preview == nil { Text("No sample available").font(.caption).foregroundStyle(.secondary) }
+                        if !traits.isEmpty { Text(traits.joined(separator: ", ")).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary) }
+                        if let description = voice.description { Text(description).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary) }
+                        if voice.preview == nil { Text("No sample available").textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary) }
                     }
                     Spacer()
                     if voice.id == model.draft?.voice { Image(systemName: "checkmark").accessibilityLabel("Selected") }
                 }
-                .frame(minHeight: 44)
+                .frame(minHeight: theme.control.touchTarget)
             }
             .buttonStyle(.plain)
             if voice.preview != nil {
                 Button {
                     if sample.playing == voice.id { VoiceSample.release(sample) } else { VoiceSample.play(voice, using: sample) }
-                } label: { Image(systemName: sample.playing == voice.id ? "stop.fill" : "play.fill").frame(width: 44, height: 44) }
+                } label: { Image(systemName: sample.playing == voice.id ? "stop.fill" : "play.fill").frame(width: theme.control.touchTarget, height: theme.control.touchTarget) }
                     .buttonStyle(.glass).disabled(samplesUnavailable || model.invalidated)
                     .accessibilityLabel("Voice sample: \(voice.name)")
                     .accessibilityHint(samplesUnavailable ? "Use for this call to hear it on the next reply" : "Sample does not demonstrate the selected model")
@@ -843,15 +950,16 @@ private extension VoiceLabel {
 
 /// A voice name; without one, the id shows under the placeholder as a small caption VoiceOver skips.
 private struct VoiceName: View {
+    @Environment(\.theme) private var theme
     let title: String
     let caption: String?
     var alignment: HorizontalAlignment = .trailing
 
     var body: some View {
-        VStack(alignment: alignment, spacing: 2) {
+        VStack(alignment: alignment, spacing: theme.space.s0_5) {
             Text(title)
             if let caption {
-                Text(caption).font(.caption2.monospaced()).foregroundStyle(.secondary).accessibilityHidden(true)
+                Text(caption).textRole(theme.type.micro, mono: true).foregroundStyle(theme.color.textSecondary).accessibilityHidden(true)
             }
         }
         .multilineTextAlignment(alignment == .leading ? .leading : .trailing)

@@ -61,6 +61,13 @@ struct MessageRow: View {
     var retry: (String) -> Void = { _ in }
     @State private var confirmsRetry = false
 
+    private var visibleCard: Card? {
+        guard message.role == .agent, let card = message.card,
+              card.title?.isEmpty == false || card.description?.isEmpty == false ||
+              !card.parts.isEmpty || card.actions.contains(where: { $0.webURL != nil }) else { return nil }
+        return card
+    }
+
     var body: some View {
         // Not only a role filter: without this branch, a sent message that takes over its outbox row's ForEach id
         // never reaches UI checks with its own identifier and label (ChatComposerChecks.testTextSend).
@@ -71,15 +78,17 @@ struct MessageRow: View {
                     if !message.text.isEmpty {
                         Text(message.text).textSelection(.enabled).modifier(UserBubble())
                     }
+                } else if let card = visibleCard {
+                    RichCard(card: card)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier(AXID.card(message.id))
                 } else if !message.text.isEmpty {
                     MessageBody(text: message.text)
                 }
                 ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
                 HStack(spacing: theme.space.s2) {
-                    if message.voice == .caller {
-                        Label("From a call", systemImage: "mic")
-                    } else if message.voice == .spoken {
-                        Label("Spoken", systemImage: "speaker.wave.2")
+                    if message.voice == .caller || message.voice == .spoken {
+                        Label("Spoken", systemImage: message.voice == .caller ? "mic" : "speaker.wave.2")
                     }
                     ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
                         Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
@@ -100,7 +109,7 @@ struct MessageRow: View {
             .foregroundStyle(theme.color.textPrimary)
             .padding(.leading, outgoing ? theme.space.s10 : 0)
             .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: visibleCard == nil ? .combine : .contain)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
                 Button("Send again") { if let id = message.clientId { retry(id) } }
@@ -203,18 +212,24 @@ struct OutboxRow: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: theme.space.s1_5) {
             if !entry.request.text.isEmpty { Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()) }
-            Label(entry.state.label, systemImage: entry.state == .failed ? "exclamationmark.circle" : "clock")
-                .textRole(theme.type.caption).foregroundStyle(entry.state == .failed ? theme.color.danger : theme.color.textSecondary)
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
                 Text(attachment.name)
             }
             if let error = entry.lastServerError { Text(error.message).foregroundStyle(theme.color.danger) }
-            if entry.state == .failed || entry.state == .outcomeUnknown {
-                Button("Retry") {
-                    if entry.state == .outcomeUnknown { confirmsRetry = true }
-                    else { retry(entry.request.clientId) }
+            HStack(spacing: theme.space.s1) {
+                Label(entry.state.label, systemImage: entry.state == .failed ? "exclamationmark.circle" : "clock")
+                    .foregroundStyle(entry.state == .failed ? theme.color.danger : theme.color.textSecondary)
+                if entry.state == .failed || entry.state == .outcomeUnknown {
+                    Text("·").foregroundStyle(theme.color.textTertiary)
+                    Button("Retry") {
+                        if entry.state == .outcomeUnknown { confirmsRetry = true }
+                        else { retry(entry.request.clientId) }
+                    }
+                    .foregroundStyle(theme.color.accentText)
+                    .textRole(theme.type.caption, theme.weight.bold)
                 }
             }
+            .textRole(theme.type.caption)
             if entry.state == .held { Button("Discard", role: .destructive) { discard(entry.request.clientId) } }
         }
         .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)

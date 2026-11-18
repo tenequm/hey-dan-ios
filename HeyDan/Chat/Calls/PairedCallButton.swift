@@ -24,23 +24,11 @@ struct PairedCallButton: View {
 }
 
 struct PairedCallCover: View {
-    @Environment(\.theme) private var theme
     let target: CallTarget
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        // Its own row: over the call screen's header it would sit on the settings gear and the call clock.
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                GlassIconButton(title: "Close", systemImage: "xmark") { dismiss() }
-                    .padding(.horizontal, theme.space.s5)
-                    .padding(.top, theme.space.s2)
-                    .accessibilityIdentifier("chat.call.close")
-            }
-            ContentView(pairedTarget: target)
-        }
-        .background(theme.color.surface.ignoresSafeArea())
+        ContentView(pairedTarget: target, minimize: { dismiss() })
         .onAppear {
             if let paired = target.paired, ChatController.shared.host == paired.host {
                 ChatController.shared.openConversation(paired.conversation.id)
@@ -57,9 +45,7 @@ struct ThreadCallButton: View {
         Button("Settings", systemImage: "gearshape") { showsSettings = true }
             .sheet(isPresented: $showsSettings) {
                 NavigationStack {
-                    Form { PairedSettingsSection() }
-                        .navigationTitle("Settings")
-                        .toolbar { Button("Done") { showsSettings = false } }
+                    PairedSettingsSection(close: { showsSettings = false })
                 }
             }
         if let host = chat.host, let pairing = chat.pairing {

@@ -287,6 +287,158 @@ nonisolated public struct Reaction: Sendable, Equatable, Codable {
     public var `by`: Role
 }
 
+nonisolated public struct Card: Sendable, Equatable, Codable {
+    public let title: String?
+    public let description: String?
+    public let parts: [CardPart]
+    public let actions: [CardAction]
+
+    public init(title: String?, description: String?, parts: [CardPart], actions: [CardAction]) {
+        self.title = title
+        self.description = description
+        self.parts = parts
+        self.actions = actions
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        parts = try c.decode([CardElement<CardPart>].self, forKey: .parts).compactMap(\.value)
+        actions = try c.decode([CardElement<CardAction>].self, forKey: .actions).compactMap(\.value)
+    }
+}
+
+// Each element consumes its own decoder so an unknown or malformed part cannot discard its siblings.
+nonisolated private struct CardElement<Value: Decodable>: Decodable {
+    let value: Value?
+    init(from decoder: any Decoder) throws { value = try? Value(from: decoder) }
+}
+
+nonisolated public struct CardAction: Sendable, Equatable, Codable {
+    public let label: String
+    public let url: String
+    public let style: String
+
+    public init(label: String, url: String, style: String) {
+        self.label = label
+        self.url = url
+        self.style = style
+    }
+
+    public var webURL: URL? {
+        guard let link = URL(string: url), ["http", "https"].contains(link.scheme?.lowercased()),
+              let host = link.host, !host.isEmpty else { return nil }
+        return link
+    }
+}
+
+nonisolated public enum CardPart: Sendable, Equatable, Codable {
+    nonisolated public struct Field: Sendable, Equatable, Codable {
+        public let label: String
+        public let value: String
+        public init(label: String, value: String) {
+            self.label = label
+            self.value = value
+        }
+    }
+
+    case fields([Field])
+    case table(headers: [String], rows: [[String]], align: [String]?, caption: String?)
+    case chart(title: String, chart: CardChart)
+    case divider
+    case text(content: String, style: String)
+
+    private enum Keys: CodingKey { case type, fields, headers, rows, align, caption, title, chart, content, style }
+    private enum Kind: String, Codable { case fields, table, chart, divider, text }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        switch try c.decode(Kind.self, forKey: .type) {
+        case .fields: self = .fields(try c.decode([Field].self, forKey: .fields))
+        case .table:
+            self = try .table(headers: c.decode([String].self, forKey: .headers),
+                              rows: c.decode([[String]].self, forKey: .rows),
+                              align: c.decodeIfPresent([String].self, forKey: .align),
+                              caption: c.decodeIfPresent(String.self, forKey: .caption))
+        case .chart:
+            self = try .chart(title: c.decode(String.self, forKey: .title), chart: c.decode(CardChart.self, forKey: .chart))
+        case .divider: self = .divider
+        case .text:
+            self = try .text(content: c.decode(String.self, forKey: .content), style: c.decode(String.self, forKey: .style))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case .fields(let fields):
+            try c.encode(Kind.fields, forKey: .type)
+            try c.encode(fields, forKey: .fields)
+        case let .table(headers, rows, align, caption):
+            try c.encode(Kind.table, forKey: .type)
+            try c.encode(headers, forKey: .headers)
+            try c.encode(rows, forKey: .rows)
+            try c.encode(align, forKey: .align)
+            try c.encode(caption, forKey: .caption)
+        case let .chart(title, chart):
+            try c.encode(Kind.chart, forKey: .type)
+            try c.encode(title, forKey: .title)
+            try c.encode(chart, forKey: .chart)
+        case .divider: try c.encode(Kind.divider, forKey: .type)
+        case let .text(content, style):
+            try c.encode(Kind.text, forKey: .type)
+            try c.encode(content, forKey: .content)
+            try c.encode(style, forKey: .style)
+        }
+    }
+}
+
+nonisolated public enum CardChart: Sendable, Equatable, Codable {
+    nonisolated public struct Segment: Sendable, Equatable, Codable {
+        public let label: String
+        public let value: Double
+    }
+
+    nonisolated public struct Series: Sendable, Equatable, Codable {
+        public let name: String
+        public let values: [Double]
+        public init(name: String, values: [Double]) {
+            self.name = name
+            self.values = values
+        }
+    }
+
+    public enum Plot: String, Sendable, Codable { case bar, line, area }
+    case pie([Segment])
+    case plot(Plot, categories: [String], series: [Series])
+
+    private enum Keys: CodingKey { case type, segments, categories, series }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        if try c.decode(String.self, forKey: .type) == "pie" {
+            self = .pie(try c.decode([Segment].self, forKey: .segments))
+        } else {
+            self = try .plot(c.decode(Plot.self, forKey: .type), categories: c.decode([String].self, forKey: .categories),
+                             series: c.decode([Series].self, forKey: .series))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case .pie(let segments):
+            try c.encode("pie", forKey: .type)
+            try c.encode(segments, forKey: .segments)
+        case let .plot(type, categories, series):
+            try c.encode(type, forKey: .type)
+            try c.encode(categories, forKey: .categories)
+            try c.encode(series, forKey: .series)
+        }
+    }
+}
+
 nonisolated public struct Message: Sendable, Equatable, Codable {
     public var `kind`: Kind
     public var `id`: String
@@ -295,6 +447,7 @@ nonisolated public struct Message: Sendable, Equatable, Codable {
     public var `seq`: Int64
     public var `role`: Role
     public var `text`: String
+    public var card: Card?
     public var `files`: [FileAttachment]
     public var `reactions`: [Reaction]
     public var `voice`: Voice?
@@ -303,7 +456,7 @@ nonisolated public struct Message: Sendable, Equatable, Codable {
     public var `deliveryError`: ErrorBody?
     public var `createdAt`: Int64
     public var `editedAt`: Int64?
-    public init(`kind`: Kind, `id`: String, `conversationId`: String, `order`: Int64, `seq`: Int64, `role`: Role, `text`: String, `files`: [FileAttachment], `reactions`: [Reaction], `voice`: Voice? = nil, `clientId`: String? = nil, `delivery`: Delivery? = nil, `deliveryError`: ErrorBody? = nil, `createdAt`: Int64, `editedAt`: Int64? = nil) {
+    public init(`kind`: Kind, `id`: String, `conversationId`: String, `order`: Int64, `seq`: Int64, `role`: Role, `text`: String, card: Card? = nil, `files`: [FileAttachment], `reactions`: [Reaction], `voice`: Voice? = nil, `clientId`: String? = nil, `delivery`: Delivery? = nil, `deliveryError`: ErrorBody? = nil, `createdAt`: Int64, `editedAt`: Int64? = nil) {
         self.`kind` = `kind`
         self.`id` = `id`
         self.`conversationId` = `conversationId`
@@ -311,6 +464,7 @@ nonisolated public struct Message: Sendable, Equatable, Codable {
         self.`seq` = `seq`
         self.`role` = `role`
         self.`text` = `text`
+        self.card = card
         self.`files` = `files`
         self.`reactions` = `reactions`
         self.`voice` = `voice`

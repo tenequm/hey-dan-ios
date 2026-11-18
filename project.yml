@@ -129,7 +129,11 @@ targets:
   HeyDanNotificationService:
     type: app-extension
     platform: iOS
-    sources: [HeyDanNotificationService, HeyDan/Shared/MessageNotification.swift]
+    sources:
+      - HeyDanNotificationService
+      - HeyDan/Shared/MessageNotification.swift
+      - HeyDan/Tokens.swift
+      - HeyDan/Theme.swift
     dependencies:
       - package: HeyDanCore
     entitlements:
@@ -198,4 +202,16 @@ schemes:
         HeyDanChecks: [test]
     test:
       config: Debug
+      preferredScreenCaptureFormat: screenshots
+      captureScreenshotsAutomatically: false
       targets: [HeyDanChecks]
+  HeyDanSimulatorTests:
+    build:
+      targets:
+        HeyDanTests: [test]
+        HeyDanChecks: [test]
+    test:
+      config: Debug
+      preferredScreenCaptureFormat: screenshots
+      captureScreenshotsAutomatically: false
+      targets: [HeyDanTests, HeyDanChecks]

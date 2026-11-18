@@ -13,11 +13,17 @@ import SwiftUI
 @main
 struct HeyDanApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @State private var pairedHost: Pairings.Entry?
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #if DEBUG
+    private let uiTest = ProcessInfo.processInfo.environment["HEYDAN_UITEST"] == "1"
+    #endif
+
     init() {
         // Before anything touches LiveKit: its logger is fixed on first use. Debug builds keep the SDK's own story of
         // every call (subsystem io.livekit.sdk) next to the app's; Release keeps LiveKit's default, info and above.
         #if DEBUG
+        if uiTest { UIView.setAnimationsEnabled(false) }
         LiveKitSDK.setLogLevel(.debug)
         #endif
         #if targetEnvironment(simulator)
@@ -41,6 +47,7 @@ struct HeyDanApp: App {
                 root
                 #endif
             }
+                .environment(\.pairingConfirmation, $pairedHost)
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
                 .fullScreenCover(isPresented: Binding(
                     get: { CallController.shared.showsPairedCall },
@@ -54,19 +61,24 @@ struct HeyDanApp: App {
                 .environment(CallController.shared)
                 #if DEBUG
                 .task { await Self.debugScript() }
+                .transaction { if uiTest { $0.disablesAnimations = true; $0.animation = nil } }
                 #endif
         }
     }
 
     #if DEBUG
     @ViewBuilder private var debugRoot: some View {
-        if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] { Gallery(name: name) }
-        else { root }
+        if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
+            if name.hasPrefix("List/") { ConversationListSpecimen(name: name) }
+            else { Gallery(name: name) }
+        } else { root }
     }
     #endif
 
     @ViewBuilder private var root: some View {
-        if ChatController.shared.pairing != nil {
+        if let pairedHost {
+            PairingView(paired: pairedHost)
+        } else if ChatController.shared.pairing != nil {
             ConversationList()
         } else {
             #if DEBUG
