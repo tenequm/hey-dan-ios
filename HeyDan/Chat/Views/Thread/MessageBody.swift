@@ -36,6 +36,16 @@ struct MessageBody: View {
         markdown.colors.codeBlockBarBackground = UIColor(theme.color.codeSurface)
         markdown.table.headerBackgroundColor = UIColor(theme.color.surfaceCard)
         markdown.table.borderColor = UIColor(theme.color.border)
+        markdown.syntax.comment = UIColor(theme.color.syntaxComment)
+        markdown.syntax.keyword = UIColor(theme.color.syntaxKeyword)
+        markdown.syntax.string = UIColor(theme.color.syntaxString)
+        markdown.syntax.number = UIColor(theme.color.syntaxNumber)
+        markdown.syntax.type = UIColor(theme.color.syntaxType)
+        markdown.syntax.attribute = UIColor(theme.color.syntaxFunction)
+        markdown.syntax.meta = UIColor(theme.color.syntaxKeyword)
+        markdown.syntax.variable = UIColor(theme.color.textPrimary)
+        markdown.spacings.paragraph = theme.space.s2
+        markdown.spacings.headingBefore = theme.space.s2
         return markdown
     }
 }
