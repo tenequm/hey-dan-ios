@@ -43,7 +43,19 @@ struct StatusPill: View {
     }
 }
 
+private struct UserBubble: ViewModifier {
+    @Environment(\.theme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, theme.space.s2_5)
+            .padding(.horizontal, theme.space.s3_5)
+            .background(theme.color.userBubble, in: RoundedRectangle(cornerRadius: theme.radius.bubble))
+    }
+}
+
 struct MessageRow: View {
+    @Environment(\.theme) private var theme
     let message: Message
     var outboxState: Outbox.State?
     var retry: (String) -> Void = { _ in }
@@ -53,14 +65,17 @@ struct MessageRow: View {
         // Not only a role filter: without this branch, a sent message that takes over its outbox row's ForEach id
         // never reaches UI checks with its own identifier and label (ChatComposerChecks.testTextSend).
         if message.role == .user || message.role == .agent || message.role == .host {
-            VStack(alignment: .leading, spacing: 10) {
-                if message.role == .user {
-                    Text(message.text).textSelection(.enabled)
-                } else {
+            let outgoing = message.role == .user
+            VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
+                if outgoing {
+                    if !message.text.isEmpty {
+                        Text(message.text).textSelection(.enabled).modifier(UserBubble())
+                    }
+                } else if !message.text.isEmpty {
                     MessageBody(text: message.text)
                 }
                 ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
-                HStack {
+                HStack(spacing: theme.space.s2) {
                     if message.voice == .caller {
                         Label("From a call", systemImage: "mic")
                     } else if message.voice == .spoken {
@@ -70,15 +85,21 @@ struct MessageRow: View {
                         Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
                     }
                     if message.editedAt != nil { Text("Edited") }
+                    if !outgoing {
+                        Text(Date(timeIntervalSince1970: Double(message.createdAt) / 1000), style: .time)
+                        if !message.text.isEmpty {
+                            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+                                .labelStyle(.iconOnly)
+                        }
+                    }
                 }
-                .font(Theme.sans(12)).foregroundStyle(Theme.muted)
-                if message.role == .user { delivery }
+                .textRole(theme.type.caption).foregroundStyle(theme.color.textTertiary)
+                if outgoing { delivery }
             }
-            .font(Theme.sans(16))
-            .foregroundStyle(Theme.text)
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(message.role == .user ? Theme.card : Theme.page, in: RoundedRectangle(cornerRadius: 14))
+            .textRole(theme.type.body)
+            .foregroundStyle(theme.color.textPrimary)
+            .padding(.leading, outgoing ? theme.space.s10 : 0)
+            .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
@@ -89,13 +110,13 @@ struct MessageRow: View {
 
     @ViewBuilder private var delivery: some View {
         if let outboxState, ![.stored, .routed, .reached, .failed, .outcomeUnknown].contains(outboxState) {
-            Text(outboxState.label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+            Text(outboxState.label).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
         } else if let state = message.delivery {
             switch state {
             case .stored, .routed, .reached:
-                Text(state.rawValue.capitalized).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+                Text(state.rawValue.capitalized).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             case .failed, .outcomeUnknown:
-                if let error = message.deliveryError { Text(error.message).foregroundStyle(Theme.error) }
+                if let error = message.deliveryError { Text(error.message).foregroundStyle(theme.color.danger) }
                 if let id = message.clientId {
                     Button("Send again") {
                         if state == .outcomeUnknown { confirmsRetry = true } else { retry(id) }
