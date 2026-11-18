@@ -68,6 +68,31 @@ struct ThreadStoreTests {
         #expect(try await outbox.load(host: host, deviceId: "device") == [entry])
     }
 
+    @MainActor @Test func unknownCachedItemRefetchesHistoryAtTheSameSequence() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = FixtureAppService()
+        let store = SwiftDataThreadStore(inMemory: true)
+        let unknown = ThreadEntity.unknown(.object(["kind": .string("message"), "id": .string("msg_2101"),
+            "seq": .integer(2), "order": .integer(2), "conversationId": .string("conv_taylor01")]))
+        var snapshot = ThreadSnapshot(cursor: 10, entities: [unknown])
+        snapshot.historyFloors = ["conv_taylor01": 1, "other": 3]
+        try await store.save(snapshot, host: host, deviceId: "dev_fixture")
+        let chat = await paired(service, store: store, files: OutboxFile(root: root))
+        #expect(chat.historyFloors == ["other": 3])
+        #expect(chat.reducer.entities.isEmpty)
+        chat.openConversation("conv_taylor01")
+        await chat.loadHistory(newest: true)
+        guard case .message(let message) = chat.reducer.entities["msg_2101"] else {
+            Issue.record("Expected the refetched message")
+            return
+        }
+        #expect(message.seq == 2)
+        var reducer = ThreadReducer()
+        reducer.upsert(unknown)
+        #expect(reducer.upsert(.message(message)) == ["msg_2101"])
+        #expect(reducer.upsert(unknown).isEmpty)
+    }
+
     @MainActor @Test func offlineEnqueueReconnectAndRestore() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SwiftDataThreadStore(inMemory: true)

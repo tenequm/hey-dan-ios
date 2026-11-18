@@ -14,3 +14,6 @@ Build, run and test commands are in [README.md](README.md). These are the traps 
   (`build/HeyDanSimulatorTests.key`); a changed tree rebuilds, an unchanged one reuses the products.
 - **UI checks run without animations.** Checks launch the app with `HEYDAN_UITEST=1`, which DEBUG builds read to turn
   animations off; Release never reads it. Test videos are off; the checks' own screenshots land in `build/checks`.
+- Bump `SwiftDataThreadStore.schemaVersion` when the thread decoder gains a field, card part or entity kind.
+  Cached JSON contains only what its writer understood. The version change rebuilds history from the host and
+  preserves the outbox. A cached unknown item also invalidates that thread's pages on the next load.

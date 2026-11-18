@@ -26,7 +26,7 @@ import SwiftData
         self.json = json
     }
 
-    static func key(device: String, kind: String, entityId: String) -> String { device + ":" + kind + ":" + entityId }
+    static func key(device: String, kind: String, entityId: String) -> String { device + ":" + (kind == "conversation" ? kind : "item") + ":" + entityId }
 }
 
 @Model final class CachedStreamCursor {
@@ -63,7 +63,7 @@ nonisolated enum StoreLocation {
 }
 
 actor SwiftDataThreadStore: ThreadStore {
-    static let schemaVersion = 1
+    static let schemaVersion = 2
     private let root: URL
     private let version: Int
     private let inMemory: Bool
@@ -151,11 +151,24 @@ actor SwiftDataThreadStore: ThreadStore {
         var result = ThreadSnapshot(cursor: cursor?.cursor)
         if let data = cursor?.historyFloors { result.historyFloors = try JSONDecoder().decode([String: Int64].self, from: data) }
         let decoder = JSONDecoder()
+        let stale = Set(records.filter { $0.kind == "unknown" }.map(\.conversationId))
         for record in records {
             if record.kind == "conversation" {
                 result.conversations.append(try decoder.decode(Conversation.self, from: record.json))
+            } else if stale.contains(record.conversationId) {
+                modelContext.delete(record)
             } else {
                 result.entities.append(try decoder.decode(ThreadEntity.self, from: record.json))
+            }
+        }
+        if !stale.isEmpty {
+            result.historyFloors = result.historyFloors.filter { !stale.contains($0.key) }
+            do {
+                cursor?.historyFloors = try JSONEncoder().encode(result.historyFloors)
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                throw error
             }
         }
         return result
@@ -177,7 +190,8 @@ actor SwiftDataThreadStore: ThreadStore {
                 switch entity {
                 case .message(let value): rows.append((value.id, value.conversationId, "message", value.order, value.seq, entity))
                 case .question(let value): rows.append((value.id, value.conversationId, "question", value.order, value.seq, entity))
-                case .unknown: continue
+                case .unknown:
+                    if let key = entity.identity { rows.append((key.id, key.conversationId, "unknown", key.order, key.seq, entity)) }
                 }
             }
             let device = StoreLocation.digest(deviceId)
@@ -187,7 +201,8 @@ actor SwiftDataThreadStore: ThreadStore {
                 predicate: #Predicate { keys.contains($0.key) })).map { ($0.key, $0) }) { first, _ in first }
             for (key, row) in zip(keys, rows) {
                 if let record = existing[key] {
-                    guard row.seq > record.seq else { continue }
+                    guard row.seq > record.seq || (row.seq == record.seq && record.kind == "unknown" && row.kind != "unknown") else { continue }
+                    record.kind = row.kind
                     record.json = try encoder.encode(row.value)
                     record.seq = row.seq
                     record.order = row.order
