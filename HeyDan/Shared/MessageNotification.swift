@@ -4,12 +4,12 @@ import OSLog
 import UIKit
 import UserNotifications
 
-enum MessageNotification {
+@MainActor enum MessageNotification {
     // The extension logs under the app's subsystem, so `just logs` shows both.
     private static let logger = Logger(subsystem: (Bundle.main.bundleIdentifier ?? "HeyDan")
         .replacing(/\.NotificationService$/, with: ""), category: "notification")
 
-    static func payload(from userInfo: [AnyHashable: Any]) -> PushPayload? {
+    nonisolated static func payload(from userInfo: [AnyHashable: Any]) -> PushPayload? {
         // A non-JSON value (a local notification's Date) would raise an Objective-C exception, not a Swift error.
         guard JSONSerialization.isValidJSONObject(userInfo), let data = try? JSONSerialization.data(withJSONObject: userInfo),
               let payload = try? JSONDecoder().decode(PushPayload.self, from: data),
@@ -17,7 +17,6 @@ enum MessageNotification {
         return payload
     }
 
-    @MainActor
     static func intent(for payload: PushPayload) -> INSendMessageIntent {
         INSendMessageIntent(
             recipients: nil,
@@ -31,7 +30,6 @@ enum MessageNotification {
         )
     }
 
-    @MainActor
     static func content(for payload: PushPayload, original: UNNotificationContent) async -> UNNotificationContent {
         let intent = intent(for: payload)
         let interaction = INInteraction(intent: intent, response: nil)
@@ -45,7 +43,6 @@ enum MessageNotification {
         }
     }
 
-    @MainActor
     static func content(for original: UNNotificationContent) async -> UNNotificationContent {
         guard let payload = payload(from: original.userInfo) else {
             logger.error("invalid_push_payload")
@@ -54,7 +51,6 @@ enum MessageNotification {
         return await content(for: payload, original: original)
     }
 
-    @MainActor
     static func donateOutgoing(agent: Agent, conversationID: String) async {
         let intent = INSendMessageIntent(
             recipients: [person(for: agent)],
@@ -76,9 +72,8 @@ enum MessageNotification {
         "\((error as NSError).domain)(\((error as NSError).code))"
     }
 
-    @MainActor private static var avatars: [String: Data] = [:]
+    private static var avatars: [String: Data] = [:]
 
-    @MainActor
     private static func person(for agent: Agent) -> INPerson {
         INPerson(
             personHandle: INPersonHandle(value: agent.id, type: .unknown),
@@ -90,7 +85,6 @@ enum MessageNotification {
         )
     }
 
-    @MainActor
     private static func avatar(for agent: Agent) -> Data? {
         let cacheKey = agent.id + "|" + agent.name
         if let cached = avatars[cacheKey] { return cached }

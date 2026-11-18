@@ -106,7 +106,6 @@ final class CallController: NSObject {
         }
     }
 
-
     /// Everything one call owns, created when it starts and dropped in one assignment when it ends,
     /// so a late callback from an earlier call can never touch the current one.
     private struct ActiveCall {
@@ -505,7 +504,7 @@ final class CallController: NSObject {
                 guard call?.id == id else { return }
                 let connecting = ContinuousClock.now
                 trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
-                do { try await room.connect(url: grant.url, token: grant.token, connectOptions: target.connectOptions) } catch {
+                do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
                     trace(.room, "connect failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: connecting))", id, level: .error)
                     throw target.paired == nil ? CallFailure.roomConnect : CallFailure.pairedTransport
                 }

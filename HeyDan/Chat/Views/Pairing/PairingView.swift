@@ -32,10 +32,9 @@ struct PairingView: View {
                 .disabled(working || link.isEmpty)
                 .accessibilityIdentifier("pairing.submit")
                 if working { ProgressView() }
-                if let message = message ?? Pairings.shared.error?.message { Text(message).accessibilityIdentifier("pairing.message") }
+                if let message = message ?? Pairings.shared.error?.message { Text(message) }
             }
         }
         .navigationTitle("Pair device")
-        .task { _ = Pairings.shared }
     }
 }

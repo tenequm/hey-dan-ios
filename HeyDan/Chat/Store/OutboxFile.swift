@@ -1,5 +1,4 @@
 import CryptoKit
-
 import Foundation
 import HeyDanCore
 
@@ -35,9 +34,6 @@ actor OutboxFile {
     func clear(host: URL, deviceId: String) throws {
         try Self.remove(directory(host: host, deviceId: deviceId))
     }
-}
-
-extension OutboxFile {
     func stage(_ attachments: [StagedAttachment], host: URL, deviceId: String) throws -> [Outbox.Attachment] {
         let directory = directory(host: host, deviceId: deviceId)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

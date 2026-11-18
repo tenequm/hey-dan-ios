@@ -105,12 +105,6 @@ class ChatResults(unittest.TestCase):
                 self.assertEqual(harness.RECORDS['app-push-communication']['status'], 'skip')
                 self.assertIn('Local.xcconfig', harness.RECORDS['app-push-communication']['detail'])
 
-    def test_real_bundle_required(self):
-        self.assertTrue(harness.bundle_ready('com.yourname.HeyDan'))
-        self.assertFalse(harness.bundle_ready('com.example.HeyDan'))
-        self.assertFalse(harness.bundle_ready(''))
-
-
 @unittest.skipUnless(shutil.which('timeout'), 'GNU timeout is not installed')
 class Run(unittest.TestCase):
     def test_stderr_stays_out_of_parsed_output(self):

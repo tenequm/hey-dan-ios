@@ -164,6 +164,7 @@ targets:
         INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/HeyDan.app/HeyDan
         BUNDLE_LOADER: $(TEST_HOST)
+  # Simulator checks of what used to need the phone in hand.
   HeyDanChecks:
     type: bundle.ui-testing
     platform: iOS

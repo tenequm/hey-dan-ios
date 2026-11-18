@@ -14,11 +14,7 @@ struct PairedCallButton: View {
                     call.showsPairedCall = true
                     return
                 }
-                guard !call.isCallActive else { return }
-                let callTarget = CallTarget(paired: target, service: service)
-                Task {
-                    _ = await call.start(target: callTarget)
-                }
+                Task { _ = await call.start(target: CallTarget(paired: target, service: service)) }
             }
             .disabled(call.isCallActive ? call.pairedCallTarget == nil : !target.conversation.canCall)
             .accessibilityIdentifier("chat.call")

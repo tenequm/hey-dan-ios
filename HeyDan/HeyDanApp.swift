@@ -107,35 +107,27 @@ extension HeyDanApp {
             }
             guard let conversation = chat.conversations.first else { return }
             if env["HEYDAN_CHECK_HISTORY"] == "1" {
-                func order(_ entity: ThreadEntity) -> Int64? {
-                    switch entity {
-                    case .message(let message): message.order
-                    case .question(let question): question.order
-                    case .unknown: nil
-                    }
-                }
                 do {
                     let newest = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(limit: 1))
-                    guard let last = newest.items.compactMap(order).last else { return }
+                    guard let last = newest.items.compactMap(\.order).last else { return }
                     let before = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(before: last, limit: 1))
-                    guard let previous = before.items.compactMap(order).last, previous < last else { return }
+                    guard let previous = before.items.compactMap(\.order).last, previous < last else { return }
                     let after = try await chat.service.history(conversationId: conversation.id, query: HistoryQuery(after: previous, limit: 1))
-                    CallLog.log(.net, "check history before=true after=\(after.items.compactMap(order).first == last)")
+                    CallLog.log(.net, "check history before=true after=\(after.items.compactMap(\.order).first == last)")
                 } catch { CallLog.log(.net, "check history failed") }
                 return
             }
             do {
                 let original = try await chat.service.voice(conversationId: conversation.id)
                 let saved = original.saved
-                let restore = saved.provider == nil ? VoicePatchRequest(reset: true) :
-                    VoicePatchRequest(provider: saved.provider, model: saved.model, voice: saved.voice)
+                let restore: TTSPatch = saved.provider.map { .choice(TTSChoice(provider: $0, model: saved.model, voice: saved.voice)) } ?? .reset
                 var matched = false
                 do {
                     let choice = original.effective
                     _ = try await chat.service.updateVoice(conversationId: conversation.id,
-                        request: VoicePatchRequest(provider: choice.provider, model: choice.model, voice: choice.voice))
+                        request: .choice(choice))
                     let readback = try await chat.service.voice(conversationId: conversation.id)
-                    matched = readback.saved == SavedVoiceSelection(provider: choice.provider, model: choice.model, voice: choice.voice)
+                    matched = readback.saved == SavedTTSChoice(provider: choice.provider, model: choice.model, voice: choice.voice)
                 } catch { CallLog.log(.net, "check voice save_failed") }
                 _ = try await chat.service.updateVoice(conversationId: conversation.id, request: restore)
                 let restored = try await chat.service.voice(conversationId: conversation.id)

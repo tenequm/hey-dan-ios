@@ -1,6 +1,11 @@
 import Foundation
 import HeyDanCore
-import LiveKit
+
+struct PairedCallTarget: Sendable, Equatable {
+    let host: URL
+    let deviceId: String
+    let conversation: Conversation
+}
 
 struct CallTarget {
     let line: VoiceLine?
@@ -28,10 +33,6 @@ struct CallTarget {
         let callId: String
         let agent: String?
         let names: VoiceProtocol.Names
-    }
-
-    var connectOptions: ConnectOptions {
-        ConnectOptions(iceTransportPolicy: usesRelay ? .relay : .all)
     }
 
     var usesRelay: Bool {

@@ -29,9 +29,9 @@ import SwiftData
 
 @Model final class CachedStreamCursor {
     @Attribute(.unique) var deviceId: String
-    var cursor: Int64
+    var cursor: Int64?
     var historyFloors: Data?
-    init(deviceId: String, cursor: Int64) {
+    init(deviceId: String, cursor: Int64?) {
         self.deviceId = deviceId
         self.cursor = cursor
     }
@@ -120,12 +120,8 @@ actor SwiftDataThreadStore: ThreadStore {
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws {
         let began = ContinuousClock.now
         let worker = try await worker(host: host)
-        try await Self.ingest(snapshot, deviceId: deviceId, worker: worker, beforeCommit: beforeCommit)
-        CallLog.log(.store, "save cursor=\(snapshot.cursor) count=\(snapshot.entities.count + snapshot.conversations.count) ms=\(CallLog.ms(since: began))")
-    }
-    @concurrent private static func ingest(_ snapshot: ThreadSnapshot, deviceId: String,
-                                           worker: ThreadStoreWorker, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)?) async throws {
         try await worker.save(snapshot, deviceId: deviceId, beforeCommit: beforeCommit)
+        CallLog.log(.store, "save cursor=\(snapshot.cursor) count=\(snapshot.entities.count + snapshot.conversations.count) ms=\(CallLog.ms(since: began))")
     }
     func clear(host: URL, deviceId: String) async throws {
         try await worker(host: host).clear(deviceId: deviceId)
@@ -180,17 +176,15 @@ actor SwiftDataThreadStore: ThreadStore {
             }
             let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
                 predicate: #Predicate { $0.deviceId == deviceId })).first
-            if snapshot.hasCursor {
-                if let cursor {
-                    cursor.cursor = max(cursor.cursor, snapshot.cursor)
-                    var floors = try cursor.historyFloors.map { try JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
-                    floors.merge(snapshot.historyFloors) { _, new in new }
-                    cursor.historyFloors = try encoder.encode(floors)
-                } else {
-                    let record = CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)
-                    record.historyFloors = try encoder.encode(snapshot.historyFloors)
-                    modelContext.insert(record)
-                }
+            if let cursor {
+                if snapshot.hasCursor { cursor.cursor = max(cursor.cursor ?? 0, snapshot.cursor) }
+                var floors = try cursor.historyFloors.map { try JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
+                floors.merge(snapshot.historyFloors) { _, new in new }
+                cursor.historyFloors = try encoder.encode(floors)
+            } else if snapshot.hasCursor || !snapshot.historyFloors.isEmpty {
+                let record = CachedStreamCursor(deviceId: deviceId, cursor: snapshot.hasCursor ? snapshot.cursor : nil)
+                record.historyFloors = try encoder.encode(snapshot.historyFloors)
+                modelContext.insert(record)
             }
             try beforeCommit?(snapshot)
             try modelContext.save()

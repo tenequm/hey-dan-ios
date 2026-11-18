@@ -573,13 +573,26 @@ final class HeyDanChecks: XCTestCase {
         XCUIDevice.shared.press(.home)
     }
 
-    private func shot(_ name: String) {
+}
+
+extension XCTestCase {
+    /// The fixture host lists push, so the notification prompt can cover the list on a fresh Simulator.
+    @MainActor func launchChat(_ environment: [String: String]) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment = environment
+        app.launch()
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        return app
+    }
+
+    @MainActor func shot(_ name: String) {
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        guard let dir = env["HEYDAN_CHECKS_OUT"], !dir.isEmpty else { return }
+        guard let dir = ProcessInfo.processInfo.environment["HEYDAN_CHECKS_OUT"], !dir.isEmpty else { return }
         try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
     }
 }

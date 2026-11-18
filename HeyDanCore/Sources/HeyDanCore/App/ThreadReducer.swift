@@ -87,6 +87,7 @@ public struct ThreadReducer: Sendable {
 }
 
 extension ThreadEntity {
+    public var order: Int64? { identity?.order }
     fileprivate var identity: (id: String, seq: Int64, order: Int64, conversationId: String)? {
         switch self {
         case .message(let v): return (v.id, v.seq, v.order, v.conversationId)

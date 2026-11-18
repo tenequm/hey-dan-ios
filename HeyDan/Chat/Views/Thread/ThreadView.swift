@@ -13,7 +13,6 @@ struct ThreadView: View {
             rows: chat.rows,
             status: chat.statuses[conversation.id],
             outboxStates: chat.outboxStates,
-            uploadProgress: chat.uploadProgress,
             hasMoreBefore: chat.hasMoreBefore,
             errorMessage: chat.error?.message,
             errorQuestionID: answeredQuestionID,
@@ -53,7 +52,6 @@ struct ThreadContent: View {
     let rows: [ThreadRow]
     var status: Status?
     var outboxStates: [String: Outbox.State] = [:]
-    var uploadProgress: [String: Double] = [:]
     var hasMoreBefore = false
     var errorMessage: String?
     var errorQuestionID: String?
@@ -68,8 +66,8 @@ struct ThreadContent: View {
     @State private var loadingHistory = false
 
     private var entities: [ThreadEntity] { rows.compactMap { if case .entity(let entity) = $0 { return entity }; return nil } }
-    private var firstOrder: Int64? { entities.compactMap { order($0) }.min() }
-    private var newestOrder: Int64? { entities.filter(readable).compactMap(order).max() }
+    private var firstOrder: Int64? { entities.compactMap(\.order).min() }
+    private var newestOrder: Int64? { entities.filter(readable).compactMap(\.order).max() }
 
     var body: some View {
         ScrollView {
@@ -90,7 +88,7 @@ struct ThreadContent: View {
                         QuestionCard(question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
                             .id(row.presentationID)
                     case .outbox(let entry):
-                        OutboxRow(entry: entry, uploadProgress: uploadProgress, retry: retry, discard: discard)
+                        OutboxRow(entry: entry, retry: retry, discard: discard)
                             .id(row.presentationID)
                     case .entity(.unknown): EmptyView()
                     }
@@ -123,14 +121,6 @@ struct ThreadContent: View {
         loadingHistory = true
         await loadHistory(order)
         loadingHistory = false
-    }
-
-    private func order(_ entity: ThreadEntity) -> Int64? {
-        switch entity {
-        case .message(let message): return message.order
-        case .question(let question): return question.order
-        case .unknown: return nil
-        }
     }
 
     /// The rows a read counts: the reducer already dropped roles it cannot render, and only live questions count.

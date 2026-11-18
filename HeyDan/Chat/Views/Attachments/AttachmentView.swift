@@ -7,7 +7,6 @@ import QuickLook
 struct AttachmentView: View {
     private let file: FileAttachment
     private let localURL: URL?
-    private let uploadProgress: Double?
     private let download: (FileAttachment) async throws -> URL
     @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage?
@@ -24,16 +23,14 @@ struct AttachmentView: View {
         self.file = file
         self.download = download
         localURL = nil
-        uploadProgress = nil
     }
 
-    init(attachment: StagedAttachment, uploadProgress: Double?) {
+    init(attachment: StagedAttachment) {
         let type = UTType(mimeType: attachment.mimeType)
         file = FileAttachment(id: attachment.fileURL.absoluteString, name: attachment.name,
                               mimeType: attachment.mimeType, size: 0,
                               kind: type?.conforms(to: .image) == true ? .image : .file)
         localURL = attachment.fileURL
-        self.uploadProgress = uploadProgress
         download = { _ in attachment.fileURL }
     }
 
@@ -78,17 +75,12 @@ struct AttachmentView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier(AXID.attachmentOpen)
             if requested && loadedURL == nil && failure == nil && file.kind != .image { ProgressView() }
-            if let uploadProgress {
-                ProgressView(value: uploadProgress, total: 1)
-                    .accessibilityIdentifier(AXID.attachmentProgress)
-            }
             if let failure {
                 Text(failure).font(.caption)
                 Button("Retry") { attempt += 1 }
-                    .accessibilityIdentifier(AXID.attachmentRetry)
             }
             if let loadedURL {
-                ShareLink(item: loadedURL).accessibilityIdentifier(AXID.attachmentShare)
+                ShareLink(item: loadedURL)
             }
         }
         .quickLookPreview($previewURL)

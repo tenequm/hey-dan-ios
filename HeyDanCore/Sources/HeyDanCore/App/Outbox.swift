@@ -17,7 +17,7 @@ public struct Outbox: Sendable {
     public static let revokedCodes: Set<String> = ["device_revoked", "unknown_device"]
 
     public enum State: Sendable, Equatable, Codable {
-        case queued, uploading, sending, waiting, held, stored, routed, reached, failed, outcomeUnknown
+        case queued, waiting, held, stored, routed, reached, failed, outcomeUnknown
     }
     public struct Attachment: Sendable, Equatable, Codable {
         public let uploadKey: String
@@ -28,14 +28,13 @@ public struct Outbox: Sendable {
         public let sha256: String
         public var fileId: String?
         public var ticket: String?
-        public var expiresAt: Int64?
         public var uploaded: Bool
         public init(uploadKey: String = UUID().uuidString, localFileName: String, name: String,
                     mimeType: String, size: Int64, sha256: String, fileId: String? = nil,
-                    ticket: String? = nil, expiresAt: Int64? = nil, uploaded: Bool = false) {
+                    ticket: String? = nil, uploaded: Bool = false) {
             self.uploadKey = uploadKey; self.localFileName = localFileName; self.name = name
             self.mimeType = mimeType; self.size = size; self.sha256 = sha256
-            self.fileId = fileId; self.ticket = ticket; self.expiresAt = expiresAt; self.uploaded = uploaded
+            self.fileId = fileId; self.ticket = ticket; self.uploaded = uploaded
         }
         public var request: FileInitRequest {
             FileInitRequest(uploadKey: uploadKey, name: name, mimeType: mimeType, size: size, sha256: sha256)
@@ -68,7 +67,7 @@ public struct Outbox: Sendable {
         case uploaded(uploadKey: String)
         case sent(Message)
         case transportFailure
-        case serverError(status: Int, body: ErrorBody, retryAfter: TimeInterval? = nil)
+        case serverError(status: Int, body: ErrorBody)
     }
     public private(set) var entries: [Entry] = []
     private var heldError: ErrorBody?
@@ -87,8 +86,8 @@ public struct Outbox: Sendable {
             Self.reconcile(message, entry: &entries[index])
         }
     }
-    public static func backoff(attempt: Int, retryAfter: TimeInterval? = nil, jitter: TimeInterval = 0) -> TimeInterval {
-        max(max(0, retryAfter ?? 0), min(60, max(0, pow(2, Double(min(6, max(0, attempt - 1)))) + jitter)))
+    public static func backoff(attempt: Int, retryAfter: TimeInterval? = nil) -> TimeInterval {
+        max(max(0, retryAfter ?? 0), min(60, max(0, pow(2, Double(min(6, max(0, attempt - 1)))))))
     }
     public static func step(_ entry: Entry, now: Date) -> Action {
         switch entry.state {
@@ -110,7 +109,7 @@ public struct Outbox: Sendable {
         guard entry.attachments.allSatisfy({ $0.fileId != nil }) else { return .held }
         return .send(request)
     }
-    public static func applying(_ result: Result, to entry: Entry, now: Date, jitter: TimeInterval = 0) -> Entry {
+    public static func applying(_ result: Result, to entry: Entry, now: Date) -> Entry {
         var entry = entry
         if case .sent(let message) = result {
             reconcile(message, entry: &entry)
@@ -125,7 +124,6 @@ public struct Outbox: Sendable {
             guard let i = entry.attachments.firstIndex(where: { $0.uploadKey == key }) else { return entry }
             entry.attachments[i].fileId = response.fileId
             entry.attachments[i].ticket = response.ticket
-            entry.attachments[i].expiresAt = response.expiresAt
             entry.attachments[i].uploaded = response.uploaded
             entry.state = .queued; entry.nextAttemptAt = nil; entry.lastServerError = nil
         case .uploaded(let key):
@@ -133,29 +131,29 @@ public struct Outbox: Sendable {
             entry.attachments[i].uploaded = true
             entry.state = .queued; entry.attempts = 0; entry.nextAttemptAt = nil; entry.lastServerError = nil
         case .transportFailure:
-            retry(&entry, now: now, retryAfter: nil, jitter: jitter)
-        case .serverError(let status, let body, let retryAfter):
+            retry(&entry, now: now, retryAfter: nil)
+        case .serverError(let status, let body):
             entry.lastServerError = body
             switch body.error {
             case let code where Self.revokedCodes.contains(code): entry.state = .held; entry.nextAttemptAt = nil
-            case "stale_timestamp": retryCorrection(&entry, now: now, jitter: jitter)
+            case "stale_timestamp": retryCorrection(&entry, now: now)
             case "ticket_expired":
                 for i in entry.attachments.indices where !entry.attachments[i].uploaded &&
                     (body.fileId == nil || body.fileId == entry.attachments[i].fileId) {
-                    entry.attachments[i].ticket = nil; entry.attachments[i].expiresAt = nil
+                    entry.attachments[i].ticket = nil
                 }
-                retryCorrection(&entry, now: now, jitter: jitter)
+                retryCorrection(&entry, now: now)
             default:
                 if status == 429 || (500...599).contains(status) {
-                    retry(&entry, now: now, retryAfter: status == 429 ? retryAfter ?? body.retryAfter.map(Double.init) : nil, jitter: jitter)
+                    retry(&entry, now: now, retryAfter: status == 429 ? body.retryAfter.map(Double.init) : nil)
                 } else { entry.state = .held; entry.nextAttemptAt = nil }
             }
         case .sent: break
         }
         return entry
     }
-    public mutating func apply(_ result: Result, clientId: String, now: Date, jitter: TimeInterval = 0) {
-        if case .serverError(_, let body, _) = result, Self.revokedCodes.contains(body.error) {
+    public mutating func apply(_ result: Result, clientId: String, now: Date) {
+        if case .serverError(_, let body) = result, Self.revokedCodes.contains(body.error) {
             heldError = body
             for i in entries.indices {
                 entries[i].state = .held; entries[i].lastServerError = body; entries[i].nextAttemptAt = nil
@@ -163,18 +161,18 @@ public struct Outbox: Sendable {
             return
         }
         for i in entries.indices where entries[i].request.clientId == clientId {
-            entries[i] = Self.applying(result, to: entries[i], now: now, jitter: jitter)
+            entries[i] = Self.applying(result, to: entries[i], now: now)
         }
     }
-    private static func retryCorrection(_ entry: inout Entry, now: Date, jitter: TimeInterval) {
+    private static func retryCorrection(_ entry: inout Entry, now: Date) {
         if entry.attempts == 0 {
             entry.attempts = 1; entry.state = .queued; entry.nextAttemptAt = nil
-        } else { retry(&entry, now: now, retryAfter: nil, jitter: jitter) }
+        } else { retry(&entry, now: now, retryAfter: nil) }
     }
-    private static func retry(_ entry: inout Entry, now: Date, retryAfter: TimeInterval?, jitter: TimeInterval) {
+    private static func retry(_ entry: inout Entry, now: Date, retryAfter: TimeInterval?) {
         entry.attempts = min(entry.attempts, 1_000_000) + 1
         entry.state = .waiting
-        entry.nextAttemptAt = now.addingTimeInterval(backoff(attempt: entry.attempts, retryAfter: retryAfter, jitter: jitter))
+        entry.nextAttemptAt = now.addingTimeInterval(backoff(attempt: entry.attempts, retryAfter: retryAfter))
     }
     private static func reconcile(_ message: Message, entry: inout Entry) {
         guard message.clientId == entry.request.clientId, message.conversationId == entry.conversationId,

@@ -166,7 +166,7 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   | `HEYDAN_E2E_ATTEMPTS` | `2`; use `1` to disable the connect-timeout retry. |
 
   Derived data and synthesized audio stay in `build/sim-e2e`, independent of `just sim`;
-  `HEYDAN_DERIVED_DATA` does not apply. Run only one harness per checkout at a time.
+  `HEYDAN_DERIVED_DATA` overrides that build folder. Run only one harness per checkout at a time.
   Each invocation replaces its result files. The app is terminated on exit, Ctrl-C and SIGTERM included:
   either also stops the running build or test and marks the current check failed. The Simulator,
   saved test line, installed CA, builds and evidence remain. Logs contain call metadata,

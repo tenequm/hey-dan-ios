@@ -25,7 +25,7 @@ import HeyDanCore
     VStack {
         AttachmentView(file: FileAttachment(id: "pdf", name: "Document.pdf", mimeType: "application/pdf", size: 12345, kind: .file))
         AttachmentView(file: FileAttachment(id: "unknown", name: "Archive.bin", mimeType: "application/octet-stream", size: 999, kind: .file))
-        AttachmentView(attachment: StagedAttachment(fileURL: URL(fileURLWithPath: "/preview.pdf"), name: "Document.pdf", mimeType: "application/pdf"), uploadProgress: 0.4)
+        AttachmentView(attachment: StagedAttachment(fileURL: URL(fileURLWithPath: "/preview.pdf"), name: "Document.pdf", mimeType: "application/pdf"))
     }
 }
 private enum PreviewImage {

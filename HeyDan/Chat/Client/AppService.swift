@@ -27,9 +27,9 @@ protocol AppService: Sendable {
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) -> Void
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) -> Void
-    func voice(conversationId: String) async throws(AppError) -> VoiceView
-    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog
+    func voice(conversationId: String) async throws(AppError) -> TTSView
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) -> Void
     func unpair() async throws(AppError) -> Void
 }
@@ -92,7 +92,6 @@ extension AppError {
         }
     }
 
-    /// The same mapping for the paired voice picker.
     var voiceFailure: TTSServiceFailure {
         switch self {
         case let .server(status, body): .server(status: status, code: body.error, message: body.message)

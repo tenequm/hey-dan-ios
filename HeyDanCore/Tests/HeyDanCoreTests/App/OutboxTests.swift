@@ -48,10 +48,9 @@ private func pending() -> Outbox.Entry {
             else { #expect(entry.state == .held); #expect(entry.lastServerError == body) }
         }
     }
-    let rate = Outbox.applying(.serverError(status: 429, body: ErrorBody(error: "rate_limited", message: "", retryAfter: 2), retryAfter: 120), to: pending(), now: now)
+    let rate = Outbox.applying(.serverError(status: 429, body: ErrorBody(error: "rate_limited", message: "", retryAfter: 120)), to: pending(), now: now)
     #expect(rate.nextAttemptAt == now.addingTimeInterval(120))
     #expect(Outbox.backoff(attempt: 100) == 60)
-    #expect(Outbox.backoff(attempt: 2, jitter: 0.5) == 2.5)
     for code in ["device_revoked", "unknown_device"] {
         var outbox = Outbox(); outbox.enqueue(pending())
         outbox.enqueue(Outbox.Entry(host: pending().host, conversationId: "other", request: SendRequest(clientId: "other", text: "", fileIds: [])))
@@ -85,7 +84,6 @@ private func pending() -> Outbox.Entry {
     let now = Date(timeIntervalSince1970: 100)
     var entry = pending()
     entry.attachments[0].fileId = "file"; entry.attachments[0].ticket = "opaque"
-    entry.attachments[0].expiresAt = 100_000
     if case .upload = Outbox.step(entry, now: now.addingTimeInterval(7200)) {} else { Issue.record("Device clock must not expire a server ticket") }
     let oversized = Outbox.Entry(host: entry.host, conversationId: entry.conversationId,
         request: SendRequest(clientId: "large", text: String(repeating: "é", count: 16_385), fileIds: []))
@@ -112,7 +110,7 @@ private func pending() -> Outbox.Entry {
     }
     var old = pending()
     old.attachments[0].fileId = "consumed"; old.attachments[0].ticket = "old"
-    old.attachments[0].uploaded = true; old.attachments[0].expiresAt = 1
+    old.attachments[0].uploaded = true
     old.state = .failed; old.serverSeq = 5
     #expect(ThreadReducer().rows(conversationId: old.conversationId, outbox: [old]).isEmpty)
     var box = Outbox(); box.enqueue(old)

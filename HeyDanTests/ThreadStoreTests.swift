@@ -4,7 +4,17 @@ import Testing
 @testable import HeyDan
 
 struct ThreadStoreTests {
+    private let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     private let host = URL(string: "https://app.example.com")!
+
+    @MainActor private func paired(_ service: any AppService, store: any ThreadStore = SwiftDataThreadStore(inMemory: true),
+                                   files: OutboxFile, active: Bool = false) async -> ChatController {
+        let chat = ChatController(service: service, store: store, files: files, monitorsNetwork: false)
+        if !active { chat.setActive(false) }
+        chat.selectPairing(FixtureAppService.pairing, host: host)
+        await chat.loadTask?.value
+        return chat
+    }
 
     private func conversation(seq: Int64, unread: Int = 2) -> Conversation {
         Conversation(kind: .conversation, id: "conv_taylor01", seq: seq,
@@ -27,14 +37,27 @@ struct ThreadStoreTests {
         #expect(try await store.load(host: host, deviceId: "device").cursor == 12)
     }
 
+    @Test func historyFloorsPersistBeforeBootstrap() async throws {
+        let store = SwiftDataThreadStore(inMemory: true)
+        var snapshot = ThreadSnapshot()
+        snapshot.historyFloors = ["conv_taylor01": 12]
+        try await store.save(snapshot, host: host, deviceId: "device")
+        let loaded = try await store.load(host: host, deviceId: "device")
+        #expect(!loaded.hasCursor)
+        #expect(loaded.historyFloors == snapshot.historyFloors)
+        try await store.save(ThreadSnapshot(cursor: 30), host: host, deviceId: "device")
+        let bootstrapped = try await store.load(host: host, deviceId: "device")
+        #expect(bootstrapped.cursor == 30)
+        #expect(bootstrapped.historyFloors == snapshot.historyFloors)
+    }
+
     @Test func schemaWipePreservesOutbox() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let outbox = OutboxFile(root: root)
         let entry = Outbox.Entry(host: host, conversationId: "conv_taylor01",
             request: SendRequest(clientId: UUID().uuidString, text: "test", fileIds: []))
         try await outbox.save([entry], host: host, deviceId: "device")
-        try await populate(root: root)
+        try await SwiftDataThreadStore(root: root, schemaVersion: 1).save(ThreadSnapshot(cursor: 10, conversations: [conversation(seq: 10)]), host: host, deviceId: "device")
         let reopened = try await SwiftDataThreadStore(root: root, schemaVersion: 1).load(host: host, deviceId: "device")
         #expect(reopened.cursor == 10)
         #expect(reopened.conversations == [conversation(seq: 10)])
@@ -46,15 +69,11 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func offlineEnqueueReconnectAndRestore() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MemoryThreadStore()
+        let store = SwiftDataThreadStore(inMemory: true)
         let files = OutboxFile(root: root)
         let service = FixtureAppService()
-        let chat = ChatController(service: service, store: store, files: files, monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(service, store: store, files: files)
         await chat.refresh()
         chat.openConversation("conv_taylor01")
         await chat.loadHistory()
@@ -75,10 +94,7 @@ struct ThreadStoreTests {
         #expect(chat.uploadProgress.values.contains(1))
         chat.setActive(false)
         let cursor = chat.reducer.cursor
-        let restored = ChatController(service: service, store: store, files: files, monitorsNetwork: false)
-        restored.setActive(false)
-        restored.selectPairing(FixtureAppService.pairing, host: host)
-        await restored.loadTask?.value
+        let restored = await paired(service, store: store, files: files)
         #expect(restored.reducer.cursor == cursor)
         #expect(restored.conversations.first?.unread == 2)
         #expect(restored.outbox.entries.isEmpty)
@@ -90,12 +106,8 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func readAndAnswerKeepServerState() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let chat = ChatController(service: FixtureAppService(), store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(FixtureAppService(), files: OutboxFile(root: root))
         await chat.refresh()
         chat.openConversation("conv_taylor01")
         await chat.loadHistory()
@@ -110,11 +122,10 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func failingSendPreservesOrderAndResumesCursor() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
         await service.fail("send", with: [.transport(.timeout)])
-        let store = MemoryThreadStore()
+        let store = SwiftDataThreadStore(inMemory: true)
         try await store.save(ThreadSnapshot(cursor: 7), host: host, deviceId: "dev_fixture")
         let chat = ChatController(service: service, store: store, files: OutboxFile(root: root), monitorsNetwork: false)
         chat.setActive(false)
@@ -138,9 +149,7 @@ struct ThreadStoreTests {
             defer { try? FileManager.default.removeItem(at: root) }
             let service = ScriptedAppService()
             await service.fail("conversations", with: [failure])
-            let chat = ChatController(service: service, store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-            chat.selectPairing(FixtureAppService.pairing, host: host)
-            await chat.loadTask?.value
+            let chat = await paired(service, files: OutboxFile(root: root), active: true)
             try await waitUntil { chat.paused }
             #expect(await service.cursors.isEmpty)
             #expect(!chat.hasCursor)
@@ -150,7 +159,6 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func lostFileResponsesReuseIdentities() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appending(path: "file.txt")
@@ -158,10 +166,7 @@ struct ThreadStoreTests {
         let service = ScriptedAppService()
         await service.fail("initializeFileAfter", with: [.transport(.timeout)])
         await service.fail("uploadAfter", with: [.transport(.timeout)])
-        let chat = ChatController(service: service, store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(service, files: OutboxFile(root: root))
         chat.openConversation("conv_taylor01")
         #expect(await chat.send(text: "file", attachments: [StagedAttachment(fileURL: source, name: "file.txt", mimeType: "text/plain")]))
         chat.setActive(true)
@@ -173,12 +178,8 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func closeFlushesReadAndOversizedDraftIsRejected() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let chat = ChatController(service: ScriptedAppService(), store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(ScriptedAppService(), files: OutboxFile(root: root))
         await chat.refresh()
         chat.openConversation("conv_taylor01")
         #expect(await !chat.send(text: String(repeating: "a", count: Outbox.maximumTextBytes + 1)))
@@ -203,13 +204,9 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func answerErrorsAndExplicitRetry() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
-        let chat = ChatController(service: service, store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(service, files: OutboxFile(root: root))
         chat.openConversation("conv_taylor01")
         await chat.loadHistory()
         await service.fail("answer", with: [.server(status: 502, body: ErrorBody(error: "answer_not_delivered", message: "Try again"))])
@@ -231,15 +228,12 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func malformedEventAdvancesAndCancelledReplayResumes() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
         await service.events([AppEvent(kind: .message, id: 11, data: Data("{}".utf8)),
             AppEvent(kind: .synchronized, id: nil, data: try JSONEncoder().encode(Synchronized(seq: 12)))])
-        let store = MemoryThreadStore()
-        let chat = ChatController(service: service, store: store, files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let store = SwiftDataThreadStore(inMemory: true)
+        let chat = await paired(service, store: store, files: OutboxFile(root: root), active: true)
         try await waitUntil { chat.connectionState == .connected }
         #expect(chat.reducer.cursor == 12)
         chat.setActive(false)
@@ -247,39 +241,31 @@ struct ThreadStoreTests {
         try await waitUntil { chat.connectionState == .connected }
         #expect(await service.cursors == [10, 12])
         chat.setActive(false)
-        let snapshot = await store.load(host: host, deviceId: "dev_fixture")
+        let snapshot = try await store.load(host: host, deviceId: "dev_fixture")
         #expect(snapshot.cursor == 12)
     }
 
     @MainActor @Test func revocationClearsCacheAndOutbox() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
         await service.fail("hello", with: [.server(status: 401, body: ErrorBody(error: "device_revoked", message: "Revoked"))])
-        let store = MemoryThreadStore(), files = OutboxFile(root: root)
-        let chat = ChatController(service: service, store: store, files: files, monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let store = SwiftDataThreadStore(inMemory: true), files = OutboxFile(root: root)
+        let chat = await paired(service, store: store, files: files)
         await chat.refresh()
         chat.openConversation("conv_taylor01")
         #expect(await chat.send(text: "pending"))
         chat.setActive(true)
         try await waitUntil { chat.pairing == nil }
         await chat.streamTask?.value
-        #expect(await store.load(host: host, deviceId: "dev_fixture").conversations.isEmpty)
+        #expect(try await store.load(host: host, deviceId: "dev_fixture").conversations.isEmpty)
         #expect(try await files.load(host: host, deviceId: "dev_fixture").isEmpty)
         chat.setActive(false)
     }
 
     @MainActor @Test func historyFloorExcludesOldEdits() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
-        let chat = ChatController(service: service, store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(service, files: OutboxFile(root: root))
         chat.openConversation("conv_taylor01")
         await chat.loadHistory()
         let old = Message(kind: .message, id: "old", conversationId: "conv_taylor01", order: 1, seq: 100,
@@ -293,7 +279,6 @@ struct ThreadStoreTests {
     }
 
     @Test func corruptOutboxIsQuarantinedAndDownloadsKeepNames() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let files = OutboxFile(root: root)
         let directory = await files.directory(host: host, deviceId: "device")
@@ -307,15 +292,11 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func lostSendResponseRetriesSameIdentity() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
         await service.events([])
         await service.fail("sendAfter", with: [.transport(.timeout)])
-        let chat = ChatController(service: service, store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.setActive(false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(service, files: OutboxFile(root: root))
         chat.openConversation("conv_taylor01")
         #expect(await chat.send(text: "lost response"))
         chat.setActive(true)
@@ -326,13 +307,10 @@ struct ThreadStoreTests {
     }
 
     @MainActor @Test func cancelBeforeSynchronizedResumesCommittedCursor() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let service = ScriptedAppService()
         await service.events([AppEvent(kind: .unknown("future"), id: 11, data: Data("{}".utf8))])
-        let chat = ChatController(service: service, store: MemoryThreadStore(), files: OutboxFile(root: root), monitorsNetwork: false)
-        chat.selectPairing(FixtureAppService.pairing, host: host)
-        await chat.loadTask?.value
+        let chat = await paired(service, files: OutboxFile(root: root), active: true)
         try await waitUntil { chat.reducer.cursor == 11 }
         #expect(chat.connectionState == .connecting)
         chat.setActive(false)
@@ -349,10 +327,6 @@ struct ThreadStoreTests {
         #expect(condition())
     }
 
-    private func populate(root: URL) async throws {
-        let store = SwiftDataThreadStore(root: root, schemaVersion: 1)
-        try await store.save(ThreadSnapshot(cursor: 10, conversations: [conversation(seq: 10)]), host: host, deviceId: "device")
-    }
 }
 
 private actor ScriptedAppService: AppService {
@@ -398,9 +372,9 @@ private actor ScriptedAppService: AppService {
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant { try check("startCall"); return try await base.startCall(request) }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) -> Void { try check("endCall"); return try await base.endCall(callId: callId, request: request) }
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) -> Void { try check("cancelCall"); return try await base.cancelCall(attemptId: attemptId, request: request) }
-    func voice(conversationId: String) async throws(AppError) -> VoiceView { try check("voice"); return try await base.voice(conversationId: conversationId) }
-    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView { try check("updateVoice"); return try await base.updateVoice(conversationId: conversationId, request: request) }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog { try check("voices"); return try await base.voices(conversationId: conversationId, query: query) }
+    func voice(conversationId: String) async throws(AppError) -> TTSView { try check("voice"); return try await base.voice(conversationId: conversationId) }
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView { try check("updateVoice"); return try await base.updateVoice(conversationId: conversationId, request: request) }
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage { try check("voices"); return try await base.voices(conversationId: conversationId, query: query) }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) -> Void { try check("registerPushToken"); return try await base.registerPushToken(request) }
     func unpair() async throws(AppError) -> Void { try check("unpair"); return try await base.unpair() }
 }

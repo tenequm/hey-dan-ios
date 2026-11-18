@@ -7,7 +7,7 @@ func coreFixtures() throws -> [String: Any] {
     return try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
 }
 func fixtureDecode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
-    try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: value))
+    try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed))
 }
 
 @Test func foundationLinesDropsEventSeparators() async throws {

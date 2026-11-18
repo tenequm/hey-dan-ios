@@ -22,12 +22,12 @@ private final class FixtureBundle {}
         let grantBody = try fixture("callGrant")
         let expectedStart = try JSONDecoder().decode(CallRequest.self, from: fixture("callRequest"))
         let seen = Mutex<[URLRequest]>([])
-        CallHTTP.handler.withLock { $0 = { request in
+        Stub.handler.withLock { $0 = { request in
             seen.withLock { $0.append(request) }
-            return request.url!.path == "/app/calls" ? grantBody : Data()
+            return (200, request.url!.path == "/app/calls" ? grantBody : Data())
         } }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CallHTTP.self]
+        configuration.protocolClasses = [Stub.self]
         let key = P256.Signing.PrivateKey()
         let service = SignedClient(host: URL(string: "https://example.invalid")!, deviceId: "dev_test",
             configuration: configuration, signer: { data, _ in try key.signature(for: data).derRepresentation })
@@ -43,13 +43,7 @@ private final class FixtureBundle {}
         try await target.cancel()
         let requests = seen.withLock { $0 }
         XCTAssertEqual(requests.map { $0.url!.path }, ["/app/calls", "/app/calls/call_5tGh2/end", "/app/calls/attempts/\(expectedStart.attemptId)/cancel"])
-        let bodies = requests.map { request -> Data in
-            guard let stream = request.httpBodyStream else { return request.httpBody ?? Data() }
-            stream.open(); defer { stream.close() }
-            var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
-            while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
-            return data
-        }
+        let bodies = requests.map(\.bodyBytes)
         XCTAssertEqual(try JSONDecoder().decode(CallRequest.self, from: bodies[0]), expectedStart)
         XCTAssertEqual(try JSONDecoder().decode(CallEndRequest.self, from: bodies[1]),
             try JSONDecoder().decode(CallEndRequest.self, from: fixture("callEndRequest")))
@@ -65,14 +59,14 @@ private final class FixtureBundle {}
     func testSavedLineRequestsRemainUnchanged() async throws {
         let line = try XCTUnwrap(VoiceLine(callLink: "https://example.invalid/voice?t=fixture"))
         let seen = Mutex<[URLRequest]>([])
-        CallHTTP.handler.withLock { $0 = { request in
+        Stub.handler.withLock { $0 = { request in
             seen.withLock { $0.append(request) }
-            return request.url!.path.hasSuffix("token")
+            return (200, request.url!.path.hasSuffix("token")
                 ? Data(#"{"protocol":6,"url":"wss://example.invalid","token":"fixture","callId":"call_fixture"}"#.utf8)
-                : Data()
+                : Data())
         } }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CallHTTP.self]
+        configuration.protocolClasses = [Stub.self]
         let http = URLSession(configuration: configuration)
         defer { http.invalidateAndCancel() }
         let target = CallTarget(line: line)
@@ -161,7 +155,7 @@ private final class FixtureBundle {}
 @MainActor private final class CallServiceSpy: AppService {
     var delaysGrant = false
     var grantAttempt: String?
-    var patches: [VoicePatchRequest] = []
+    var patches: [TTSPatch] = []
     var catalogQueries: [VoiceCatalogQuery] = []
     var pendingGrant: CheckedContinuation<Void, Never>?
     var starts: [CallRequest] = []
@@ -183,34 +177,19 @@ private final class FixtureBundle {}
         starts.append(request)
         if delaysGrant { await withCheckedContinuation { pendingGrant = $0 } }
         return CallGrant(protocol: 6, url: "wss://example.com", token: "test", callId: "call_test",
-            attemptId: grantAttempt ?? request.attemptId, agent: "Taylor", chat: "Taylor (app)", silenceMs: 1400,
-            limit: CallLimit(ms: 3600000, kind: .duration))
+            attemptId: grantAttempt ?? request.attemptId, agent: "Taylor")
     }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) { ends.append((callId, request)) }
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) { cancels.append((attemptId, request)) }
-    func voice(conversationId: String) async throws(AppError) -> VoiceView { throw .transport(.unavailable) }
-    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView {
+    func voice(conversationId: String) async throws(AppError) -> TTSView { throw .transport(.unavailable) }
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView {
         patches.append(request)
         throw .transport(.unavailable)
     }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog {
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage {
         catalogQueries.append(query)
         throw .transport(.unavailable)
     }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) -> Void { throw .transport(.unavailable) }
     func unpair() async throws(AppError) -> Void { throw .transport(.unavailable) }
-}
-
-private final class CallHTTP: URLProtocol, @unchecked Sendable {
-    static let handler = Mutex<(@Sendable (URLRequest) -> Data)?>(nil)
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        let data = Self.handler.withLock { $0 }!(request)
-        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200,
-            httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: data)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() {}
 }

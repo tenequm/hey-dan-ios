@@ -1,6 +1,19 @@
 import Foundation
 import HeyDanCore
 
+enum VoicePickerIdentity: Hashable, Sendable {
+    case line(origin: URL, credential: String)
+    case paired(host: URL, deviceId: String, conversationId: String)
+}
+
+protocol VoicePickerService: Sendable {
+    var identity: VoicePickerIdentity { get }
+    var line: VoiceLine? { get }
+    func voice() async throws(TTSServiceFailure) -> TTSView
+    func updateVoice(_ request: TTSPatch) async throws(TTSServiceFailure) -> TTSView
+    func voices(_ query: VoiceCatalogQuery) async throws(TTSServiceFailure) -> CatalogPage
+}
+
 struct LineVoicePickerService: VoicePickerService {
     let savedLine: VoiceLine
     let session: URLSession
@@ -47,19 +60,13 @@ struct PairedVoicePickerService: VoicePickerService {
     }
 
     func voice() async throws(TTSServiceFailure) -> TTSView {
-        do { return try convert(await service.voice(conversationId: target.conversation.id)) }
+        do { return try await service.voice(conversationId: target.conversation.id) }
         catch { throw failure(error) }
     }
 
     func updateVoice(_ patch: TTSPatch) async throws(TTSServiceFailure) -> TTSView {
-        let request: VoicePatchRequest
-        switch patch {
-        case .reset: request = VoicePatchRequest(reset: true)
-        case let .choice(choice):
-            request = VoicePatchRequest(provider: choice.provider, model: choice.model, voice: choice.voice)
-        }
         guard (try? JSONEncoder().encode(patch).count) ?? Int.max <= 1024 else { throw .invalid(field: "voice") }
-        do { return try convert(await service.updateVoice(conversationId: target.conversation.id, request: request)) }
+        do { return try await service.updateVoice(conversationId: target.conversation.id, request: patch) }
         catch { throw failure(error) }
     }
 
@@ -71,11 +78,7 @@ struct PairedVoicePickerService: VoicePickerService {
         query.cursor = bounded(query.cursor)
         query.limit = min(max(query.limit ?? 50, 1), 100)
         do {
-            let page = try await service.voices(conversationId: target.conversation.id, query: query)
-            return CatalogPage(provider: page.provider, voices: page.voices.map {
-                VoiceLineCatalogVoice(id: $0.id, name: $0.name, language: $0.language, gender: $0.gender,
-                    description: $0.description, preview: $0.preview.flatMap(URL.init(string:)))
-            }, next: page.next)
+            return try await service.voices(conversationId: target.conversation.id, query: query)
         } catch { throw failure(error) }
     }
 
@@ -87,10 +90,6 @@ struct PairedVoicePickerService: VoicePickerService {
                 return count <= 512
             }))
         }
-    }
-
-    private func convert(_ view: VoiceView) throws -> TTSView {
-        try JSONDecoder().decode(TTSView.self, from: JSONEncoder().encode(view))
     }
 
     private func failure(_ error: any Error) -> TTSServiceFailure { (error as? AppError)?.voiceFailure ?? .malformed }

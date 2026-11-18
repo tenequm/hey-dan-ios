@@ -145,9 +145,9 @@ actor FixtureAppService: AppService {
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Calls are unavailable in this preview.")) }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) {}
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) {}
-    func voice(conversationId: String) async throws(AppError) -> VoiceView { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Voice settings are unavailable in this preview.")) }
-    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView { try await voice(conversationId: conversationId) }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog { VoiceCatalog(provider: query.provider, voices: []) }
+    func voice(conversationId: String) async throws(AppError) -> TTSView { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Voice settings are unavailable in this preview.")) }
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView { try await voice(conversationId: conversationId) }
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage { CatalogPage(provider: query.provider, voices: []) }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) {}
     func unpair() async throws(AppError) {}
 }

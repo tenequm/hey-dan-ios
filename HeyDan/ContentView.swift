@@ -1537,7 +1537,7 @@ private struct SettingsView: View {
             Text("Its call link leaves this phone. Shortcuts that call this line stop working.")
         }
         .sheet(item: $voiceLine) { entry in
-            VoicePickerSheet(line: entry.line, agentName: entry.name, callID: nil)
+            VoicePickerSheet(service: VoiceSettingsModel.lineService(entry.line), agentName: entry.name, callID: nil)
         }
     }
 

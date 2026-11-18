@@ -62,10 +62,10 @@ extension ChatController {
                             }
                             #endif
                         }
-                        if event.kind == .synchronized {
-                            CallLog.log(.stream, "synchronized cursor=\(reducer.cursor) count=\(batch.count) ms=\(CallLog.ms(since: started))")
-                            connectionState = .connected; error = nil; attempts = 0
-                        }
+                    }
+                    if batch.contains(where: { $0.kind == .synchronized }) {
+                        CallLog.log(.stream, "synchronized cursor=\(reducer.cursor) count=\(batch.count) ms=\(CallLog.ms(since: started))")
+                        connectionState = .connected; error = nil; attempts = 0
                     }
                     try await saveOutbox()
                     runOutbox()
@@ -83,9 +83,6 @@ extension ChatController {
             }
         }
     }
-}
-
-extension ChatController {
     nonisolated private static func batches(_ source: AsyncThrowingStream<AppEvent, any Error>) -> AsyncThrowingStream<[AppEvent], any Error> {
         let pair = AsyncThrowingStream<[AppEvent], any Error>.makeStream()
         let batcher = EventBatcher(continuation: pair.continuation)

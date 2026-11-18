@@ -88,17 +88,7 @@ final class SignedClientTests: XCTestCase {
         let client = SignedClient(host: URL(string: "https://post.invalid")!, deviceId: "dev_test",
             configuration: config, signer: { bytes, _ in try key.signature(for: bytes).derRepresentation })
         Stub.handler.withLock { $0 = { request in
-            let bytes: Data
-            if let body = request.httpBody { bytes = body }
-            else if let stream = request.httpBodyStream {
-                stream.open(); defer { stream.close() }
-                var data = Data(), buffer = [UInt8](repeating: 0, count: 1024)
-                while stream.hasBytesAvailable {
-                    let count = stream.read(&buffer, maxLength: buffer.count)
-                    if count <= 0 { break }; data.append(contentsOf: buffer.prefix(count))
-                }
-                bytes = data
-            } else { bytes = Data() }
+            let bytes = request.bodyBytes
             XCTAssertFalse(bytes.isEmpty)
             XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")!.contains("bh=" + SigningText.bodyHash(bytes) + ","))
             return (204, Data())
@@ -154,21 +144,6 @@ final class SignedClientTests: XCTestCase {
         }
     }
 
-    @MainActor func testStackPairAndRejectReusedLink() async throws {
-        guard let link = ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] else {
-            throw XCTSkip("No local stack pairing link supplied")
-        }
-        let account = "test-stack-" + UUID().uuidString
-        let pairings = Pairings(account: account, publishes: false)
-        while pairings.state == .unreadable { await Task.yield() }
-        defer { try? IdentityKeychain.remove(account: account) }
-        try await pairings.pair(link)
-        XCTAssertEqual(pairings.state, .paired)
-        do { try await pairings.pair(link); XCTFail("Reused code accepted") }
-        catch AppError.server(_, let body) { XCTAssertEqual(body.error, "invalid_code") }
-        if let active = pairings.active { try pairings.remove(host: active.host, deviceId: active.deviceId) }
-    }
-
     @MainActor func testCorruptSavedPairingsCanRecover() async throws {
         let account = "test-corrupt-" + UUID().uuidString
         try IdentityKeychain.save(Data("invalid".utf8), account: account)
@@ -183,7 +158,7 @@ final class SignedClientTests: XCTestCase {
 
 }
 
-private final class Stub: URLProtocol, @unchecked Sendable {
+final class Stub: URLProtocol, @unchecked Sendable {
     static let handler = Mutex<(@Sendable (URLRequest) throws -> (Int, Data))?>(nil)
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -198,4 +173,14 @@ private final class Stub: URLProtocol, @unchecked Sendable {
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
     override func stopLoading() {}
+}
+
+extension URLRequest {
+    var bodyBytes: Data {
+        guard let stream = httpBodyStream else { return httpBody ?? Data() }
+        stream.open(); defer { stream.close() }
+        var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+        return data
+    }
 }

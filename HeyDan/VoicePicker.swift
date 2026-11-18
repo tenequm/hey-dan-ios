@@ -442,7 +442,6 @@ enum VoiceSample {
 }
 
 struct VoicePickerSheet: View {
-    let service: any VoicePickerService
     let agentName: String
     let callID: UUID?
     @Environment(\.dismiss) private var dismiss
@@ -468,12 +467,7 @@ struct VoicePickerSheet: View {
     private var samplesUnavailable: Bool { call.isCallActive || call.liveCallID != nil }
     private var liveAvailable: Bool { !model.invalidated && callID != nil && callID == call.liveCallID && call.liveVoice != nil }
 
-    init(line: VoiceLine, agentName: String, callID: UUID?) {
-        self.init(service: VoiceSettingsModel.lineService(line), agentName: agentName, callID: callID)
-    }
-
     init(service: any VoicePickerService, agentName: String, callID: UUID?) {
-        self.service = service
         self.agentName = agentName
         self.callID = callID
         storedLineID = service.line.flatMap { line in CallController.shared.lines.entries.first { $0.line == line }?.id }

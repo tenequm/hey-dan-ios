@@ -27,7 +27,7 @@ struct ComposerView: View {
                     HStack {
                         ForEach(attachments, id: \.fileURL) { attachment in
                             VStack {
-                                AttachmentView(attachment: attachment, uploadProgress: nil)
+                                AttachmentView(attachment: attachment)
                                 Button("Remove", systemImage: "xmark.circle") {
                                     attachments.removeAll { $0.fileURL == attachment.fileURL }
                                     AttachmentStaging.remove(attachment)
@@ -37,7 +37,7 @@ struct ComposerView: View {
                             }.frame(width: 150)
                         }
                     }
-                }.accessibilityIdentifier(AXID.composerTray)
+                }
             }
             if importFailed {
                 Label("Could not read the selected attachment. Try selecting it again.", systemImage: "exclamationmark.circle")
@@ -128,7 +128,6 @@ struct ComposerView: View {
 extension AXID {
     static let composerText = "composer.text", composerSend = "composer.send",
         composerAttach = "composer.attach", composerPhotos = "composer.photos",
-        composerTray = "composer.tray", composerRemove = "composer.remove"
-    static let attachmentOpen = "attachment.open", attachmentRetry = "attachment.retry",
-        attachmentProgress = "attachment.progress", attachmentShare = "attachment.share"
+        composerRemove = "composer.remove"
+    static let attachmentOpen = "attachment.open"
 }

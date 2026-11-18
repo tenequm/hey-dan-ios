@@ -242,13 +242,13 @@ final class SignedClient: AppService {
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) -> Void {
         _ = try await data("POST", ["calls", "attempts", attemptId, "cancel"], body: encode(request))
     }
-    func voice(conversationId: String) async throws(AppError) -> VoiceView {
+    func voice(conversationId: String) async throws(AppError) -> TTSView {
         return try await json("GET", ["conversations", conversationId, "voice"])
     }
-    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView {
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView {
         return try await json("PATCH", ["conversations", conversationId, "voice"], body: encode(request))
     }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog {
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage {
         return try await json("GET", ["conversations", conversationId, "voices"], query: [("provider", Optional(query.provider)), ("q", query.q), ("language", query.language), ("gender", query.gender), ("cursor", query.cursor), ("limit", query.limit.map(String.init))].compactMap { k, v in v.map { (k, $0) } })
     }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) -> Void {

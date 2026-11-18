@@ -6,16 +6,14 @@ import UIKit
 
 @MainActor @Observable final class ChatController {
     static let shared: ChatController = {
-        let controller: ChatController
+        var controller: ChatController?
         #if DEBUG
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
-            controller = ChatController(service: FixtureAppService(), store: MemoryThreadStore())
-        } else { controller = ChatController(store: SwiftDataThreadStore()) }
-        #else
-        controller = ChatController(store: SwiftDataThreadStore())
+            controller = ChatController(service: FixtureAppService(), store: SwiftDataThreadStore(inMemory: true))
+        }
         #endif
         Task { @MainActor in _ = Pairings.shared }
-        return controller
+        return controller ?? ChatController(store: SwiftDataThreadStore())
     }()
     enum ConnectionState: Sendable { case disconnected, connecting, connected, reconnecting }
     private(set) var pairing: PairResponse?
@@ -27,15 +25,12 @@ import UIKit
     var thread: [ThreadEntity] { openConversationId.map { visibleThread($0) } ?? [] }
     var rows: [ThreadRow] { openConversationId.map { visibleRows($0) } ?? [] }
     var historyFloors: [String: Int64] = [:]
-    private func order(_ entity: ThreadEntity) -> Int64 {
-        switch entity { case .message(let m): m.order; case .question(let q): q.order; case .unknown: 0 }
-    }
     private func visibleThread(_ id: String) -> [ThreadEntity] {
-        reducer.thread(conversationId: id).filter { order($0) >= (historyFloors[id] ?? 0) }
+        reducer.thread(conversationId: id).filter { ($0.order ?? 0) >= (historyFloors[id] ?? 0) }
     }
     private func visibleRows(_ id: String) -> [ThreadRow] {
         reducer.rows(conversationId: id, outbox: outbox.entries).filter {
-            if case .entity(let entity) = $0 { return order(entity) >= (historyFloors[id] ?? 0) }
+            if case .entity(let entity) = $0 { return (entity.order ?? 0) >= (historyFloors[id] ?? 0) }
             return true
         }
     }
@@ -221,13 +216,13 @@ import UIKit
         reducer.upsert(list.badge)
         hasCursor = true
     }
-    func loadHistory(before: Int64? = nil, after: Int64? = nil, newest: Bool = false) async {
+    func loadHistory(before: Int64? = nil, newest: Bool = false) async {
         guard let id = openConversationId, ready else { return }
         let token = generation
         do {
-            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before ?? (after == nil && !newest ? historyFloors[id] : nil), after: after))
+            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before ?? (newest ? nil : historyFloors[id])))
             guard token == generation, !Task.isCancelled else { return }
-            if after == nil, let floor = page.items.map({ order($0) }).min() {
+            if let floor = page.items.compactMap(\.order).min() {
                 historyFloors[id] = min(historyFloors[id] ?? floor, floor)
             }
             let changed = reducer.upsert(page, conversationId: id)

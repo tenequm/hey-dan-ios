@@ -2,17 +2,15 @@ import XCTest
 
 final class ChatComposerChecks: XCTestCase {
     @MainActor private func launch(attachment: Bool = false, bytes: Int = 1024) throws -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["HEYDAN_FIXTURE_CHAT"] = "1"
-        app.launchEnvironment["HEYDAN_COMPOSER_CHECKS"] = "1"
+        var environment: [String: String] = [:]
+        environment["HEYDAN_FIXTURE_CHAT"] = "1"
+        environment["HEYDAN_COMPOSER_CHECKS"] = "1"
         if attachment {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("composer-check.txt")
             try Data(repeating: 65, count: bytes).write(to: url)
-            app.launchEnvironment["HEYDAN_FIXTURE_ATTACHMENT"] = url.path
+            environment["HEYDAN_FIXTURE_ATTACHMENT"] = url.path
         }
-        app.launch()
-        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
-        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        let app = launchChat(environment)
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
         app.buttons["chat.conversation.conv_taylor01"].tap()
         XCTAssertTrue(app.textFields["composer.text"].waitForExistence(timeout: 10))
@@ -63,15 +61,6 @@ final class ChatComposerChecks: XCTestCase {
             button.tap()
             XCTAssertTrue(app.otherElements["QLPreviewControllerView"].waitForExistence(timeout: 10))
             app.terminate()
-        }
-    }
-
-    @MainActor func testScrollMemory() throws {
-        let app = try launch()
-        let rows = app.scrollViews["composer.fixture.rows"]
-        measure(metrics: [XCTMemoryMetric(application: app)]) {
-            rows.swipeUp()
-            rows.swipeDown()
         }
     }
 

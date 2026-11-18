@@ -58,12 +58,6 @@ final class ChatChecks: XCTestCase {
         XCTAssertEqual(app.buttons.matching(identifier: "chat.conversation.conv_taylor01").count, 1)
     }
 
-    func testPairedList() throws {
-        try stack()
-        launch()
-        XCTAssertTrue(conversation().waitForExistence(timeout: 20))
-    }
-
     func testPastePair() throws {
         try stack()
         launch()

@@ -12,10 +12,4 @@ struct PairedCallFailureTests {
         #expect(!CallFailure.pairedTransport.message.contains("Tailscale"))
         #expect(!TTSServiceFailure.pairedTransport.message.contains("Tailscale"))
     }
-
-    @Test func resetPatchPreservesWireShape() throws {
-        let data = try JSONEncoder().encode(VoicePatchRequest(reset: true))
-        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Bool])
-        #expect(body == ["reset": true])
-    }
 }

@@ -15,7 +15,6 @@ struct ConversationList: View {
             List {
                 if chat.connectionState != .connected {
                     Text(connectionLabel).font(Theme.sans(13)).foregroundStyle(Theme.muted)
-                        .accessibilityIdentifier(AXID.connection)
                 }
                 ForEach(chat.conversations, id: \.id) { conversation in
                     NavigationLink(value: conversation.id) {
@@ -41,7 +40,6 @@ struct ConversationList: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.page)
-            .accessibilityIdentifier(AXID.conversationList)
         }
         .tint(Theme.orange)
         .preferredColorScheme(.dark)

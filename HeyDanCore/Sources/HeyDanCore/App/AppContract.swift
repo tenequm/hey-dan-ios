@@ -52,7 +52,7 @@ nonisolated public enum Voice: Sendable, Equatable, Codable {
 }
 
 nonisolated public enum Kind: Sendable, Equatable, Codable {
-    case conversation, message, question, status, badge, synchronized, image, file, daily, duration
+    case conversation, message, question, status, badge, synchronized, image, file
     case unknown(String)
     public init(_ value: String) {
         switch value {
@@ -64,8 +64,6 @@ nonisolated public enum Kind: Sendable, Equatable, Codable {
         case "synchronized": self = .synchronized
         case "image": self = .image
         case "file": self = .file
-        case "daily": self = .daily
-        case "duration": self = .duration
         default: self = .unknown(value)
         }
     }
@@ -79,8 +77,6 @@ nonisolated public enum Kind: Sendable, Equatable, Codable {
         case .synchronized: "synchronized"
         case .image: "image"
         case .file: "file"
-        case .daily: "daily"
-        case .duration: "duration"
         case .unknown(let value): value
         }
     }
@@ -176,25 +172,17 @@ nonisolated public struct AppVersion: Sendable, Equatable, Codable {
 nonisolated public struct ErrorBody: Sendable, Equatable, Codable {
     public var `error`: String
     public var `message`: String
-    public var `protocol`: Int?
     public var `serverTime`: Int64?
     public var `retryAfter`: Int?
     public var `fileId`: String?
-    public var `maxBytes`: Int64?
     public var `question`: Question?
-    public var `provider`: String?
-    public var `field`: String?
-    public init(`error`: String, `message`: String, `protocol`: Int? = nil, `serverTime`: Int64? = nil, `retryAfter`: Int? = nil, `fileId`: String? = nil, `maxBytes`: Int64? = nil, `question`: Question? = nil, `provider`: String? = nil, `field`: String? = nil) {
+    public init(`error`: String, `message`: String, `serverTime`: Int64? = nil, `retryAfter`: Int? = nil, `fileId`: String? = nil, `question`: Question? = nil) {
         self.`error` = `error`
         self.`message` = `message`
-        self.`protocol` = `protocol`
         self.`serverTime` = `serverTime`
         self.`retryAfter` = `retryAfter`
         self.`fileId` = `fileId`
-        self.`maxBytes` = `maxBytes`
         self.`question` = `question`
-        self.`provider` = `provider`
-        self.`field` = `field`
     }
 }
 
@@ -248,12 +236,6 @@ nonisolated public struct LastMessage: Sendable, Equatable, Codable {
     public var `role`: Role
     public var `preview`: String
     public var `at`: Int64
-    public init(`id`: String, `role`: Role, `preview`: String, `at`: Int64) {
-        self.`id` = `id`
-        self.`role` = `role`
-        self.`preview` = `preview`
-        self.`at` = `at`
-    }
 }
 
 nonisolated public struct Conversation: Sendable, Equatable, Codable {
@@ -303,10 +285,6 @@ nonisolated public struct FileAttachment: Sendable, Equatable, Codable {
 nonisolated public struct Reaction: Sendable, Equatable, Codable {
     public var `emoji`: String
     public var `by`: Role
-    public init(`emoji`: String, `by`: Role) {
-        self.`emoji` = `emoji`
-        self.`by` = `by`
-    }
 }
 
 nonisolated public struct Message: Sendable, Equatable, Codable {
@@ -320,13 +298,12 @@ nonisolated public struct Message: Sendable, Equatable, Codable {
     public var `files`: [FileAttachment]
     public var `reactions`: [Reaction]
     public var `voice`: Voice?
-    public var `replyTo`: String?
     public var `clientId`: String?
     public var `delivery`: Delivery?
     public var `deliveryError`: ErrorBody?
     public var `createdAt`: Int64
     public var `editedAt`: Int64?
-    public init(`kind`: Kind, `id`: String, `conversationId`: String, `order`: Int64, `seq`: Int64, `role`: Role, `text`: String, `files`: [FileAttachment], `reactions`: [Reaction], `voice`: Voice? = nil, `replyTo`: String? = nil, `clientId`: String? = nil, `delivery`: Delivery? = nil, `deliveryError`: ErrorBody? = nil, `createdAt`: Int64, `editedAt`: Int64? = nil) {
+    public init(`kind`: Kind, `id`: String, `conversationId`: String, `order`: Int64, `seq`: Int64, `role`: Role, `text`: String, `files`: [FileAttachment], `reactions`: [Reaction], `voice`: Voice? = nil, `clientId`: String? = nil, `delivery`: Delivery? = nil, `deliveryError`: ErrorBody? = nil, `createdAt`: Int64, `editedAt`: Int64? = nil) {
         self.`kind` = `kind`
         self.`id` = `id`
         self.`conversationId` = `conversationId`
@@ -337,7 +314,6 @@ nonisolated public struct Message: Sendable, Equatable, Codable {
         self.`files` = `files`
         self.`reactions` = `reactions`
         self.`voice` = `voice`
-        self.`replyTo` = `replyTo`
         self.`clientId` = `clientId`
         self.`delivery` = `delivery`
         self.`deliveryError` = `deliveryError`
@@ -505,13 +481,6 @@ nonisolated public struct FileInitRequest: Sendable, Equatable, Codable {
     public var `mimeType`: String
     public var `size`: Int64
     public var `sha256`: String
-    public init(`uploadKey`: String, `name`: String, `mimeType`: String, `size`: Int64, `sha256`: String) {
-        self.`uploadKey` = `uploadKey`
-        self.`name` = `name`
-        self.`mimeType` = `mimeType`
-        self.`size` = `size`
-        self.`sha256` = `sha256`
-    }
 }
 
 nonisolated public struct FileInitResponse: Sendable, Equatable, Codable {
@@ -529,27 +498,6 @@ nonisolated public struct FileInitResponse: Sendable, Equatable, Codable {
     }
 }
 
-nonisolated public struct TicketClaims: Sendable, Equatable, Codable {
-    public var `v`: Int
-    public var `purpose`: String
-    public var `fileId`: String
-    public var `deviceId`: String
-    public var `userId`: String
-    public var `size`: Int64
-    public var `sha256`: String
-    public var `exp`: Int64
-    public init(`v`: Int, `purpose`: String, `fileId`: String, `deviceId`: String, `userId`: String, `size`: Int64, `sha256`: String, `exp`: Int64) {
-        self.`v` = `v`
-        self.`purpose` = `purpose`
-        self.`fileId` = `fileId`
-        self.`deviceId` = `deviceId`
-        self.`userId` = `userId`
-        self.`size` = `size`
-        self.`sha256` = `sha256`
-        self.`exp` = `exp`
-    }
-}
-
 nonisolated public struct CallRequest: Sendable, Equatable, Codable {
     public var `conversationId`: String
     public var `attemptId`: String
@@ -563,15 +511,6 @@ nonisolated public struct CallRequest: Sendable, Equatable, Codable {
     }
 }
 
-nonisolated public struct CallLimit: Sendable, Equatable, Codable {
-    public var `ms`: Int64
-    public var `kind`: Kind
-    public init(`ms`: Int64, `kind`: Kind) {
-        self.`ms` = `ms`
-        self.`kind` = `kind`
-    }
-}
-
 nonisolated public struct CallGrant: Sendable, Equatable, Codable {
     public var `protocol`: Int
     public var `url`: String
@@ -579,19 +518,13 @@ nonisolated public struct CallGrant: Sendable, Equatable, Codable {
     public var `callId`: String
     public var `attemptId`: String
     public var `agent`: String
-    public var `chat`: String
-    public var `silenceMs`: Int64
-    public var `limit`: CallLimit
-    public init(`protocol`: Int, `url`: String, `token`: String, `callId`: String, `attemptId`: String, `agent`: String, `chat`: String, `silenceMs`: Int64, `limit`: CallLimit) {
+    public init(`protocol`: Int, `url`: String, `token`: String, `callId`: String, `attemptId`: String, `agent`: String) {
         self.`protocol` = `protocol`
         self.`url` = `url`
         self.`token` = `token`
         self.`callId` = `callId`
         self.`attemptId` = `attemptId`
         self.`agent` = `agent`
-        self.`chat` = `chat`
-        self.`silenceMs` = `silenceMs`
-        self.`limit` = `limit`
     }
 }
 
@@ -674,144 +607,6 @@ nonisolated public struct Synchronized: Sendable, Equatable, Codable {
     public var `seq`: Int64
     public init(`seq`: Int64) {
         self.`seq` = `seq`
-    }
-}
-
-nonisolated public struct VoiceSelection: Sendable, Equatable, Codable {
-    public var `provider`: String
-    public var `model`: String
-    public var `voice`: String
-    public init(`provider`: String, `model`: String, `voice`: String) {
-        self.`provider` = `provider`
-        self.`model` = `model`
-        self.`voice` = `voice`
-    }
-}
-
-nonisolated public struct SavedVoiceSelection: Sendable, Equatable, Codable {
-    public var `provider`: String?
-    public var `model`: String?
-    public var `voice`: String?
-    public init(`provider`: String?, `model`: String?, `voice`: String?) {
-        self.`provider` = `provider`
-        self.`model` = `model`
-        self.`voice` = `voice`
-    }
-}
-
-nonisolated public struct VoicePatchRequest: Sendable, Equatable, Codable {
-    public var reset: Bool?
-    public var `provider`: String?
-    public var `model`: String?
-    public var `voice`: String?
-    public init(reset: Bool? = nil, `provider`: String? = nil, `model`: String? = nil, `voice`: String? = nil) {
-        self.reset = reset
-        self.`provider` = `provider`
-        self.`model` = `model`
-        self.`voice` = `voice`
-    }
-}
-
-nonisolated public struct VoiceDetails: Sendable, Equatable, Codable {
-    public var `provider`: String
-    public var `providerName`: String
-    public var `model`: String
-    public var `modelName`: String
-    public var `voice`: String
-    public var `voiceName`: String?
-    public var `language`: String?
-    public var `gender`: String?
-    public var `preview`: String?
-    public var `status`: String
-    public init(`provider`: String, `providerName`: String, `model`: String, `modelName`: String, `voice`: String, `voiceName`: String?, `language`: String? = nil, `gender`: String? = nil, `preview`: String? = nil, `status`: String) {
-        self.`provider` = `provider`
-        self.`providerName` = `providerName`
-        self.`model` = `model`
-        self.`modelName` = `modelName`
-        self.`voice` = `voice`
-        self.`voiceName` = `voiceName`
-        self.`language` = `language`
-        self.`gender` = `gender`
-        self.`preview` = `preview`
-        self.`status` = `status`
-    }
-}
-
-nonisolated public struct VoiceDefaults: Sendable, Equatable, Codable {
-    public var `model`: String
-    public var `voice`: String
-    public init(`model`: String, `voice`: String) {
-        self.`model` = `model`
-        self.`voice` = `voice`
-    }
-}
-
-nonisolated public struct VoiceProvider: Sendable, Equatable, Codable {
-    public var `id`: String
-    public var `name`: String
-    public var `available`: Bool
-    public var `models`: [String]
-    public var `modelNames`: [String:String]?
-    public var `default`: VoiceDefaults
-    public var `defaultDetails`: VoiceDetails?
-    public init(`id`: String, `name`: String, `available`: Bool, `models`: [String], `modelNames`: [String:String]? = nil, `default`: VoiceDefaults, `defaultDetails`: VoiceDetails? = nil) {
-        self.`id` = `id`
-        self.`name` = `name`
-        self.`available` = `available`
-        self.`models` = `models`
-        self.`modelNames` = `modelNames`
-        self.`default` = `default`
-        self.`defaultDetails` = `defaultDetails`
-    }
-}
-
-nonisolated public struct VoiceViewDetails: Sendable, Equatable, Codable {
-    public var `saved`: VoiceDetails
-    public var `effective`: VoiceDetails
-    public init(`saved`: VoiceDetails, `effective`: VoiceDetails) {
-        self.`saved` = `saved`
-        self.`effective` = `effective`
-    }
-}
-
-nonisolated public struct VoiceView: Sendable, Equatable, Codable {
-    public var `effective`: VoiceSelection
-    public var `saved`: SavedVoiceSelection
-    public var `details`: VoiceViewDetails?
-    public var `providers`: [VoiceProvider]
-    public init(`effective`: VoiceSelection, `saved`: SavedVoiceSelection, `details`: VoiceViewDetails? = nil, `providers`: [VoiceProvider]) {
-        self.`effective` = `effective`
-        self.`saved` = `saved`
-        self.`details` = `details`
-        self.`providers` = `providers`
-    }
-}
-
-nonisolated public struct CatalogVoice: Sendable, Equatable, Codable {
-    public var `id`: String
-    public var `name`: String
-    public var `language`: String?
-    public var `gender`: String?
-    public var `description`: String?
-    public var `preview`: String?
-    public init(`id`: String, `name`: String, `language`: String? = nil, `gender`: String? = nil, `description`: String? = nil, `preview`: String? = nil) {
-        self.`id` = `id`
-        self.`name` = `name`
-        self.`language` = `language`
-        self.`gender` = `gender`
-        self.`description` = `description`
-        self.`preview` = `preview`
-    }
-}
-
-nonisolated public struct VoiceCatalog: Sendable, Equatable, Codable {
-    public var `provider`: String
-    public var `voices`: [CatalogVoice]
-    public var `next`: String?
-    public init(`provider`: String, `voices`: [CatalogVoice], `next`: String? = nil) {
-        self.`provider` = `provider`
-        self.`voices` = `voices`
-        self.`next` = `next`
     }
 }
 

@@ -7,7 +7,9 @@ import Testing
     let expect = stream["expect"] as! [String: Any]
     var parser = SSEParser(), reducer = ThreadReducer()
     for event in try parser.feed(Data((stream["raw"] as! String).utf8)) {
+        let before = reducer.cursor
         try reducer.apply(event)
+        if event.kind == .status || event.kind == .badge { #expect(reducer.cursor == before) }
         if event.kind == .synchronized { #expect(reducer.cursor == Int64(expect["cursorAtSynchronized"] as! Int)) }
     }
     #expect(reducer.cursor == Int64(expect["cursorAfter"] as! Int))
@@ -38,6 +40,7 @@ import Testing
         reducer.upsert(.message(first))
         #expect(reducer.thread(conversationId: "conv_taylor01").map(id) == ordered)
     } else { Issue.record("Expected first message") }
+    #expect(reducer.cursor == Int64(expect["cursorAfter"] as! Int))
     let before = reducer.cursor
     reducer.upsert(try fixtureDecode(ConversationsResponse.self, f["conversations"]!))
     #expect(reducer.cursor == before)

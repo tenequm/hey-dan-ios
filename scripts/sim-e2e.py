@@ -284,10 +284,7 @@ def ui_check(name, method, stack=False):
                     shutil.copyfile(path, destination / path.name)
                     screenshots.append(str((destination / path.name).relative_to(OUT)))
         if re.search(r'Executed 1 test, with 1 test skipped', output):
-            reasons = ('No local stack is running: HEYDAN_LOCAL_BASE and HEYDAN_PAIR_CMD are required',
-                       'Stack conversation needs more than one page of history',
-                       'Stack must seed an unread conversation')
-            reason = next((reason for reason in reasons if reason in output), 'UI prerequisite unavailable; see lane report')
+            reason = 'UI prerequisite unavailable; see check log'
             result(name, 'skip', reason, [f'logs/{name}.log'])
         elif 'Executed 1 test, with 0 failures' not in output:
             result(name, 'fail', 'Expected exactly one executed test with zero failures', [f'logs/{name}.log'])
@@ -454,7 +451,6 @@ def chat_checks():
 def report():
     order = ['sim-setup', 'sim-local-ca', 'sim-build', 'sim-permission', 'sim-call',
              'app-fixture-unread', *APP_CHECKS]
-    (OUT / 'check-order.json').write_text(json.dumps(order) + '\n')
     lines = ['# Simulator run', '']
     for name in order:
         if name in RECORDS:
@@ -477,15 +473,7 @@ def main():
     no_stack = not os.environ.get('HEYDAN_LOCAL_BASE') or not os.environ.get('HEYDAN_PAIR_CMD')
     for name in APP_CHECKS:
         result(name, 'skip', 'No local stack is running: HEYDAN_LOCAL_BASE and HEYDAN_PAIR_CMD required'
-               if no_stack else 'Flow requires additional observable app hooks; see lane report')
-    pending = {
-        'app-signature-refusal': 'Signed malformed-request checks belong to the N9b scripted client',
-        'app-unpair': 'Missing HEYDAN_REVOKED_CMD' if not os.environ.get('HEYDAN_REVOKED_CMD') else 'Not reached',
-        'app-resume-server': 'Missing HEYDAN_STACK_RESTART_CMD' if not os.environ.get('HEYDAN_STACK_RESTART_CMD') else 'Needs stream cursor readback across host restart',
-    }
-    if not no_stack:
-        for name, reason in pending.items():
-            result(name, 'skip', reason)
+               if no_stack else 'Not reached in this invocation')
     result('app-push-extension', 'skip', 'simctl push does not execute the notification service extension; requires real APNs')
     result('app-push-edit', 'skip', 'Replacing a delivered banner requires a real APNs push')
 

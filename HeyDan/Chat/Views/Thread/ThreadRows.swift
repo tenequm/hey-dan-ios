@@ -2,9 +2,7 @@ import SwiftUI
 import HeyDanCore
 
 extension AXID {
-    static let conversationList = "chat.list"
     static let thread = "chat.thread"
-    static let connection = "chat.connection"
     static let status = "chat.status"
     static func conversation(_ id: String) -> String { "chat.conversation.\(id)" }
     static func message(_ id: String) -> String { "chat.message.\(id)" }
@@ -38,38 +36,36 @@ struct MessageRow: View {
     @State private var confirmsRetry = false
 
     var body: some View {
-        if message.role == .user || message.role == .agent || message.role == .host {
-            VStack(alignment: .leading, spacing: 10) {
-                if message.role == .user {
-                    Text(message.text).textSelection(.enabled)
-                } else {
-                    MessageBody(text: message.text)
-                }
-                ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
-                HStack {
-                    if message.voice == .caller {
-                        Label("From a call", systemImage: "mic")
-                    } else if message.voice == .spoken {
-                        Label("Spoken", systemImage: "speaker.wave.2")
-                    }
-                    ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
-                        Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
-                    }
-                    if message.editedAt != nil { Text("Edited") }
-                }
-                .font(Theme.sans(12)).foregroundStyle(Theme.muted)
-                if message.role == .user { delivery }
+        VStack(alignment: .leading, spacing: 10) {
+            if message.role == .user {
+                Text(message.text).textSelection(.enabled)
+            } else {
+                MessageBody(text: message.text)
             }
-            .font(Theme.sans(16))
-            .foregroundStyle(Theme.text)
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(message.role == .user ? Theme.card : Theme.page, in: RoundedRectangle(cornerRadius: 14))
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier(AXID.message(message.id))
-            .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
-                Button("Send again") { if let id = message.clientId { retry(id) } }
+            ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
+            HStack {
+                if message.voice == .caller {
+                    Label("From a call", systemImage: "mic")
+                } else if message.voice == .spoken {
+                    Label("Spoken", systemImage: "speaker.wave.2")
+                }
+                ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
+                    Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
+                }
+                if message.editedAt != nil { Text("Edited") }
             }
+            .font(Theme.sans(12)).foregroundStyle(Theme.muted)
+            if message.role == .user { delivery }
+        }
+        .font(Theme.sans(16))
+        .foregroundStyle(Theme.text)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(message.role == .user ? Theme.card : Theme.page, in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(AXID.message(message.id))
+        .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
+            Button("Send again") { if let id = message.clientId { retry(id) } }
         }
     }
 
@@ -141,7 +137,6 @@ struct QuestionCard: View {
 
 struct OutboxRow: View {
     let entry: Outbox.Entry
-    var uploadProgress: [String: Double]
     var retry: (String) -> Void
     var discard: (String) -> Void
     @State private var confirmsRetry = false
@@ -152,9 +147,6 @@ struct OutboxRow: View {
             Text(entry.state.label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
                 Text(attachment.name)
-                if entry.state == .uploading {
-                    ProgressView(value: uploadProgress[attachment.uploadKey] ?? 0)
-                }
             }
             if let error = entry.lastServerError { Text(error.message).foregroundStyle(Theme.error) }
             if entry.state == .failed || entry.state == .outcomeUnknown {
@@ -169,7 +161,6 @@ struct OutboxRow: View {
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("chat.outbox.\(entry.request.clientId)")
         .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
             Button("Send again") { retry(entry.request.clientId) }
         }
@@ -180,8 +171,6 @@ private extension Outbox.State {
     var label: String {
         switch self {
         case .queued: "Queued"
-        case .uploading: "Uploading"
-        case .sending: "Sending"
         case .waiting: "Waiting to retry"
         case .held: "Held"
         case .stored: "Stored"

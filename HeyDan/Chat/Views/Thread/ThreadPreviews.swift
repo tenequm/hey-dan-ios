@@ -14,17 +14,12 @@ private enum ThreadPreviewValues {
     static let voiceCaller0: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[],"voice":"caller","replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":null,"seq":2107,"order":2107,"createdAt":1794943662000,"id":"msg_2107","role":"user","text":"What is two plus two?"}"####)
     static let voiceSpoken0: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[],"voice":"spoken","replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":null,"seq":2108,"order":2108,"createdAt":1794943662000,"id":"msg_2108","role":"agent","text":"Four."}"####)
     static let host0: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[],"voice":null,"replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":null,"seq":2109,"order":2109,"createdAt":1794943662000,"id":"msg_2109","role":"host","text":"Context cleared."}"####)
-    static let future0: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[],"voice":"whispered","replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":null,"id":"msg_0130","order":130,"seq":130,"role":"narrator","mood":"calm","text":"A role and fields from a later server.","createdAt":1794943602000}"####)
-    static let editSequence0: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[],"voice":null,"replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":null,"id":"msg_0126","order":126,"seq":126,"role":"agent","text":"First draft.","createdAt":1794943592000}"####)
-    static let editSequence1: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[],"voice":null,"replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":1794943593000,"id":"msg_0126","order":126,"seq":127,"role":"agent","text":"Second draft.","createdAt":1794943592000}"####)
     static let editSequence2: Message = decode(####"{"kind":"message","conversationId":"conv_taylor01","files":[],"reactions":[{"emoji":"👍","by":"agent"}],"voice":null,"replyTo":null,"clientId":null,"delivery":null,"deliveryError":null,"editedAt":1794943593000,"id":"msg_0126","order":126,"seq":128,"role":"agent","text":"Second draft.","createdAt":1794943592000}"####)
     static let questionopen: Question = decode(####"{"kind":"question","id":"q_0123","conversationId":"conv_taylor01","order":123,"seq":123,"title":"Deploy","text":"Deploy to which environment?","options":[{"label":"Staging","selectedLabel":"Staging","value":"staging","style":"primary"},{"label":"Production","selectedLabel":"Production","value":"production","style":"danger"},{"label":"Cancel","selectedLabel":"Cancelled","value":"cancel","style":null}],"state":"open","answer":null,"createdAt":1794943574000,"expiresAt":1794943874000}"####)
     static let questionanswered: Question = decode(####"{"kind":"question","id":"q_0123","conversationId":"conv_taylor01","order":123,"seq":125,"title":"Deploy","text":"Deploy to which environment?","options":[{"label":"Staging","selectedLabel":"Staging","value":"staging","style":"primary"},{"label":"Production","selectedLabel":"Production","value":"production","style":"danger"},{"label":"Cancel","selectedLabel":"Cancelled","value":"cancel","style":null}],"state":"answered","answer":{"value":"staging","label":"Staging","at":1794943587000},"createdAt":1794943574000,"expiresAt":1794943874000}"####)
     static let questionexpired: Question = decode(####"{"kind":"question","id":"q_2110","conversationId":"conv_taylor01","order":2110,"seq":2111,"title":"Deploy","text":"Deploy to which environment?","options":[{"label":"Staging","selectedLabel":"Staging","value":"staging","style":"primary"},{"label":"Production","selectedLabel":"Production","value":"production","style":"danger"},{"label":"Cancel","selectedLabel":"Cancelled","value":"cancel","style":null}],"state":"expired","answer":null,"createdAt":1794943574000,"expiresAt":1794943662000}"####)
-    static let questionnoDeadline: Question = decode(####"{"kind":"question","id":"q_2112","conversationId":"conv_taylor01","order":2112,"seq":2112,"title":"Deploy","text":"Deploy to which environment?","options":[{"label":"Staging","selectedLabel":"Staging","value":"staging","style":"primary"},{"label":"Production","selectedLabel":"Production","value":"production","style":"danger"},{"label":"Cancel","selectedLabel":"Cancelled","value":"cancel","style":null}],"state":"open","answer":null,"createdAt":1794943574000,"expiresAt":null}"####)
     static let statusworking: Status = decode(####"{"kind":"status","conversationId":"conv_taylor01","rev":41,"state":"working","label":"Running a command","at":1794943595000}"####)
     static let statuswaiting: Status = decode(####"{"kind":"status","conversationId":"conv_taylor01","rev":40,"state":"waiting","label":"Waiting for your answer","at":1794943574000}"####)
-    static let statusidle: Status = decode(####"{"kind":"status","conversationId":"conv_taylor01","rev":42,"state":"idle","label":null,"at":1794943607000}"####)
     static let conversation: Conversation = decode(####"{"kind":"conversation","id":"conv_taylor01","seq":129,"agent":{"id":"ag_taylor","name":"Taylor"},"lastMessage":{"id":"msg_0126","role":"agent","preview":"Second draft.","at":1794943593000},"unread":3,"readOrder":118,"canCall":true,"callRefusal":null,"createdAt":1794857162000}"####)
 }
 #Preview("agentMarkdown0") { MessageRow(message: ThreadPreviewValues.agentMarkdown0).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
@@ -35,17 +30,12 @@ private enum ThreadPreviewValues {
 #Preview("voiceCaller0") { MessageRow(message: ThreadPreviewValues.voiceCaller0).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
 #Preview("voiceSpoken0") { MessageRow(message: ThreadPreviewValues.voiceSpoken0).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
 #Preview("host0") { MessageRow(message: ThreadPreviewValues.host0).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
-#Preview("future0") { MessageRow(message: ThreadPreviewValues.future0).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
-#Preview("editSequence0") { MessageRow(message: ThreadPreviewValues.editSequence0).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
-#Preview("editSequence1") { MessageRow(message: ThreadPreviewValues.editSequence1).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
 #Preview("editSequence2") { MessageRow(message: ThreadPreviewValues.editSequence2).preferredColorScheme(.dark).dynamicTypeSize(...DynamicTypeSize.accessibility2) }
 #Preview("Question open") { QuestionCard(question: ThreadPreviewValues.questionopen).preferredColorScheme(.dark) }
 #Preview("Question answered") { QuestionCard(question: ThreadPreviewValues.questionanswered).preferredColorScheme(.dark) }
 #Preview("Question expired") { QuestionCard(question: ThreadPreviewValues.questionexpired).preferredColorScheme(.dark) }
-#Preview("Question noDeadline") { QuestionCard(question: ThreadPreviewValues.questionnoDeadline).preferredColorScheme(.dark) }
 #Preview("Status working") { StatusPill(status: ThreadPreviewValues.statusworking) }
 #Preview("Status waiting") { StatusPill(status: ThreadPreviewValues.statuswaiting) }
-#Preview("Status idle") { StatusPill(status: ThreadPreviewValues.statusidle) }
 #Preview("Conversation unread") { ConversationRow(conversation: ThreadPreviewValues.conversation) }
 #Preview("Conversation read") {
     var conversation = ThreadPreviewValues.conversation
@@ -66,7 +56,7 @@ private enum ThreadPreviewValues {
 #Preview("Outbox states") {
     ScrollView {
         VStack {
-            ForEach(Array([Outbox.State.queued, .uploading, .sending, .waiting, .held, .stored, .routed, .reached, .failed, .outcomeUnknown].enumerated()), id: \.offset) { _, state in
+            ForEach(Array([Outbox.State.queued, .waiting, .held, .stored, .routed, .reached, .failed, .outcomeUnknown].enumerated()), id: \.offset) { _, state in
                 MessageRow(message: ThreadPreviewValues.userWithFile0, outboxState: state)
             }
         }
