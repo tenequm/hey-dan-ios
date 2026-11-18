@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 import QuickLook
 
 struct AttachmentView: View {
+    @Environment(\.theme) private var theme
     private let file: FileAttachment
     private let localURL: URL?
     private let download: (FileAttachment) async throws -> URL
@@ -27,8 +28,9 @@ struct AttachmentView: View {
 
     init(attachment: StagedAttachment) {
         let type = UTType(mimeType: attachment.mimeType)
+        let size = (try? attachment.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         file = FileAttachment(id: attachment.fileURL.absoluteString, name: attachment.name,
-                              mimeType: attachment.mimeType, size: 0,
+                              mimeType: attachment.mimeType, size: Int64(size),
                               kind: type?.conforms(to: .image) == true ? .image : .file)
         localURL = attachment.fileURL
         download = { _ in attachment.fileURL }
@@ -50,37 +52,57 @@ struct AttachmentView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                if let loadedURL { previewURL = loadedURL }
-                else { openWhenLoaded = true; requested = true; attempt += 1 }
-            } label: {
-                VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: theme.space.s1) {
+            HStack(spacing: theme.space.s2) {
+                Button {
+                    if let loadedURL { previewURL = loadedURL }
+                    else { openWhenLoaded = true; requested = true; attempt += 1 }
+                } label: {
                     if file.kind == .image {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 12).fill(.quaternary)
-                            if let thumbnail {
-                                Image(uiImage: thumbnail).resizable().scaledToFit()
-                            } else if failure == nil { ProgressView() }
+                        Rectangle().fill(theme.color.surfaceSubtle)
+                            .aspectRatio(localURL == nil ? 240 / imageHeight : 1, contentMode: .fit)
+                            .overlay {
+                                if let thumbnail { Image(uiImage: thumbnail).resizable().scaledToFill() }
+                                else if failure == nil { ProgressView() }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: theme.radius.m))
+                            .frame(maxWidth: localURL == nil ? 240 : 56)
+                            .accessibilityLabel(file.name)
+                    } else {
+                        HStack(spacing: theme.space.s3) {
+                            Image(systemName: icon)
+                                .foregroundStyle(theme.color.iconMuted)
+                                .frame(width: theme.space.s10, height: theme.space.s10)
+                                .background(theme.color.surfaceSubtle, in: RoundedRectangle(cornerRadius: theme.radius.s))
+                            VStack(alignment: .leading, spacing: theme.space.s0_5) {
+                                Text(file.name).textRole(theme.type.footnote, theme.weight.semibold).lineLimit(2)
+                                Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                                    .textRole(theme.type.label).foregroundStyle(theme.color.textSecondary)
+                            }
                         }
-                        .frame(maxWidth: 240)
-                        .frame(height: imageHeight)
-                        .clipped()
-                    } else { Image(systemName: icon).font(.title) }
-                    Text(file.name).lineLimit(2)
-                    if localURL == nil { Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)).font(.caption) }
+                        .padding(theme.space.s3)
+                        .contentShape(Rectangle())
+                    }
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(AXID.attachmentOpen)
+                if let loadedURL {
+                    ShareLink(item: loadedURL) { Image(systemName: "square.and.arrow.up") }
+                        .accessibilityLabel("Share").foregroundStyle(theme.color.iconMuted)
+                        .padding(.trailing, theme.space.s3)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier(AXID.attachmentOpen)
+            .foregroundStyle(theme.color.textPrimary)
+            .background(file.kind == .image ? .clear : theme.color.surfaceCard, in: RoundedRectangle(cornerRadius: theme.radius.l))
+            .overlay {
+                if file.kind != .image {
+                    RoundedRectangle(cornerRadius: theme.radius.l).strokeBorder(theme.color.border).allowsHitTesting(false)
+                }
+            }
             if requested && loadedURL == nil && failure == nil && file.kind != .image { ProgressView() }
             if let failure {
-                Text(failure).font(.caption)
-                Button("Retry") { attempt += 1 }
-            }
-            if let loadedURL {
-                ShareLink(item: loadedURL)
+                Text(failure).textRole(theme.type.caption).foregroundStyle(theme.color.danger)
+                Button("Retry") { attempt += 1 }.tint(theme.color.accentText)
             }
         }
         .quickLookPreview($previewURL)
