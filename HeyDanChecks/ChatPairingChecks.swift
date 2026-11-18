@@ -7,7 +7,7 @@ import XCTest
         app.launchEnvironment["HEYDAN_SHOW_PAIRING"] = "1"
         if offline { app.launchEnvironment["HEYDAN_OFFLINE_FOR"] = "60" }
         seedPasteboard(value)
-        app.launch()
+        app.launchForChecks()
         let paste = app.buttons["pairing.paste"]
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         XCTAssertTrue(paste.isEnabled)
@@ -23,7 +23,7 @@ import XCTest
     func testPairingFromUnpairedVoiceLines() {
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_PREVIEW_SETTINGS"] = "1"
-        app.launch()
+        app.launchForChecks()
         let pair = app.buttons["Pair a host"]
         XCTAssertTrue(pair.waitForExistence(timeout: 10))
         pair.tap()

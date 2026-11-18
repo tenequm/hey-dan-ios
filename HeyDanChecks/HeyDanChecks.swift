@@ -15,7 +15,7 @@ final class HeyDanChecks: XCTestCase {
     func testE2EMicrophonePermission() {
         continueAfterFailure = false
         app.launchEnvironment = ["HEYDAN_E2E_MIC_PERMISSION": "1"]
-        app.launch()
+        app.launchForChecks()
         XCTAssertTrue(allowSpringBoardPermission(), "Microphone permission alert must be accepted")
         app.terminate()
     }
@@ -553,7 +553,7 @@ final class HeyDanChecks: XCTestCase {
         let withheld = Self.scriptedEnv.union(["HEYDAN_CHECKS_OUT", "HEYDAN_CALL_LINK", "HEYDAN_E2E_CALL_LINK"])
         app.launchEnvironment = env.filter { $0.key.hasPrefix("HEYDAN_") && !withheld.contains($0.key) && !excluding.contains($0.key) }
             .merging(extra) { $1 }
-        app.launch()
+        app.launchForChecks()
     }
 
     private func foreground() {
@@ -575,12 +575,19 @@ final class HeyDanChecks: XCTestCase {
 
 }
 
+extension XCUIApplication {
+    @MainActor func launchForChecks() {
+        launchEnvironment["HEYDAN_UITEST"] = "1"
+        launch()
+    }
+}
+
 extension XCTestCase {
     /// The fixture host lists push, so the notification prompt can cover the list on a fresh Simulator.
     @MainActor func launchChat(_ environment: [String: String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment = environment
-        app.launch()
+        app.launchForChecks()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
         return app

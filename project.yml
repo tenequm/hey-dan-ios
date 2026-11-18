@@ -202,4 +202,16 @@ schemes:
         HeyDanChecks: [test]
     test:
       config: Debug
+      preferredScreenCaptureFormat: screenshots
+      captureScreenshotsAutomatically: false
       targets: [HeyDanChecks]
+  HeyDanSimulatorTests:
+    build:
+      targets:
+        HeyDanTests: [test]
+        HeyDanChecks: [test]
+    test:
+      config: Debug
+      preferredScreenCaptureFormat: screenshots
+      captureScreenshotsAutomatically: false
+      targets: [HeyDanTests, HeyDanChecks]

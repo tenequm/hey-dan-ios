@@ -10,7 +10,7 @@ final class ChatChecks: XCTestCase {
     private func launch(_ extra: [String: String] = [:]) {
         continueAfterFailure = false
         app.launchEnvironment = ["HEYDAN_CHAT_CHECKS": "1"].merging(extra) { _, new in new }
-        app.launch()
+        app.launchForChecks()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
     }
