@@ -72,7 +72,25 @@ final class ChatChecks: XCTestCase {
         let allow = app.buttons["Allow Paste"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
         app.buttons["pairing.submit"].tap()
-        XCTAssertTrue(app.buttons["Open chats"].waitForExistence(timeout: 20))
+        let chats = app.buttons["Open chats"]
+        XCTAssertTrue(chats.waitForExistence(timeout: 20))
+        shot("pairing-success")
+        chats.tap()
+        XCTAssertTrue(conversation().waitForExistence(timeout: 15))
+    }
+
+    func testPairedVoicePicker() throws {
+        try stack()
+        launch()
+        XCTAssertTrue(conversation().waitForExistence(timeout: 20))
+        app.buttons["Settings"].tap()
+        let voice = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Voice: ")).firstMatch
+        XCTAssertTrue(voice.waitForExistence(timeout: 10))
+        voice.tap()
+        XCTAssertTrue(app.buttons["picker.voice"].waitForExistence(timeout: 20))
+        shot("paired-voice-picker")
+        app.buttons["picker.close"].tap()
+        XCTAssertTrue(voice.waitForExistence(timeout: 5))
     }
 
     func testSendReply() throws {
