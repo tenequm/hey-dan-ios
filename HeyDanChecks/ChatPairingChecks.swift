@@ -10,9 +10,11 @@ import XCTest
         UIPasteboard.general.string = value
         let paste = app.buttons["pairing.paste"]
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        shot("pairing-empty")
         paste.tap()
         let allow = app.buttons["Allow Paste"].firstMatch
         if allow.waitForExistence(timeout: 2) { allow.tap() }
+        shot("pairing-filled")
         app.buttons["pairing.submit"].tap()
         return app
     }
@@ -20,6 +22,7 @@ import XCTest
     func testInvalidLink() {
         let app = pasteAndSubmit("invalid")
         XCTAssertTrue(app.staticTexts["Paste a valid pairing link."].waitForExistence(timeout: 5))
+        shot("pairing-error")
     }
 
     func testOfflinePairing() {

@@ -30,6 +30,33 @@ import XCTest
         XCTAssertFalse(app.staticTexts["Unpair this host?"].exists)
     }
 
+    func testChatsSearchAndHostDetail() {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        let row = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        shot("conversation-list")
+        app.buttons["Search"].tap()
+        let field = app.textFields["Search chats"]
+        field.tap()
+        field.typeText("absent")
+        XCTAssertTrue(app.staticTexts["No matching chats"].waitForExistence(timeout: 5))
+        app.buttons["Settings"].tap()
+        let host = app.buttons["chat.settings.host.app.example.com"]
+        XCTAssertTrue(host.waitForExistence(timeout: 5))
+        shot("paired-settings")
+        host.tap()
+        XCTAssertTrue(app.buttons["Unpair"].waitForExistence(timeout: 5))
+        shot("host-detail")
+        app.buttons["Unpair"].tap()
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        shot("unpair-sheet")
+        cancel.tap()
+        app.buttons["Back"].tap()
+        app.buttons["Chats"].tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+    }
+
     /// The fixture refuses every start with 503: the cover shows the host's words, its own close control and the
     /// call screen's settings gear, and closing it returns to the thread.
     func testFixtureCallCoverShowsTheRefusal() {
