@@ -1,17 +1,32 @@
 """Capture the Dark fixture gallery with the shared Simulator test products."""
 import argparse
 import fcntl
+import json
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
 
 import sim_tests
 
+STATUS_BAR = ["--time", "9:41", "--dataNetwork", "wifi", "--wifiMode", "active", "--wifiBars", "3",
+              "--cellularMode", "active", "--cellularBars", "4", "--operatorName", "",
+              "--batteryState", "charged", "--batteryLevel", "100"]
+
 
 def gallery(args, stage, revision):
     folder = stage / "dark"
     folder.mkdir(parents=True)
-    sim_tests.main("screens", args.simulator, args.build, args.bundle, "ScreenCaptureChecks", folder)
+    devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+    udid = next((d["udid"] for runtime in devices["devices"].values() for d in runtime if d["name"] == args.simulator), None)
+    if not udid:
+        raise RuntimeError(f"No Simulator named {args.simulator}")
+    # simctl overrides the status bar only on a booted Simulator, so this boots it before sim_tests builds.
+    subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["xcrun", "simctl", "status_bar", udid, "override", *STATUS_BAR], check=True)
+    try:
+        sim_tests.main("screens", args.simulator, args.build, args.bundle, "ScreenCaptureChecks", folder)
+    finally:
+        subprocess.run(["xcrun", "simctl", "status_bar", udid, "clear"], check=True)
     images = sorted(p for p in folder.glob("*.png") if p.stat().st_size)
     if not images:
         raise RuntimeError("No screen captures")
