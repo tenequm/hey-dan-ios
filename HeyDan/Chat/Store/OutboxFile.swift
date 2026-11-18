@@ -102,7 +102,7 @@ actor OutboxFile {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
     func cache(_ data: Data, fileId: String, name: String, host: URL, deviceId: String) throws -> URL {
-        var url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
+        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return url

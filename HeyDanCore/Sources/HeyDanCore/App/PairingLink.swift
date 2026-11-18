@@ -23,7 +23,7 @@ public struct PairingLink: Sendable, Equatable {
     public init?(_ text: String, allowsLocalNetworking: Bool = false) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),
-              var parts = URLComponents(string: text),
+              let parts = URLComponents(string: text),
               parts.user == nil, parts.password == nil, parts.query == nil,
               parts.percentEncodedPath == "/app/pair",
               let host = parts.host, !host.isEmpty,
