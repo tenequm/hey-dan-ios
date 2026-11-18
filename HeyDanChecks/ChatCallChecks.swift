@@ -25,6 +25,16 @@ import XCTest
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["chat.settings.host.app.example.com"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Pair a host"].exists)
+        let host = app.buttons["chat.settings.host.app.example.com"]
+        host.tap()
+        XCTAssertTrue(app.buttons["Unpair"].waitForExistence(timeout: 5))
+        app.buttons["chat.settings.host.back"].tap()
+        let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Voice lines")).firstMatch
+        lines.tap()
+        XCTAssertTrue(app.staticTexts["Saved lines"].waitForExistence(timeout: 5))
+        XCTAssertFalse(host.exists)
+        XCTAssertFalse(lines.exists)
+        app.buttons["close"].tap()
         // One control per tap: a tap on Voice opens the picker and nothing else in its row.
         app.buttons["Voice: Taylor"].tap()
         XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 10))
@@ -54,13 +64,11 @@ import XCTest
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         shot("unpair-sheet")
         cancel.tap()
-        app.buttons["Back"].tap()
+        app.buttons["chat.settings.host.back"].tap()
         app.buttons["Chats"].tap()
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }
 
-    /// The fixture refuses every start with 503: the cover shows the host's words, its own close control and the
-    /// call screen's settings gear, and closing it returns to the thread.
     func testFixtureCallCoverShowsTheRefusal() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1"])
         call.tap()
@@ -70,8 +78,11 @@ import XCTest
         XCTAssertTrue(close.isHittable)
         XCTAssertEqual(close.label, "Close")
         XCTAssertGreaterThanOrEqual(close.frame.height, 44)
-        XCTAssertTrue(app.buttons["settings"].exists)
-        XCTAssertTrue(close.frame.intersection(app.buttons["settings"].frame).isNull)
+        XCTAssertTrue(app.buttons["keys.call"].isEnabled)
+        app.buttons["controls.options"].tap()
+        app.buttons["options.voice"].tap()
+        XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 5))
+        app.buttons["picker.close"].tap()
         close.tap()
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
         XCTAssertTrue(call.isHittable)

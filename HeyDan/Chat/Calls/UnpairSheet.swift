@@ -7,6 +7,8 @@ struct UnpairSheet: View {
     let finished: (String?) -> Void
     @State private var contentHeight: CGFloat = 340
     @State private var working = false
+    /// Set when the host could not be reached: this phone can still forget it on its own.
+    @State private var unreachable: String?
 
     var body: some View {
         ScrollView { content }
@@ -30,20 +32,34 @@ struct UnpairSheet: View {
             }
             Text("This phone forgets the host's device key and stops getting messages and calls from its agents. Chats stay on the host. To come back, pair again with a new link.")
                 .textRole(theme.type.body)
-            Button(working ? "Unpairing…" : "Unpair", role: .destructive) {
-                working = true
-                Task {
-                    await ChatController.shared.unpair(host: entry.host)
-                    let remains = Pairings.shared.entries.contains { $0.host == entry.host }
-                    finished(remains ? ChatController.shared.error?.message ?? "Could not unpair this host." : nil)
-                }
+            if let unreachable {
+                Text("\(unreachable) Remove it from this phone anyway? The device stays listed on the host until you revoke it there.")
+                    .textRole(theme.type.footnote).foregroundStyle(theme.color.danger)
+                Button("Remove from this phone", role: .destructive) { unpair(localOnly: true) }
+                    .buttonStyle(PanelActionStyle(destructive: true))
+            } else {
+                Button(working ? "Unpairing…" : "Unpair", role: .destructive) { unpair(localOnly: false) }
+                    .buttonStyle(PanelActionStyle(destructive: true))
             }
-            .buttonStyle(PanelActionStyle(destructive: true))
             Button("Cancel") { dismiss() }.buttonStyle(PanelActionStyle(secondary: true))
         }
         .disabled(working)
         .foregroundStyle(theme.color.textPrimary).padding(theme.space.s4)
         .padding(.top, theme.space.s2)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0.rounded(.up) }
+    }
+
+    private func unpair(localOnly: Bool) {
+        working = true
+        Task {
+            let failure = await ChatController.shared.unpair(host: entry.host, localOnly: localOnly)
+            let remains = Pairings.shared.entries.contains { $0.host == entry.host }
+            if remains, !localOnly, case .transport? = failure {
+                unreachable = failure?.message
+                working = false
+                return
+            }
+            finished(remains ? failure?.message ?? "Could not unpair this host." : nil)
+        }
     }
 }

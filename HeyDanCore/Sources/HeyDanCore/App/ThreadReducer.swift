@@ -33,8 +33,11 @@ public struct ThreadReducer: Sendable {
     }
 
     @discardableResult public mutating func upsert(_ entity: ThreadEntity) -> Set<String> {
-        guard let key = entity.identity,
-              key.seq > (entities[key.id]?.identity?.seq ?? -1) else { return [] }
+        guard let key = entity.identity else { return [] }
+        if let existing = entities[key.id], let previous = existing.identity, previous.seq >= key.seq {
+            guard previous.seq == key.seq, case .unknown = existing else { return [] }
+            if case .unknown = entity { return [] }
+        }
         entities[key.id] = entity
         return [key.id]
     }
@@ -88,7 +91,7 @@ public struct ThreadReducer: Sendable {
 
 extension ThreadEntity {
     public var order: Int64? { identity?.order }
-    fileprivate var identity: (id: String, seq: Int64, order: Int64, conversationId: String)? {
+    public var identity: (id: String, seq: Int64, order: Int64, conversationId: String)? {
         switch self {
         case .message(let v): return (v.id, v.seq, v.order, v.conversationId)
         case .question(let v): return (v.id, v.seq, v.order, v.conversationId)

@@ -12,9 +12,40 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
+import sim_tests
 spec =importlib.util.spec_from_file_location('sim_e2e', Path(__file__).with_name('sim-e2e.py'))
 harness = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness)
+
+class SimulatorSelectionTests(unittest.TestCase):
+    def test_only_voice_class_and_its_methods_seed_the_link(self):
+        for selector in ('HeyDanChecks', 'HeyDanChecks/HeyDanChecks', 'LiveActivityOnLockScreen',
+                         'HeyDanChecks/testLiveActivityOnLockScreen'):
+            self.assertTrue(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
+        for selector in ('ChatChecks', 'ChatThreadChecks/testRichCardTable'):
+            self.assertFalse(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
+
+
+    def test_deadline_counts_only_enabled_tests_in_the_selection(self):
+        inventory = ("Plan HeyDanSimulatorTests\n"
+                     "\tHeyDanChecks/ChatCallChecks/testCover()\n"
+                     "\tHeyDanChecks/ChatCallChecks/testOther() (disabled)\n"
+                     "\tHeyDanChecks/ChatChecks/testHistory() (disabled)\n")
+        self.assertEqual(sim_tests.selected_tests(inventory, 'HeyDanChecks/ChatCallChecks'), 1)
+        self.assertEqual(sim_tests.selected_tests(inventory, 'HeyDanChecks/ChatChecks'), 0)
+
+    def test_result_bundle_retained_only_for_an_opted_in_failure(self):
+        for keep, fail in ((False, True), (True, False), (True, True)):
+            with self.subTest(keep=keep, fail=fail), tempfile.TemporaryDirectory() as build:
+                try:
+                    with sim_tests.test_results(Path(build), keep) as results:
+                        (Path(results) / 'test.xcresult').mkdir()
+                        if fail:
+                            raise RuntimeError('test failed')
+                except RuntimeError:
+                    self.assertTrue(fail)
+                self.assertEqual(bool(list(Path(build).glob('failed-tests-*/*.xcresult'))), keep and fail)
+
 
 # Real app log lines (trimmed), so a changed log line or SDK error description fails here first.
 JEV_CALL = '''\

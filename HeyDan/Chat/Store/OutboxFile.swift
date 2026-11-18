@@ -2,9 +2,19 @@ import CryptoKit
 import Foundation
 import HeyDanCore
 
+extension Outbox {
+    nonisolated static var fileLimitMessage: String { "Files must be at most \(maximumFileBytes / 1024 / 1024) MiB." }
+}
+
 actor OutboxFile {
     private let root: URL
-    init(root: URL = StoreLocation.root) { self.root = root }
+    private let downloads: URL
+    /// Downloads can be fetched again, so they live where the system may purge them; the outbox must not.
+    init(root: URL = StoreLocation.root, downloads: URL = StoreLocation.downloads) {
+        self.root = root
+        self.downloads = downloads
+        StoreLocation.excludeFromBackup(root)
+    }
 
     func directory(host: URL, deviceId: String) -> URL {
         StoreLocation.directory(root: root, host: host)
@@ -14,8 +24,9 @@ actor OutboxFile {
 
     func load(host: URL, deviceId: String) throws -> [Outbox.Entry] {
         let file = directory(host: host, deviceId: deviceId).appending(path: "entries.json")
-        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
-        let data = try Data(contentsOf: file)
+        let data: Data
+        do { data = try Data(contentsOf: file) }
+        catch CocoaError.fileReadNoSuchFile { return [] }
         do { return try JSONDecoder().decode([Outbox.Entry].self, from: data) }
         catch is DecodingError {
             try FileManager.default.moveItem(at: file, to: file.deletingLastPathComponent().appending(path: "entries-invalid-" + UUID().uuidString + ".json"))
@@ -33,6 +44,7 @@ actor OutboxFile {
 
     func clear(host: URL, deviceId: String) throws {
         try Self.remove(directory(host: host, deviceId: deviceId))
+        try Self.remove(downloadsDirectory(host: host, deviceId: deviceId))
     }
     func stage(_ attachments: [StagedAttachment], host: URL, deviceId: String) throws -> [Outbox.Attachment] {
         let directory = directory(host: host, deviceId: deviceId)
@@ -43,10 +55,10 @@ actor OutboxFile {
                 let access = attachment.fileURL.startAccessingSecurityScopedResource()
                 defer { if access { attachment.fileURL.stopAccessingSecurityScopedResource() } }
                 let size = try attachment.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size <= Outbox.maximumFileBytes else {
-                    throw AppError.limit("Files must be at most \(Outbox.maximumFileBytes / 1024 / 1024) MiB.")
-                }
+                guard size <= Outbox.maximumFileBytes else { throw AppError.limit(Outbox.fileLimitMessage) }
                 let data = try Data(contentsOf: attachment.fileURL)
+                // The size key can be missing; the bytes read are what would be saved and sent.
+                guard data.count <= Outbox.maximumFileBytes else { throw AppError.limit(Outbox.fileLimitMessage) }
                 let name = UUID().uuidString
                 try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 result.append(Outbox.Attachment(localFileName: name, name: attachment.name,
@@ -77,21 +89,22 @@ actor OutboxFile {
         let value = name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? "attachment"
         return value == "." || value == ".." || value.isEmpty ? "attachment" : value
     }
+    private func downloadsDirectory(host: URL, deviceId: String) -> URL {
+        StoreLocation.directory(root: downloads, host: host)
+            .appending(path: "downloads")
+            .appending(path: StoreLocation.digest(deviceId), directoryHint: .isDirectory)
+    }
     private func downloadURL(fileId: String, name: String, host: URL, deviceId: String) -> URL {
-        directory(host: host, deviceId: deviceId).appending(path: "downloads").appending(path: StoreLocation.digest(fileId)).appending(path: safeName(name))
+        downloadsDirectory(host: host, deviceId: deviceId).appending(path: StoreLocation.digest(fileId)).appending(path: safeName(name))
     }
     func cached(fileId: String, name: String, host: URL, deviceId: String) -> URL? {
         let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
     func cache(_ data: Data, fileId: String, name: String, host: URL, deviceId: String) throws -> URL {
-        var url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
+        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        // A download can be fetched again: it stays out of the device backup.
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? url.setResourceValues(values)
         return url
     }
 }

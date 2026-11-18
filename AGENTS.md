@@ -9,8 +9,12 @@ Build, run and test commands are in [README.md](README.md). These are the traps 
   on a Simulator that never ran the app, so its workflow skips that test by name (`HEYDAN_TEST_FLAGS`).
 - **`just sim-checks` selectors.** `ChatThreadChecks` (or any `*Checks` class) runs that class,
   `ChatThreadChecks/testRichCardTable` one method, and a bare name like `LiveActivityOnLockScreen` the
-  `HeyDanChecks/test<name>` method. A selector that matches no test fails instead of passing.
+  `HeyDanChecks/test<name>` method. A selector that matches no test, or whose tests all skip (the stack checks in
+  `ChatChecks` without a local stack), fails instead of passing.
 - **Build once.** `just app-test` and `just sim-checks` share one build-for-testing per HEAD and working tree
   (`build/HeyDanSimulatorTests.key`); a changed tree rebuilds, an unchanged one reuses the products.
 - **UI checks run without animations.** Checks launch the app with `HEYDAN_UITEST=1`, which DEBUG builds read to turn
   animations off; Release never reads it. Test videos are off; the checks' own screenshots land in `build/checks`.
+- Bump `SwiftDataThreadStore.schemaVersion` when the thread decoder gains a field, card part or entity kind.
+  Cached JSON contains only what its writer understood. The version change rebuilds history from the host and
+  preserves the outbox. A cached unknown item also invalidates that thread's pages on the next load.

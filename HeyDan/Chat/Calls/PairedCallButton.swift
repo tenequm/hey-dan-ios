@@ -50,7 +50,7 @@ struct ThreadCallButton: View {
             }
         if let host = chat.host, let pairing = chat.pairing {
             PairedCallButton(target: PairedCallTarget(host: host, deviceId: pairing.deviceId,
-                conversation: chat.conversations.first { $0.id == conversation.id } ?? conversation),
+                conversation: chat.conversation(conversation.id) ?? conversation),
                 service: chat.service, callsEnabled: chat.features.contains("calls"))
         }
     }

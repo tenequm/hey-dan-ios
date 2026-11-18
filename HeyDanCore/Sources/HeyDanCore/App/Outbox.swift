@@ -18,6 +18,7 @@ public struct Outbox: Sendable {
 
     public enum State: Sendable, Equatable, Codable {
         case queued, waiting, held, stored, routed, reached, failed, outcomeUnknown
+        public var canSendAgain: Bool { self == .failed || self == .outcomeUnknown }
     }
     public struct Attachment: Sendable, Equatable, Codable {
         public let uploadKey: String
@@ -67,6 +68,8 @@ public struct Outbox: Sendable {
         case uploaded(uploadKey: String)
         case sent(Message)
         case transportFailure
+        /// The staged copy is gone or unreadable on this phone: no retry can send it, so it waits for Discard.
+        case localFailure
         case serverError(status: Int, body: ErrorBody)
     }
     public private(set) var entries: [Entry] = []
@@ -132,11 +135,14 @@ public struct Outbox: Sendable {
             entry.state = .queued; entry.attempts = 0; entry.nextAttemptAt = nil; entry.lastServerError = nil
         case .transportFailure:
             retry(&entry, now: now, retryAfter: nil)
+        case .localFailure:
+            entry.state = .held; entry.nextAttemptAt = nil
         case .serverError(let status, let body):
             entry.lastServerError = body
             switch body.error {
             case let code where Self.revokedCodes.contains(code): entry.state = .held; entry.nextAttemptAt = nil
-            case "stale_timestamp": retryCorrection(&entry, now: now)
+            // A fresh signature carries a fresh nonce, so a replay refusal is corrected like a stale timestamp.
+            case "stale_timestamp", "replayed": retryCorrection(&entry, now: now)
             case "ticket_expired":
                 for i in entry.attachments.indices where !entry.attachments[i].uploaded &&
                     (body.fileId == nil || body.fileId == entry.attachments[i].fileId) {

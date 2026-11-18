@@ -7,6 +7,8 @@ struct ComposerView: View {
     var features: [String]?
     private var availableFeatures: [String] { features ?? ChatController.shared.features }
     let send: (String, [StagedAttachment]) async -> Bool
+    /// Why the last send did not queue.
+    var failure: String? = nil
     @State var text = ""
     @State var attachments: [StagedAttachment] = []
     @State private var draftFiles = AttachmentDraftFiles()
@@ -16,7 +18,8 @@ struct ComposerView: View {
     @State private var importURLs: [URL] = []
     @State private var staging = false
     @State private var sending = false
-    @State private var importFailed = false
+    @State private var importFailure: String?
+    private static let unreadable = "Could not read the selected attachment. Try selecting it again."
     @FocusState private var textFocused: Bool
     @State private var showsDictationHint = false
 
@@ -30,8 +33,8 @@ struct ComposerView: View {
                     draftFiles.urls.remove(attachment.fileURL)
                 }
             }
-            if importFailed {
-                Label("Could not read the selected attachment. Try selecting it again.", systemImage: "exclamationmark.circle")
+            if let shown = importFailure ?? failure {
+                Label(shown, systemImage: "exclamationmark.circle")
                     .textRole(theme.type.caption).foregroundStyle(theme.color.danger)
                     .padding(.horizontal, theme.space.s3)
             }
@@ -76,6 +79,7 @@ struct ComposerView: View {
                 .accessibilityLabel("Use keyboard dictation")
                 .accessibilityIdentifier(AXID.composerDictation)
                 Button {
+                    importFailure = nil
                     sending = true
                     Task {
                         defer { sending = false }
@@ -110,37 +114,19 @@ struct ComposerView: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): importURLs = urls
-            case .failure: importFailed = true
+            case .failure: importFailure = Self.unreadable
             }
         }
         .task(id: importURLs) {
             guard !importURLs.isEmpty else { return }
-            staging = true
-            importFailed = false
-            defer { staging = false }
-            for url in importURLs {
-                do {
-                    let attachment = try await AttachmentStaging.document(url)
-                    if Task.isCancelled { AttachmentStaging.remove(attachment); return }
-                    draftFiles.urls.insert(attachment.fileURL)
-                    attachments.append(attachment)
-                } catch { if !Task.isCancelled { importFailed = true } }
-            }
+            await stage(importURLs) { try await AttachmentStaging.document($0) }
             importURLs = []
         }
         .task(id: photos) {
             guard !photos.isEmpty else { return }
-            staging = true
-            importFailed = false
-            defer { staging = false }
-            for photo in photos {
-                do {
-                    if let picked = try await photo.loadTransferable(type: PickedPhoto.self) {
-                        if Task.isCancelled { AttachmentStaging.remove(picked.attachment); return }
-                        draftFiles.urls.insert(picked.attachment.fileURL)
-                        attachments.append(picked.attachment)
-                    } else { importFailed = true }
-                } catch { if !Task.isCancelled { importFailed = true } }
+            await stage(photos) { photo in
+                guard let picked = try await photo.loadTransferable(type: PickedPhoto.self) else { throw CocoaError(.fileReadUnknown) }
+                return try picked.result.get()
             }
             photos = []
         }
@@ -151,6 +137,24 @@ struct ComposerView: View {
                 importURLs = [URL(fileURLWithPath: path)]
             }
             #endif
+        }
+    }
+
+    private func stage<Item: Sendable>(_ items: [Item], load: (Item) async throws -> StagedAttachment) async {
+        staging = true
+        importFailure = nil
+        defer { staging = false }
+        for item in items {
+            guard !Task.isCancelled else { return }
+            do {
+                try AttachmentStaging.checkCapacity(attachments.count)
+                let attachment = try await load(item)
+                if Task.isCancelled { AttachmentStaging.remove(attachment); return }
+                draftFiles.urls.insert(attachment.fileURL)
+                attachments.append(attachment)
+            } catch {
+                if !Task.isCancelled { importFailure = (error as? AppError)?.message ?? Self.unreadable }
+            }
         }
     }
 }

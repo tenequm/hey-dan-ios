@@ -300,12 +300,13 @@ nonisolated public struct Card: Sendable, Equatable, Codable {
         self.actions = actions
     }
 
+    /// Never throws: a card this build cannot read comes out empty, and the message falls back to its text.
     public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        title = try c.decodeIfPresent(String.self, forKey: .title)
-        description = try c.decodeIfPresent(String.self, forKey: .description)
-        parts = try c.decode([CardElement<CardPart>].self, forKey: .parts).compactMap(\.value)
-        actions = try c.decode([CardElement<CardAction>].self, forKey: .actions).compactMap(\.value)
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        title = (try? c?.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        description = (try? c?.decodeIfPresent(String.self, forKey: .description)) ?? nil
+        parts = ((try? c?.decodeIfPresent([CardElement<CardPart>].self, forKey: .parts)) ?? nil)?.compactMap(\.value) ?? []
+        actions = ((try? c?.decodeIfPresent([CardElement<CardAction>].self, forKey: .actions)) ?? nil)?.compactMap(\.value) ?? []
     }
 }
 
@@ -831,9 +832,10 @@ nonisolated public enum ThreadEntity: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey { case kind }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A known kind this build cannot read is kept as unknown, so one item never fails a whole history page.
         switch try c.decode(String.self, forKey: .kind) {
-        case "message": self = .message(try Message(from: decoder))
-        case "question": self = .question(try Question(from: decoder))
+        case "message": self = try (try? Message(from: decoder)).map(Self.message) ?? .unknown(JSONValue(from: decoder))
+        case "question": self = try (try? Question(from: decoder)).map(Self.question) ?? .unknown(JSONValue(from: decoder))
         default: self = .unknown(try JSONValue(from: decoder))
         }
     }
@@ -922,6 +924,8 @@ nonisolated public struct SSEParser: Sendable {
     private var eventID: Int64?
     private var skipLF = false
     private var atStart = true
+    private var discarding = false
+    private var lineHasBytes = false
     private var eventBytes = 0
     public let maximumEventBytes: Int
     public init(maximumEventBytes: Int = 4 * 1024 * 1024) { self.maximumEventBytes = maximumEventBytes }
@@ -929,14 +933,34 @@ nonisolated public struct SSEParser: Sendable {
         var events: [AppEvent] = []
         for byte in chunk {
             if skipLF { skipLF = false; if byte == 10 { continue } }
-            eventBytes += 1
-            guard eventBytes <= maximumEventBytes else { throw ContractError.eventTooLarge }
-            if byte == 10 || byte == 13 {
-                try finishLine(into: &events)
+            let endsLine = byte == 10 || byte == 13
+            if !discarding {
+                eventBytes += 1
+                if eventBytes > maximumEventBytes { discarding = true }
+            }
+            if endsLine {
+                if !discarding {
+                    do { try finishLine(into: &events) }
+                    catch { discarding = true }
+                }
+                if discarding && !lineHasBytes { resetEvent() }
+                line.removeAll(keepingCapacity: true)
+                lineHasBytes = false
                 skipLF = byte == 13
-            } else { line.append(byte) }
+                atStart = false
+            } else {
+                lineHasBytes = true
+                if !discarding { line.append(byte) }
+            }
         }
         return events
+    }
+    private mutating func resetEvent() {
+        dataLines.removeAll(keepingCapacity: true)
+        eventKind = "message"
+        eventID = nil
+        eventBytes = 0
+        discarding = false
     }
     private mutating func finishLine(into events: inout [AppEvent]) throws {
         if atStart {
@@ -944,12 +968,11 @@ nonisolated public struct SSEParser: Sendable {
             if line.starts(with: [0xef, 0xbb, 0xbf]) { line.removeFirst(3) }
         }
         guard let text = String(bytes: line, encoding: .utf8) else { throw ContractError.invalidUTF8 }
-        line.removeAll(keepingCapacity: true)
         if text.isEmpty {
             if !dataLines.isEmpty {
                 events.append(AppEvent(kind: Kind(eventKind), id: eventID, data: Data(dataLines.joined(separator: "\n").utf8)))
             }
-            dataLines.removeAll(keepingCapacity: true); eventKind = "message"; eventID = nil; eventBytes = 0
+            resetEvent()
             return
         }
         if text.hasPrefix(":") { return }

@@ -42,7 +42,7 @@ private func pending() -> Outbox.Entry {
         let status = value["status"] as! Int
         let entry = Outbox.applying(.serverError(status: status, body: body), to: pending(), now: now)
         switch body.error {
-        case "stale_timestamp", "ticket_expired": #expect(entry.state == .queued)
+        case "stale_timestamp", "ticket_expired", "replayed": #expect(entry.state == .queued)
         default:
             if status == 429 || status >= 500 { #expect(entry.state == .waiting) }
             else { #expect(entry.state == .held); #expect(entry.lastServerError == body) }
@@ -119,4 +119,12 @@ private func pending() -> Outbox.Entry {
     box.enqueue(Outbox.Entry(host: old.host, conversationId: old.conversationId,
         request: SendRequest(clientId: "new", text: old.request.text, fileIds: [])))
     #expect(box.entries.count == 1 && box.entries[0].state == .held)
+}
+
+@Test func unreadableCopyHoldsTheEntryInsteadOfRetrying() {
+    let now = Date(timeIntervalSince1970: 100)
+    let entry = Outbox.applying(.localFailure, to: pending(), now: now)
+    #expect(entry.state == .held)
+    #expect(entry.nextAttemptAt == nil)
+    #expect(Outbox.step(entry, now: now.addingTimeInterval(3600)) == .held)
 }

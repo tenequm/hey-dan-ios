@@ -59,6 +59,7 @@ struct MessageRow: View {
     let message: Message
     var outboxState: Outbox.State?
     var retry: (String) -> Void = { _ in }
+    var discard: (String) -> Void = { _ in }
     @State private var confirmsRetry = false
 
     private var visibleCard: Card? {
@@ -127,8 +128,15 @@ struct MessageRow: View {
             case .failed, .outcomeUnknown:
                 if let error = message.deliveryError { Text(error.message).foregroundStyle(theme.color.danger) }
                 if let id = message.clientId {
-                    Button("Send again") {
-                        if state == .outcomeUnknown { confirmsRetry = true } else { retry(id) }
+                    HStack {
+                        if outboxState?.canSendAgain == true {
+                            Button("Send again") {
+                                if state == .outcomeUnknown { confirmsRetry = true } else { retry(id) }
+                            }
+                        }
+                        if outboxState != nil {
+                            Button("Discard", role: .destructive) { discard(id) }
+                        }
                     }
                 }
             case .unknown: EmptyView()
@@ -219,7 +227,7 @@ struct OutboxRow: View {
             HStack(spacing: theme.space.s1) {
                 Label(entry.state.label, systemImage: entry.state == .failed ? "exclamationmark.circle" : "clock")
                     .foregroundStyle(entry.state == .failed ? theme.color.danger : theme.color.textSecondary)
-                if entry.state == .failed || entry.state == .outcomeUnknown {
+                if entry.state.canSendAgain {
                     Text("·").foregroundStyle(theme.color.textTertiary)
                     Button("Retry") {
                         if entry.state == .outcomeUnknown { confirmsRetry = true }
@@ -227,10 +235,14 @@ struct OutboxRow: View {
                     }
                     .foregroundStyle(theme.color.accentText)
                     .textRole(theme.type.caption, theme.weight.bold)
+                    Button("Discard", role: .destructive) { discard(entry.request.clientId) }
                 }
             }
             .textRole(theme.type.caption)
-            if entry.state == .held { Button("Discard", role: .destructive) { discard(entry.request.clientId) } }
+            // A waiting entry can be a host that keeps failing it: Discard lets the conversation's later sends go.
+            if entry.state == .held || entry.state == .waiting {
+                Button("Discard", role: .destructive) { discard(entry.request.clientId) }
+            }
         }
         .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)

@@ -36,10 +36,13 @@ struct HeyDanApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
-                    if name.hasPrefix("List/") { ConversationListSpecimen(name: name) }
-                    else { Gallery(name: name) }
-                } else { root }
+                #if targetEnvironment(simulator)
+                if let path = ProcessInfo.processInfo.environment["HEYDAN_CAPTURE_REQUEST"] {
+                    ScreenCaptureFixture(requestURL: URL(fileURLWithPath: path))
+                } else { debugRoot }
+                #else
+                debugRoot
+                #endif
                 #else
                 root
                 #endif
@@ -62,6 +65,15 @@ struct HeyDanApp: App {
                 #endif
         }
     }
+
+    #if DEBUG
+    @ViewBuilder private var debugRoot: some View {
+        if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
+            if name.hasPrefix("List/") { ConversationListSpecimen(name: name) }
+            else { Gallery(name: name) }
+        } else { root }
+    }
+    #endif
 
     @ViewBuilder private var root: some View {
         if let pairedHost {
@@ -675,9 +687,9 @@ enum IntentCall {
         let controller = CallController.shared
         // A process launched before the first unlock after a restart could not read the lines; unlocked, it can.
         controller.readLinesIfNeeded()
-        if lineID == nil || !controller.lines.entries.contains(where: { $0.id == lineID }) {
-            try await readyPairings()
-        }
+        // Only when a paired agent could answer: the picked saved line calls without waiting on the pairings' keychain.
+        let savedLine = lineID.map { id in controller.lines.entries.contains { $0.id == id } } ?? !controller.lines.entries.isEmpty
+        if !savedLine { try await readyPairings() }
         CallLog.log(.intent, "start line=\(lineID.map(CallController.short) ?? "picked") lines=\(controller.lines.entries.count)")
         if controller.lines.entries.isEmpty && Pairings.shared.entries.isEmpty {
             CallLog.log(.intent, "no line: \(inBackground ? "failed" : "the app shows its settings")")

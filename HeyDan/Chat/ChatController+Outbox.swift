@@ -4,13 +4,18 @@ import UIKit
 
 extension ChatController {
     @discardableResult func send(text: String, attachments: [StagedAttachment] = []) async -> Bool {
-        guard let id = openConversationId else { error = .transport(.unavailable); return false }
-        return await enqueue(text: text, attachments: attachments, conversationId: id)
+        sendFailure = nil
+        guard let id = openConversationId else { sendFailure = AppError.transport(.unavailable).message; return false }
+        // Tapped in the foreground: a swipe home before the copy is saved must not leave it queued.
+        let tappedActive = active
+        let queued = await enqueue(text: text, attachments: attachments, conversationId: id)
+        if queued, tappedActive { keepDeliveringInBackground() }
+        return queued
     }
     private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async -> Bool {
-        guard ready, let host, let pairing else { error = .transport(.unavailable); return false }
+        guard ready, let host, let pairing else { sendFailure = AppError.transport(.unavailable).message; return false }
         guard text.utf8.count <= Outbox.maximumTextBytes, attachments.count <= Outbox.maximumFiles else {
-            error = .limit("Use at most \(Outbox.maximumTextBytes / 1024) KiB of text and \(Outbox.maximumFiles) files.")
+            sendFailure = "Use at most \(Outbox.maximumTextBytes / 1024) KiB of text and \(Outbox.maximumFiles) files."
             return false
         }
         let token = generation
@@ -34,11 +39,18 @@ extension ChatController {
             durableIDs.insert(entry.request.clientId)
             runOutbox()
             return true
-        } catch { await handle(error, token: token); return false }
+        } catch {
+            // A local copy or save failure is this phone's, not the host's: it is not the connection's error.
+            if let failure = error as? AppError {
+                if case .limit = failure {} else { await handle(failure, token: token) }
+                sendFailure = failure.message
+            } else { sendFailure = "Could not save the message on this phone. Try again." }
+            return false
+        }
     }
     func retry(clientId: String) async {
         guard let entry = outbox.entries.first(where: { $0.request.clientId == clientId }),
-              [.failed, .outcomeUnknown].contains(entry.state), let host, let pairing,
+              entry.state.canSendAgain, let host, let pairing,
               retrying.insert(clientId).inserted else { return }
         // A second tap while the copy is staged would send the message twice.
         defer { retrying.remove(clientId) }
@@ -58,26 +70,53 @@ extension ChatController {
     func saveOutbox() async throws {
         guard let host, let pairing else { return }
         let removed = outbox.entries.filter { $0.state == .reached }
-        for entry in removed { outbox.remove(clientId: entry.request.clientId) }
+        for entry in removed { outbox.remove(clientId: entry.request.clientId); durableIDs.remove(entry.request.clientId) }
         let entries = outbox.entries
         guard entries != savedEntries || !removed.isEmpty else { return }
         try await files.save(entries, host: host, deviceId: pairing.deviceId)
         savedEntries = entries
         try await files.removeCopies(removed, host: host, deviceId: pairing.deviceId)
     }
+    /// Delivery runs in the foreground, and keeps draining under a background task once the app leaves it.
+    private var canDeliver: Bool { active || backgroundDelivery != .invalid }
     func runOutbox() {
         runnerSleep?.cancel()
-        guard runner == nil, ready, active, networkAvailable, !paused, let host, let pairing else { return }
+        guard runner == nil, ready, canDeliver, networkAvailable, !paused, let host, let pairing else { return }
         let token = generation
         let runID = UUID()
         runnerID = runID
         runner = Task {
             await deliver(token: token, host: host, deviceId: pairing.deviceId)
-            if token == generation, runnerID == runID { runner = nil }
+            // Only the current runner: a stale one cancelled by a pairing switch must not end the new run's task.
+            if token == generation, runnerID == runID {
+                runner = nil
+                if !active { endBackgroundDelivery() }
+            }
+        }
+    }
+    /// Only for sends that can go out now: a backoff or a held entry waits for the foreground.
+    func keepDeliveringInBackground() {
+        guard !active, backgroundDelivery == .invalid, ready, !paused,
+              outbox.entries.contains(where: { durableIDs.contains($0.request.clientId) && Self.deliverable($0) }) else { return }
+        backgroundDelivery = UIApplication.shared.beginBackgroundTask(withName: "Chat delivery") { [weak self] in
+            self?.runner?.cancel()
+            self?.endBackgroundDelivery()
+        }
+        runOutbox()
+    }
+    func endBackgroundDelivery() {
+        guard backgroundDelivery != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundDelivery)
+        backgroundDelivery = .invalid
+    }
+    private static func deliverable(_ entry: Outbox.Entry) -> Bool {
+        switch Outbox.step(entry, now: .now) {
+        case .done, .held, .waitUntil: false
+        default: true
         }
     }
     private func deliver(token: UUID, host: URL, deviceId: String) async {
-        while token == generation, active, networkAvailable, !paused, !Task.isCancelled {
+        while token == generation, canDeliver, networkAvailable, !paused, !Task.isCancelled {
             do { try await waitForNetwork() } catch { return }
             guard token == generation else { return }
             var wake: Date?
@@ -96,11 +135,12 @@ extension ChatController {
                 if selected != nil { break }
             }
             guard let (entry, action) = selected else {
-                guard let wake else { return }
+                guard let wake, active else { return }
                 let sleeper = Task { try await Task.sleep(for: .seconds(max(0.01, wake.timeIntervalSinceNow))) }
                 runnerSleep = sleeper
-                _ = try? await sleeper.value
-                runnerSleep = nil
+                // A runner cancelled by a pairing switch stops waiting at once and leaves the next runner's sleeper alone.
+                _ = await withTaskCancellationHandler { try? await sleeper.value } onCancel: { sleeper.cancel() }
+                if runnerSleep == sleeper { runnerSleep = nil }
                 if Task.isCancelled { return }
                 continue
             }
@@ -115,10 +155,11 @@ extension ChatController {
                 case .mint(let attachment): result = .ticket(uploadKey: attachment.uploadKey, try await service.initializeFile(attachment.request))
                 case .renewTicket(let attachment): result = .ticket(uploadKey: attachment.uploadKey, try await service.renewFileTicket(fileId: attachment.fileId!))
                 case .upload(let attachment):
-                    let bytes = try await files.bytes(attachment, host: host, deviceId: deviceId)
-                    guard token == generation, !Task.isCancelled else { return }
-                    try await service.upload(fileId: attachment.fileId!, ticket: attachment.ticket!, bytes: bytes)
-                    result = .uploaded(uploadKey: attachment.uploadKey)
+                    if let bytes = try? await files.bytes(attachment, host: host, deviceId: deviceId) {
+                        guard token == generation, !Task.isCancelled else { return }
+                        try await service.upload(fileId: attachment.fileId!, ticket: attachment.ticket!, bytes: bytes)
+                        result = .uploaded(uploadKey: attachment.uploadKey)
+                    } else { result = .localFailure }
                 case .send(let request):
                     let response = try await service.send(conversationId: entry.conversationId, request: request)
                     guard token == generation, !Task.isCancelled else { return }

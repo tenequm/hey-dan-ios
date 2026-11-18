@@ -218,7 +218,14 @@ final class CallController: NSObject {
         // `just sim` hands the call link in at launch: the Simulator's pasteboard does not take a CLI copy.
         if let link = env["HEYDAN_CALL_LINK"] { saveCallLink(link) }
         // Screenshots: fake lines named for the agents listed, never a real link; the first listed is picked.
-        if let names = env["HEYDAN_PREVIEW_LINES"] {
+        if FixtureContent.capturing {
+            lines = VoiceLines()
+            for (agent, host) in [("Dan", "voice.home.example.ts.net"), ("Stan", "voice-test.home.example.ts.net")] {
+                if let line = VoiceLine(callLink: "https://\(host)/voice?t=fixture") { _ = lines.add(line, agent: agent) }
+            }
+            if let first = lines.entries.first { lines.select(first.id) }
+            showLine(lines.selected)
+        } else if let names = env["HEYDAN_PREVIEW_LINES"] {
             _ = keep { next in
                 let ids = names.split(separator: ",").compactMap { name in
                     VoiceLine(callLink: "https://lines.example/voice?t=fake-\(name.lowercased())").map {
@@ -397,17 +404,11 @@ final class CallController: NSObject {
         Task { try? await callKit.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) }
     }
 
-    /// Changes auto mode's wake switch, whether a pause sends after the wake phrase, or the typing sound. Mid-call
-    /// the worker has to take it: true once it did, and only then is it kept for the next call; until it answers
-    /// `commands` shows the change, and a refusal puts back what the worker runs (no answer: what its state says it
-    /// runs). Without commands on the call (none yet, or none at all) it only becomes the pick the next call starts
-    /// with.
+    /// During a call the worker must accept the change before it is kept for the next call.
     @discardableResult
-    func updateSettings(wake: Bool? = nil, pauseSends: Bool? = nil, typing: Bool? = nil) async -> Bool {
+    func updateSettings(typing: Bool) async -> Bool {
         var picks = commands.map { SettingsPicks(wake: $0.wake, pauseSends: $0.pauseSends, typing: $0.typing) } ?? settingsPicks
-        if let wake { picks.wake = wake }
-        if let pauseSends { picks.pauseSends = pauseSends }
-        if let typing { picks.typing = typing }
+        picks.typing = typing
         guard let id = call?.id, commands != nil else {
             keepPicks(picks)
             return true

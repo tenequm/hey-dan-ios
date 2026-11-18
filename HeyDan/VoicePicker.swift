@@ -469,12 +469,16 @@ struct VoicePickerSheet: View {
     private var liveAvailable: Bool { !model.invalidated && callID != nil && callID == call.liveCallID && call.liveVoice != nil }
 
     init(service: any VoicePickerService, agentName: String, callID: UUID?) {
+        self.init(model: VoiceSettingsModel(service: service), agentName: agentName, callID: callID)
+    }
+
+    init(model: VoiceSettingsModel, agentName: String, callID: UUID?) {
         self.agentName = agentName
         self.callID = callID
-        storedLineID = service.line.flatMap { line in CallController.shared.lines.entries.first { $0.line == line }?.id }
-        model = VoiceSettingsModel(service: service)
+        storedLineID = model.service.line.flatMap { line in CallController.shared.lines.entries.first { $0.line == line }?.id }
+        self.model = model
         sample = SamplePlayback()
-        if case .paired = service.identity, callID == nil { _detent = State(initialValue: .large) }
+        if case .paired = model.service.identity, callID == nil { _detent = State(initialValue: .large) }
     }
 
     var body: some View {
@@ -507,7 +511,7 @@ struct VoicePickerSheet: View {
             Button("Apply") { model.language = customLanguage.trimmingCharacters(in: .whitespacesAndNewlines) }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Use the provider's exact language code. Suggestions are from loaded voices only.") }
-        .task { await model.load() }
+        .task { if model.view == nil { await model.load() } }
         .onDisappear { model.cancelCatalog(); VoiceSample.release(sample) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { VoiceSample.release(sample) } }
         .onChange(of: call.isCallActive) { _, active in if active { VoiceSample.release(sample) } }

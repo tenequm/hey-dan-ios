@@ -4,10 +4,40 @@ import Foundation
 import HeyDanCore
 
 actor FixtureAppService: AppService {
-    static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Taylor tester",
-        agents: [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
-    init() {
-        if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CARD"] == "table",
+    static let host = FixtureContent.capturing ? FixtureContent.host : URL(string: "https://app.example.com")!
+    static let pairing = PairResponse(deviceId: "dev_fixture", userName: FixtureContent.capturing ? "iPhone 17 Pro" : "Taylor tester",
+        agents: FixtureContent.capturing ? FixtureContent.agents : [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
+    let previewOutbox: [Outbox.Entry]
+    private let scenario: String?
+
+    init(scenario: String? = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]) {
+        self.scenario = scenario
+        let preview = ThreadPreviewValues.self
+        if scenario == "outbox" {
+            previewOutbox = [Outbox.State.queued, .waiting, .held].map { state in
+                Outbox.Entry(host: Self.host, conversationId: "conv_taylor01",
+                    request: SendRequest(clientId: UUID().uuidString, text: "Please check the report.", fileIds: []),
+                    state: state)
+            }
+        } else { previewOutbox = [] }
+        switch scenario {
+        case "outbox":
+            messages = [Delivery.stored, .routed].enumerated().map { offset, delivery in
+                let order = Int64(5 + offset)
+                return Message(kind: .message, id: "msg_\(order)", conversationId: "conv_taylor01",
+                    order: order, seq: order, role: .user, text: "Here is the update.", files: [],
+                    reactions: [], delivery: delivery, createdAt: 0)
+            }
+        case "messages":
+            messages = [preview.editSequence2, preview.voiceCaller0, preview.voiceSpoken0, preview.host0]
+            question = preview.questionexpired
+        case "delivery":
+            messages = [preview.userWithFile0, preview.userUnknown0, preview.userFailed0]
+            question = preview.questionanswered
+        default: break
+        }
+        sequence = max(sequence, question.seq, messages.map(\.seq).max() ?? 0)
+        if scenario == "table" || ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CARD"] == "table",
            let index = messages.firstIndex(where: { $0.id == "msg_card" }) {
             messages[index].text = "Last 6 runs. The backup failed on 11-17."
             messages[index].card = Card(title: "Last 6 runs", description: "Nightly backup job on home server.", parts: [
@@ -21,6 +51,11 @@ actor FixtureAppService: AppService {
                     series: [.init(name: "Minutes", values: [39, 34, 45, 56, 0, 48])])),
                 .text(content: "11-17 failed: the storage key had expired.", style: "muted")
             ], actions: [])
+        }
+        if FixtureContent.capturing, let card = messages.first(where: { $0.id == "msg_card" }) {
+            conversation = FixtureContent.conversation
+            messages = FixtureContent.messages(scenario, card: card)
+            question = FixtureContent.question
         }
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CALL_REFUSAL"] == "1" {
             conversation.canCall = false
@@ -57,7 +92,11 @@ actor FixtureAppService: AppService {
                 ])], actions: [.init(label: "Open report", url: "https://example.org/report", style: "primary")]),
             files: [], reactions: [], createdAt: 0)
     ]
-    private var status: Status { Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0) }
+    private var status: Status {
+        if scenario == "messages" { return ThreadPreviewValues.statuswaiting }
+        return Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0)
+    }
+    private var includesQuestion: Bool { !FixtureContent.capturing || scenario == "question" || scenario == "full" }
     private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.unread) }
     private func event<T: Encodable>(_ kind: Kind, _ value: T, id: Int64? = nil) throws(AppError) -> AppEvent {
         do { return AppEvent(kind: kind, id: id, data: try JSONEncoder().encode(value)) }
@@ -68,7 +107,7 @@ actor FixtureAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse {
         HelloResponse(protocol: 1, minProtocol: 1, voiceProtocol: 6,
-            features: ["files", "calls", "push", "voice-picker"], serverTime: 0)
+            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker"], serverTime: 0)
     }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { Self.pairing }
     func conversations() async throws(AppError) -> ConversationsResponse {
@@ -76,8 +115,9 @@ actor FixtureAppService: AppService {
     }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage {
         var items = messages.filter { (query.before == nil || $0.order < query.before!) && (query.after == nil || $0.order > query.after!) }.map(ThreadEntity.message)
-        if (query.before == nil || question.order < query.before!) && (query.after == nil || question.order > query.after!) { items.append(.question(question)) }
-        return HistoryPage(items: items, hasMoreBefore: false, hasMoreAfter: false)
+        if includesQuestion && (query.before == nil || question.order < query.before!) && (query.after == nil || question.order > query.after!) { items.append(.question(question)) }
+        if scenario == "history", query.before != nil { try? await Task.sleep(for: .seconds(15)) }
+        return HistoryPage(items: items, hasMoreBefore: scenario == "history" && query.before == nil, hasMoreAfter: false)
     }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse {
         if let existing = messages.first(where: { $0.clientId == request.clientId }) { return SendResponse(message: existing) }
@@ -117,6 +157,10 @@ actor FixtureAppService: AppService {
     }
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse {
         sequence += 1
+        if scenario == "answer-error" {
+            throw .server(status: 502, body: ErrorBody(error: "answer_not_delivered",
+                message: "The answer did not reach the agent. Try again."))
+        }
         question.seq = sequence
         question.state = .answered
         question.answer = QuestionAnswer(value: request.value, label: "Continued", at: 0)
@@ -126,8 +170,8 @@ actor FixtureAppService: AppService {
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> {
         let pair = AsyncThrowingStream<AppEvent, any Error>.makeStream()
         let id = UUID()
-        var snapshot = [try event(.conversation, conversation, id: conversation.seq),
-                        try event(.question, question, id: question.seq)]
+        var snapshot = [try event(.conversation, conversation, id: conversation.seq)]
+        if includesQuestion { snapshot.append(try event(.question, question, id: question.seq)) }
         for message in messages { snapshot.append(try event(.message, message, id: message.seq)) }
         for item in snapshot.sorted(by: { ($0.id ?? 0) < ($1.id ?? 0) }) where (item.id ?? 0) > query.after {
             pair.continuation.yield(item)
@@ -154,6 +198,12 @@ actor FixtureAppService: AppService {
     func upload(fileId: String, ticket: String, bytes: Data) async throws(AppError) { uploaded[fileId] = bytes }
     func download(fileId: String) async throws(AppError) -> Data {
         if let bytes = uploaded[fileId] { return bytes }
+        if FixtureContent.capturing, fileId == "file_img01",
+           let path = ProcessInfo.processInfo.environment["HEYDAN_CAPTURE_PHOTO"],
+           let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)) { return bytes }
+        if FixtureContent.capturing, fileId == "file_backup" {
+            return Data(String(repeating: "backup-job: snapshot completed.\n", count: 1536).utf8)
+        }
         if fileId == "file_doc01" {
             let data = NSMutableData()
             var box = CGRect(x: 0, y: 0, width: 612, height: 792)
@@ -169,9 +219,12 @@ actor FixtureAppService: AppService {
     func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Calls are unavailable in this preview.")) }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) {}
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) {}
-    func voice(conversationId: String) async throws(AppError) -> TTSView { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Voice settings are unavailable in this preview.")) }
+    func voice(conversationId: String) async throws(AppError) -> TTSView {
+        if FixtureContent.capturing { return FixtureContent.voice }
+        throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Voice settings are unavailable in this preview."))
+    }
     func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView { try await voice(conversationId: conversationId) }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage { CatalogPage(provider: query.provider, voices: []) }
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage { CatalogPage(provider: query.provider, voices: FixtureContent.capturing ? FixtureContent.voices : []) }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) {}
     func unpair() async throws(AppError) {}
 }

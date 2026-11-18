@@ -6,8 +6,8 @@ struct ThreadView: View {
     let conversation: Conversation
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
-    @State private var answeredQuestionID: String?
-    private var live: Conversation { chat.conversations.first { $0.id == conversation.id } ?? conversation }
+    @State private var answerFailure: (questionID: String, message: String)?
+    private var live: Conversation { chat.conversation(conversation.id) ?? conversation }
 
     var body: some View {
         ThreadContent(
@@ -16,12 +16,12 @@ struct ThreadView: View {
             status: chat.statuses[conversation.id],
             outboxStates: chat.outboxStates,
             hasMoreBefore: chat.hasMoreBefore,
-            errorMessage: chat.error?.message,
-            errorQuestionID: answeredQuestionID,
+            errorMessage: answerFailure?.message,
+            errorQuestionID: answerFailure?.questionID,
             active: scenePhase == .active && !CallController.shared.showsPairedCall,
             answer: { id, value in
-                answeredQuestionID = id
-                Task { await chat.answer(questionId: id, value: value) }
+                answerFailure = nil
+                Task { answerFailure = await chat.answer(questionId: id, value: value).map { (id, $0) } }
             },
             retry: { id in Task { await chat.retry(clientId: id) } },
             discard: { id in Task { await chat.discard(clientId: id) } },
@@ -29,9 +29,9 @@ struct ThreadView: View {
             loadHistory: { await chat.loadHistory(before: $0) }
         )
         .safeAreaBar(edge: .bottom) {
-            ComposerView { text, attachments in
+            ComposerView(send: { text, attachments in
                 await chat.send(text: text, attachments: attachments)
-            }
+            }, failure: chat.sendFailure)
             .id(conversation.id)
         }
         .safeAreaBar(edge: .top) {
@@ -102,7 +102,7 @@ struct ThreadContent: View {
                 ForEach(rows, id: \.presentationID) { row in
                     switch row {
                     case .entity(.message(let message)):
-                        MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry)
+                        MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
                             .id(row.presentationID)
                     case .entity(.question(let question)):
                         QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }

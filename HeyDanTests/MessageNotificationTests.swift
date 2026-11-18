@@ -61,6 +61,32 @@ struct MessageNotificationTests {
         #expect(AppDelegate.clearsDelivered(previous: 118, readOrder: 120))
     }
 
+    @Test func appAndExtensionReplaceOnlyTheSendingHostsCount() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let app = HostBadges(file: file)
+        let push = HostBadges(file: file)
+        #expect(try app.update(pairings: ["a": "dev1", "b": "dev2"], host: "a", count: 2) == 2)
+        #expect(try push.update(host: "b", count: 3) == 5)
+        #expect(try push.update(host: "b", count: 3) == 5)
+        #expect(try app.update(host: "a", count: 0) == 3)
+        #expect(try app.update(pairings: ["b": "dev3"]) == 0)
+        #expect(try push.update(host: "a", count: 4) == 0)
+    }
+
+    @Test func readLeavesNewerAndUnidentifiedNotificationsDelivered() {
+        let data = payload.hd
+        let message = Message(kind: .message, id: data.m, conversationId: data.c, order: 8, seq: 12,
+                              role: .agent, text: "", files: [], reactions: [], createdAt: 0)
+        let entities = [data.m: ThreadEntity.message(message)]
+        #expect(AppDelegate.isRead(data, through: 8, entities: entities))
+        #expect(!AppDelegate.isRead(data, through: 7, entities: entities))
+        #expect(!AppDelegate.isRead(data, through: 20, entities: [:]))
+        var other = data
+        other.c = "other"
+        #expect(!AppDelegate.isRead(other, through: 20, entities: entities))
+    }
+
     @Test func intentCarriesSenderAndConversation() {
         let intent = MessageNotification.intent(for: payload)
         #expect(intent.sender?.customIdentifier == payload.hd.a.id)

@@ -6,9 +6,6 @@ struct PairedSettingsSection: View {
     @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scene
     @Environment(\.openURL) private var openURL
-    @State private var showsPairing = false
-    @State private var showsLines = false
-    @State private var selectedHost: URL?
     @State private var notifications = false
     var close: (() -> Void)?
     private var pairings: Pairings { .shared }
@@ -24,13 +21,7 @@ struct PairedSettingsSection: View {
             .padding(.horizontal, theme.space.s5).frame(minHeight: theme.control.touchTarget + theme.space.s3)
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
-                    SettingsSection("Paired hosts") {
-                        ForEach(pairings.entries, id: \.host) { entry in
-                            Button { selectedHost = entry.host } label: { PairedHostRow(entry: entry) }
-                                .accessibilityIdentifier("chat.settings.host.\(entry.host.host() ?? "")")
-                        }
-                        Button { showsPairing = true } label: { SettingsRow(title: "Pair a host", icon: "plus") }
-                    }
+                    PairedHostSettingsRows()
                     if pairings.entries.contains(where: { $0.features.contains("push") }) {
                         SettingsSection("Notifications") {
                             Toggle(isOn: Binding(get: { notifications }, set: { _ in
@@ -53,7 +44,7 @@ struct PairedSettingsSection: View {
                         }
                     }
                     SettingsSection("Calls") {
-                        Button { showsLines = true } label: {
+                        NavigationLink { VoiceLinesSettings(showsPairedHosts: false, onCall: close) } label: {
                             SettingsRow(title: "Voice lines", icon: "phone", detail: "\(call.lines.entries.count)", navigates: true)
                         }
                         Menu {
@@ -80,13 +71,22 @@ struct PairedSettingsSection: View {
                 notifications = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
             }
         }
-        .sheet(isPresented: $showsPairing) { PairingView() }
-        .sheet(isPresented: $showsLines) { VoiceLinesSettings() }
-        .navigationDestination(item: $selectedHost) { url in
-            if let entry = pairings.entries.first(where: { $0.host == url }) {
-                HostDetail(entry: entry)
+    }
+}
+
+struct PairedHostSettingsRows: View {
+    @State private var showsPairing = false
+
+    var body: some View {
+        SettingsSection("Paired hosts") {
+            ForEach(Pairings.shared.entries, id: \.host) { entry in
+                NavigationLink { HostDetail(entry: entry) } label: { PairedHostRow(entry: entry) }
+                    .accessibilityIdentifier("chat.settings.host.\(entry.host.host() ?? "")")
             }
+            Button { showsPairing = true } label: { SettingsRow(title: "Pair a host", icon: "plus") }
         }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showsPairing) { PairingView() }
     }
 }
 

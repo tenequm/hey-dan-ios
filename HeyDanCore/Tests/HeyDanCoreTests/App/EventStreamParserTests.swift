@@ -35,3 +35,26 @@ func fixtureDecode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
         #expect(events.map { $0.kind.rawValue } == expected)
     }
 }
+
+@Test func malformedFramesDoNotLoseTheirNeighborsOrDuplicateReplay() throws {
+    let fixture = try coreFixtures()["messages"] as! [String: Any]
+    let message = try fixtureDecode([Message].self, fixture["editSequence"]!).last!
+    let json = String(decoding: try JSONEncoder().encode(message), as: UTF8.self)
+    let valid = Data("id: \(message.seq)\r\ndata: \(json)\r\n\r\n".utf8)
+    let limit = valid.count
+    let end = Data("\r\ndata: partial\r\n\r\n".utf8)
+    for invalid in [Data("id: NaN".utf8), Data([0xff]), Data(repeating: 65, count: limit + 1)] {
+        let stream = valid + invalid + end + valid
+        var parser = SSEParser(maximumEventBytes: limit)
+        var reducer = ThreadReducer()
+        var events: [AppEvent] = []
+        for byte in stream { events += try parser.feed(Data([byte])) }
+        #expect(events.count == 2)
+        #expect(try reducer.apply(events[0]) == [message.id])
+        #expect(try reducer.apply(events[1]).isEmpty)
+        #expect(reducer.cursor == message.seq)
+        #expect(reducer.entities.count == 1)
+        var whole = SSEParser(maximumEventBytes: limit)
+        #expect(try whole.feed(stream) == events)
+    }
+}

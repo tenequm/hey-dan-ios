@@ -9,7 +9,7 @@ final class NotificationService: UNNotificationServiceExtension {
         _ request: UNNotificationRequest,
         withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
     ) {
-        let next = NotificationDelivery(original: request.content, handler: contentHandler)
+        let next = NotificationDelivery(original: HostBadges.incoming(request.content), handler: contentHandler)
         let previous = lock.withLock {
             let previous = delivery
             delivery = next
