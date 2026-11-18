@@ -2,6 +2,7 @@ import HeyDanCore
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.theme) private var theme
     var pairedTarget: CallTarget?
     @Environment(CallController.self) private var call
     @State private var showsSettings = false
@@ -202,28 +203,17 @@ struct ContentView: View {
     }
 
     private var chip: some View {
-        let style = chipStyle
-        return HStack(spacing: 8) {
-            switch style.mark {
-            case .none: EmptyView()
-            case .pulse: PulseDot(color: style.palette.dot ?? style.palette.ink)
-            case .still: PulseDot(color: Theme.stillDot, still: true)
-            case .alert: Image(systemName: "exclamationmark.circle").font(.system(size: 15, weight: .semibold))
-            }
-            let text = reviewReadout.map { asWritten($0.chip, keep: keepWords) } ?? chipText
-            if style.shimmer {
-                ShimmerText(text: text, base: Theme.think, highlight: Theme.text)
-            } else {
-                Text(text)
-            }
-        }
-        .font(Theme.mono(17, medium: true))
-        .spacing(0.02, size: 17)
-        .foregroundStyle(style.palette.ink)
-        .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 12))
-        .frame(minHeight: 34)
-        .background(RoundedRectangle(cornerRadius: 4).fill(style.palette.fill))
-        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(style.palette.outline, lineWidth: 1))
+        CallStateChip(label: reviewReadout.map { asWritten($0.chip, keep: keepWords) } ?? chipText,
+                      dot: chipColor)
+    }
+
+    private var chipColor: Color {
+        if hintIsError || reviewReadout?.tone == .error { return theme.color.danger }
+        if phase == .connecting || phase == .reconnecting { return theme.color.warning }
+        if isMuted { return theme.color.iconMuted }
+        if phase == .live(.speaking) { return theme.color.accent }
+        if isLive { return phase == .live(.thinking) ? theme.color.statusWorking : theme.color.statusConnected }
+        return theme.color.iconMuted
     }
 
     @ViewBuilder private var hint: some View {
@@ -251,44 +241,6 @@ struct ContentView: View {
         .foregroundStyle(hintIsError ? Theme.error : Theme.screenDim)
         .frame(minHeight: 36, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private struct ChipStyle {
-        enum Mark { case none, pulse, still, alert }
-        var palette = ChipPalette.quiet
-        var mark = Mark.none
-        var shimmer = false
-    }
-
-    private var chipStyle: ChipStyle {
-        if let rv = reviewReadout { return reviewChipStyle(rv.tone) }
-        if case .live(.listening) = phase, isMuted { return ChipStyle(mark: .still) }
-        // Waiting for the wake phrase: the line is open but nothing is taken.
-        if waitingWake { return ChipStyle(mark: .still) }
-        switch phase {
-        case .live(.speaking):
-            return ChipStyle(palette: .speaking, mark: .pulse)
-        case .live(.listening):
-            return ChipStyle(palette: .you, mark: .pulse)
-        case .live(.thinking):
-            return ChipStyle(palette: .thinking, mark: .pulse, shimmer: true)
-        case let .ended(ending) where isFailure(ending):
-            return ChipStyle(palette: .error, mark: .alert)
-        default:
-            return ChipStyle()
-        }
-    }
-
-    /// The page's readout tones; one with no tone of its own pulses orange while the call is live.
-    private func reviewChipStyle(_ tone: ReviewView.Tone) -> ChipStyle {
-        switch tone {
-        case .you: ChipStyle(palette: .you, mark: .pulse)
-        case .off: ChipStyle(mark: .still)
-        case .think: ChipStyle(palette: .thinking, mark: .pulse, shimmer: true)
-        case .error: ChipStyle(palette: .error, mark: .alert)
-        case .idle, .ended: ChipStyle()
-        case .none: isLive ? ChipStyle(palette: .speaking, mark: .pulse) : ChipStyle()
-        }
     }
 
     private var chipText: String {
@@ -793,6 +745,21 @@ private func clock(_ seconds: TimeInterval, pad: Bool = true) -> String {
 // MARK: - Review mode
 
 /// The review draft under the readout: dashed, never styled as sent, its header outside its own scroller.
+struct CallStateChip: View {
+    @Environment(\.theme) private var theme
+    let label: String
+    let dot: Color
+
+    var body: some View {
+        HStack(spacing: theme.space.s1_5) {
+            Circle().fill(dot).frame(width: theme.space.s2, height: theme.space.s2)
+            Text(label).textRole(theme.type.footnote, theme.weight.medium)
+        }
+        .padding(.horizontal, theme.space.s3).frame(minHeight: theme.space.s8)
+        .background(theme.color.surfaceGrouped, in: Capsule())
+    }
+}
+
 private struct DraftPanel: View {
     @Environment(CallController.self) private var call
     let panel: ReviewView.Panel
