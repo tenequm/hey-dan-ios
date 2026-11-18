@@ -912,6 +912,7 @@ private struct PanelButton: View {
 /// The delivery notice and the transcript: the only views that read the call's transcript, so a caption re-runs
 /// them and not the whole screen.
 private struct TranscriptPane: View {
+    @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     /// A preview's stand-in, shown in place of the call's transcript.
     let standIn: Transcript?
@@ -926,9 +927,9 @@ private struct TranscriptPane: View {
         VStack(alignment: .leading, spacing: 10) {
             if let notice = Self.deliveryNotice(transcript) {
                 Text(notice)
-                    .font(Theme.mono(12))
+                    .textRole(theme.type.caption)
                     .spacing(0.04, size: 12)
-                    .foregroundStyle(Theme.error)
+                    .foregroundStyle(theme.color.danger)
                     .padding(.horizontal, 2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -963,6 +964,7 @@ private struct TranscriptPane: View {
 /// The live transcript inside the screen, as the page's console draws it: no bubbles, a speaker row over each
 /// block, history a step dimmer than the newest words. It follows the newest line until the reader scrolls up.
 private struct TranscriptConsole: View {
+    @Environment(\.theme) private var theme
     let transcript: Transcript
     let agentName: String
     /// When the call went live; line times count from here.
@@ -982,11 +984,11 @@ private struct TranscriptConsole: View {
         if transcript.lines.isEmpty, let empty {
             VStack(spacing: 4) {
                 Text("Nothing said yet")
-                    .font(Theme.sans(14, .medium))
-                    .foregroundStyle(Theme.text)
+                    .textRole(theme.type.footnote, theme.weight.medium)
+                    .foregroundStyle(theme.color.textPrimary)
                 Text(empty)
-                    .font(Theme.sans(14))
-                    .foregroundStyle(Theme.screenDim)
+                    .textRole(theme.type.footnote)
+                    .foregroundStyle(theme.color.textSecondary)
             }
             .multilineTextAlignment(.center)
             .padding(.horizontal, 16)
@@ -1004,7 +1006,7 @@ private struct TranscriptConsole: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: 4) {
+                    LazyVStack(alignment: .leading, spacing: theme.space.s4) {
                         ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                             if line.kind == .unheard {
                                 UnheardNote(agentName: agentName)
@@ -1064,10 +1066,10 @@ private struct TranscriptConsole: View {
                     }
                     .labelStyle(.iconOnly)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.text)
+                    .foregroundStyle(theme.color.textPrimary)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Theme.page).shadow(color: .black.opacity(0.5), radius: 4, y: 2))
-                    .overlay(Circle().strokeBorder(Theme.border, lineWidth: 1))
+                    .background(Circle().fill(theme.color.glass).shadow(color: theme.color.shadow, radius: theme.space.s1, y: theme.space.s0_5))
+                    .overlay(Circle().strokeBorder(theme.color.border, lineWidth: 1))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
                     .padding(.bottom, 10)
@@ -1105,21 +1107,23 @@ private struct TranscriptConsole: View {
 }
 
 private struct UnheardNote: View {
+    @Environment(\.theme) private var theme
     let agentName: String
 
     var body: some View {
         Text("not heard - \(agentName.lowercased()) was speaking.")
-            .font(Theme.mono(12))
-            .foregroundStyle(Theme.screenSoft)
+            .textRole(theme.type.caption)
+            .foregroundStyle(theme.color.textSecondary)
             .padding(.vertical, 3)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .leading) { Theme.orange.frame(width: 2) }
+            .overlay(alignment: .leading) { theme.color.accentText.frame(width: 2) }
             .padding(.vertical, 2)
     }
 }
 
 private struct CaptionLine: View {
+    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let line: Transcript.Line
     /// Part of the newest block: full contrast. History steps back by colour.
@@ -1135,7 +1139,7 @@ private struct CaptionLine: View {
     let frozen: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: theme.space.s1_5) {
             if !continued { header }
             if caretSince != nil, frozen {
                 words(caret: true)
@@ -1171,9 +1175,9 @@ private struct CaptionLine: View {
     private var header: some View {
         FlowLayout(spacing: 8, lineSpacing: 3) {
             Text(speaker)
-                .foregroundStyle(line.speaker == .agent ? Theme.orange : Theme.screenDim)
-            Text(time).foregroundStyle(Theme.screenDim)
-            if let note { Text(note).foregroundStyle(Theme.screenDim) }
+                .foregroundStyle(theme.color.textSecondary)
+            Text(time).foregroundStyle(theme.color.textSecondary)
+            if let note { Text(note).foregroundStyle(theme.color.textSecondary) }
             if line.wake {
                 if line.wakeOnly {
                     MarkTag(text: "wake phrase", style: .wake)
@@ -1186,7 +1190,7 @@ private struct CaptionLine: View {
             if line.unspoken { MarkTag(text: "reply not spoken", style: .lost) }
             if line.preWake { MarkTag(text: "words before the wake phrase ignored", style: .dropped) }
         }
-        .font(Theme.mono(11))
+        .textRole(theme.type.micro)
         .spacing(0.04, size: 11)
     }
 
@@ -1196,29 +1200,29 @@ private struct CaptionLine: View {
         case .lost(.stt), .lost(.empty): "Speech could not be transcribed."
         default: "No transcript."
         }
-        var words = Text(empty ? placeholder : line.text).foregroundStyle(empty ? Theme.screenDim : ink)
+        var words = Text(empty ? placeholder : line.text).foregroundStyle(empty ? theme.color.textSecondary : ink)
         if case .dropped(.discarded) = line.mark {
             words = words.strikethrough(color: ink.opacity(0.45))
         }
-        let text = caret ? Text("\(words)\(Text(Self.caret).baselineOffset(-2.25))") : words
+        let text = caret ? Text("\(words)\(Text(caretImage).baselineOffset(-2.25))") : words
         return text
-            .font(Theme.sans(15))
-            .lineHeight(.multiple(factor: 1.5))
+            .textRole(line.speaker == .caller ? theme.type.headline : theme.type.title,
+                      line.speaker == .caller ? theme.weight.regular : theme.weight.medium)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private var ink: Color {
         var color: Color
         if case .lost = line.mark {
-            color = Theme.text
+            color = theme.color.textPrimary
         } else if line.unspoken {
-            color = Theme.text
+            color = theme.color.textPrimary
         } else if case .dropped = line.mark {
-            color = Theme.screenDim
+            color = theme.color.textSecondary
         } else if line.wakeOnly {
-            color = Theme.screenDim
+            color = theme.color.textSecondary
         } else {
-            color = live ? Theme.text : Theme.screenSoft
+            color = line.speaker == .caller ? theme.color.textSecondary : theme.color.textPrimary
         }
         // Interim caller words step back until the transcription's final replaces them.
         if line.speaker == .caller, !line.isFinal, line.mark == nil { color = color.opacity(0.6) }
@@ -1226,9 +1230,9 @@ private struct CaptionLine: View {
     }
 
     /// A block 0.55em wide and 1em tall, 3pt after the last word.
-    private static var caret: Image {
+    private var caretImage: Image {
         Image(size: CGSize(width: 11.25, height: 15)) { context in
-            context.fill(Path(CGRect(x: 3, y: 0, width: 8.25, height: 15)), with: .color(Theme.orange.opacity(0.9)))
+            context.fill(Path(CGRect(x: 3, y: 0, width: 8.25, height: 15)), with: .color(theme.color.accentText.opacity(0.9)))
         }
     }
 
@@ -1267,17 +1271,18 @@ private struct CaptionLine: View {
 
 /// A turn's mark beside the speaker: outlined in its colour, the wake that is still listening filled orange.
 private struct MarkTag: View {
+    @Environment(\.theme) private var theme
     enum Style { case sent, dropped, lost, wake, awake }
     let text: String
     let style: Style
 
     var body: some View {
         let ink: Color = switch style {
-        case .sent: Theme.screenDim
-        case .dropped: Theme.screenSoft
-        case .lost: Theme.error
-        case .wake: Theme.text
-        case .awake: Theme.screen
+        case .sent: theme.color.textSecondary
+        case .dropped: theme.color.textSecondary
+        case .lost: theme.color.danger
+        case .wake: theme.color.textPrimary
+        case .awake: theme.color.surface
         }
         let boxed = style != .sent
         Text(text)
@@ -1287,7 +1292,7 @@ private struct MarkTag: View {
             .background {
                 switch style {
                 case .sent: EmptyView()
-                case .awake: RoundedRectangle(cornerRadius: 3).fill(Theme.orange)
+                case .awake: RoundedRectangle(cornerRadius: 3).fill(theme.color.accentText)
                 default: RoundedRectangle(cornerRadius: 3).strokeBorder(ink, lineWidth: 1)
                 }
             }
