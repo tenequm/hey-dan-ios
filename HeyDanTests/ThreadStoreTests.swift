@@ -279,8 +279,10 @@ struct ThreadStoreTests {
 
     @Test func corruptOutboxIsQuarantinedAndDownloadsKeepNames() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
-        let files = OutboxFile(root: root)
+        let files = OutboxFile(root: root, downloads: root.appending(path: "caches"))
+        #expect(try root.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
         let directory = await files.directory(host: host, deviceId: "device")
+        #expect(try await files.load(host: host, deviceId: "device").isEmpty)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("invalid".utf8).write(to: directory.appending(path: "entries.json"))
         #expect(try await files.load(host: host, deviceId: "device").isEmpty)
@@ -288,6 +290,9 @@ struct ThreadStoreTests {
         let cached = try await files.cache(Data("file".utf8), fileId: "file", name: "../Report.pdf", host: host, deviceId: "device")
         #expect(cached.lastPathComponent == "Report.pdf")
         #expect(cached.deletingLastPathComponent().lastPathComponent == StoreLocation.digest("file"))
+        #expect(cached.path.hasPrefix(root.appending(path: "caches").path))
+        try await files.clear(host: host, deviceId: "device")
+        #expect(await files.cached(fileId: "file", name: "../Report.pdf", host: host, deviceId: "device") == nil)
     }
 
     @MainActor @Test func lostSendResponseRetriesSameIdentity() async throws {

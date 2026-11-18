@@ -43,6 +43,17 @@ nonisolated enum StoreLocation {
     static var root: URL {
         URL.applicationSupportDirectory.appending(path: "Chat", directoryHint: .isDirectory)
     }
+    static var downloads: URL {
+        URL.cachesDirectory.appending(path: "Chat", directoryHint: .isDirectory)
+    }
+    /// Device keys never leave this phone, so a restored copy of its chats could never be read or cleared.
+    static func excludeFromBackup(_ root: URL) {
+        var url = root
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do { try url.setResourceValues(values) } catch { CallLog.log(.store, "backup_exclusion_failed") }
+    }
     static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -84,6 +95,7 @@ actor SwiftDataThreadStore: ThreadStore {
         let directory = StoreLocation.directory(root: root, host: host).appending(path: "cache")
         let manager = FileManager.default
         if !inMemory {
+            StoreLocation.excludeFromBackup(root)
             let marker = directory.appending(path: "schema")
             let previous = try? String(contentsOf: marker, encoding: .utf8)
             if previous != String(version), manager.fileExists(atPath: directory.path) {
