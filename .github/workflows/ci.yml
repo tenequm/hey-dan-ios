@@ -96,29 +96,17 @@ jobs:
       - *checkout
       - *tools
       - *timeout
-      - &simulator
-        # One of the image's own Simulators: its first boot takes about 90 s, a created one's over 5 minutes.
-        name: Pick the Simulator
+      # One of the image's own Simulators (a created one takes minutes longer to boot), booted here so that its
+      # first-boot work is over when the build ends: checks on a just-booted Simulator were slow and flaky.
+      - name: Boot the Simulator
         run: |
           sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
           udid=$(xcrun simctl list devices available -j | jq -r --arg runtime "com.apple.CoreSimulator.SimRuntime.iOS-${sdk//./-}" \
             '.devices[$runtime][] | select(.name == "iPhone 18 Pro Max") | .udid')
           xcrun simctl rename "$udid" "Hey Dan iPhone"
+          nohup xcrun simctl boot "$udid" > /dev/null 2>&1 &
       - name: App tests
         if: ${{ matrix.app-tests }}
         run: just app-test
       - name: UI checks
         run: for check in $CHECKS; do just sim-checks "$check"; done
-
-  probe:
-    name: Probe (temporary)
-    needs: core
-    runs-on: xcode-27
-    timeout-minutes: 30
-    continue-on-error: true
-    steps:
-      - *checkout
-      - *tools
-      - *timeout
-      - *simulator
-      - run: just sim-checks ChatComposerChecks/testPhotosPicker

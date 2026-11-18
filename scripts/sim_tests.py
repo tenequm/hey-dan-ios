@@ -77,7 +77,7 @@ def main(mode, name, folder, bundle, check=None):
         fcntl.flock(lock, fcntl.LOCK_EX)
         sim = ['xcrun', 'simctl']
         destination = f'id={udid}'
-        # Build before booting: a Simulator on its first boot (CI) slows the build severalfold.
+        # The build needs no booted Simulator, so a boot started beforehand (CI) runs beside it.
         manifest = test_products(build, destination, env)
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
