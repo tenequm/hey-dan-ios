@@ -14,6 +14,7 @@ final class HeyDanChecks: XCTestCase {
 
     func testE2EMicrophonePermission() {
         continueAfterFailure = false
+        app.resetAuthorizationStatus(for: .microphone)
         app.launchEnvironment = ["HEYDAN_E2E_MIC_PERMISSION": "1"]
         app.launchForChecks()
         XCTAssertTrue(allowSpringBoardPermission(), "Microphone permission alert must be accepted")
