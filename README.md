@@ -155,7 +155,7 @@ Dan after Face ID and starts the call there, or open Hey Dan and call from its s
   `VoicePickerSaves`, `SampleThenCall` and `SampleDismissThenCall` require a real test line.
   Before `VoicePickerSaves`, capture the server's raw saved tuple and set `HEYDAN_TTS_RESTORE` to its ready
   JSON PATCH body; the check refuses to mutate without it and restores it in teardown. Keep an independent
-  server restore/compare cleanup in the calling script too. The sample checks expect ElevenLabs available.
+  server restore/compare cleanup in the calling script too. Both sample checks require a Gemini voice with a playable preview on Stan's line.
   `SampleDismissThenCall` plays a sample for two seconds, taps Back to stop it, closes the picker,
   discards changes if prompted, taps Call once, and requires Call again after 45 seconds.
 - `just sim-e2e` runs an unattended call on a dedicated Simulator. Supply only a test line's call link
