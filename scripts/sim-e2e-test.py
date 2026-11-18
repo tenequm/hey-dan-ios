@@ -93,24 +93,20 @@ class Grade(unittest.TestCase):
 
 
 class ChatResults(unittest.TestCase):
-    def test_missing_bundle_reports_each_check_without_starting_simulator(self):
+    def test_placeholder_bundle_skips_only_the_push_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             (output / 'results').mkdir()
             with patch.object(harness, 'OUT', output), patch.object(harness, 'BUNDLE', 'com.example.HeyDan', create=True), \
                  patch.object(harness, 'RECORDS', {}), patch.dict(os.environ, {}, clear=True), \
-                 patch.object(harness, 'sim') as sim:
-                with self.assertRaisesRegex(RuntimeError, 'Local.xcconfig'):
-                    harness.main()
-                sim.assert_not_called()
-                for name in harness.APP_CHECKS:
-                    self.assertEqual(harness.RECORDS[name]['status'], 'skip')
-                harness.report()
-                self.assertTrue((output / 'report.md').exists())
-                self.assertIn('No local stack is running', (output / 'report.md').read_text())
+                 patch.object(harness, 'ui_check') as ui_check:
+                harness.chat_checks()
+                ui_check.assert_called_once_with('app-fixture-unread', 'ChatChecks/testFixtureUnreadRelaunch')
+                self.assertEqual(harness.RECORDS['app-push-communication']['status'], 'skip')
+                self.assertIn('Local.xcconfig', harness.RECORDS['app-push-communication']['detail'])
 
     def test_real_bundle_required(self):
-        self.assertTrue(harness.bundle_ready('com.tenequm.HeyDan'))
+        self.assertTrue(harness.bundle_ready('com.yourname.HeyDan'))
         self.assertFalse(harness.bundle_ready('com.example.HeyDan'))
         self.assertFalse(harness.bundle_ready(''))
 

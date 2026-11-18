@@ -59,7 +59,6 @@ APP_CHECKS = {
 RECORDS = {}
 
 
-
 class Stopped(Exception):
     pass
 
@@ -99,7 +98,8 @@ def run(*args, seconds=60, env=None, check=True, stdin=None, merge=False):
             raise
     if check and proc.returncode:
         # Commands never include links or message text; raw SDK diagnostics are not retained.
-        command = ' '.join(map(str, args[:2]))
+        # `sh -c <HEYDAN_PAIR_CMD>` names only `sh -c`: the command may carry a secret.
+        command = ' '.join(map(str, args[:2] if args[0] == 'sh' else args[:3]))
         if proc.returncode in (124, 137, -signal.SIGKILL):
             raise RuntimeError(f'{command} timed out after {seconds}s')
         raise RuntimeError(f'{command} exited {proc.returncode}')
@@ -285,7 +285,6 @@ def ui_check(name, method, stack=False):
                     screenshots.append(str((destination / path.name).relative_to(OUT)))
         if re.search(r'Executed 1 test, with 1 test skipped', output):
             reasons = ('No local stack is running: HEYDAN_LOCAL_BASE and HEYDAN_PAIR_CMD are required',
-                       'H4b composer is not on this branch yet', 'H6 Settings lane is not on this branch yet',
                        'Stack conversation needs more than one page of history',
                        'Stack must seed an unread conversation')
             reason = next((reason for reason in reasons if reason in output), 'UI prerequisite unavailable; see lane report')
@@ -350,7 +349,10 @@ def pair_link():
 
 def chat_checks():
     ui_check('app-fixture-unread', 'ChatChecks/testFixtureUnreadRelaunch')
-    ui_check('app-push-communication', 'ChatPushChecks/testCommunicationBannerAndTap')
+    if bundle_ready(BUNDLE):
+        ui_check('app-push-communication', 'ChatPushChecks/testCommunicationBannerAndTap')
+    else:
+        result('app-push-communication', 'skip', PUSH_BUNDLE)
     if not os.environ.get('HEYDAN_LOCAL_BASE') or not os.environ.get('HEYDAN_PAIR_CMD'):
         return
     global CHECK
@@ -377,15 +379,13 @@ def chat_checks():
         if not observed:
             return
     # The real pairing screen consumes a fresh code via pasteboard, never a runner variable.
-    if not (ROOT / 'HeyDan/Chat/Calls/PairedSettingsSection.swift').exists():
-        result('app-pair-screen', 'skip', 'H6 Settings pairing screen is not on this branch yet')
+    CHECK = 'app-pair-screen'
     fresh = pair_link()
-    run('xcrun', 'devicectl', 'device', 'pasteboard', 'copy', '-d', UDID, stdin=fresh)
+    run('xcrun', 'simctl', 'pbcopy', UDID, stdin=fresh)
     try:
-        if (ROOT / 'HeyDan/Chat/Calls/PairedSettingsSection.swift').exists():
-            ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
+        ui_check('app-pair-screen', 'ChatChecks/testPastePair', stack=True)
     finally:
-        run('xcrun', 'devicectl', 'device', 'pasteboard', 'copy', '-d', UDID, stdin='')
+        run('xcrun', 'simctl', 'pbcopy', UDID, stdin='')
     logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
     CHECK = 'app-paired-voice'
     offset = len(logfile.read_text()) if logfile.exists() else 0
@@ -443,7 +443,11 @@ def chat_checks():
                 time.sleep(.5)
             result(name, 'pass' if passed else 'fail', 'REST history pages verified in both directions' if passed else 'History before/after proof missing')
             sim('terminate', UDID, BUNDLE, check=False)
-        if method and name != 'app-pair-screen' and 'lane is not on this branch' not in RECORDS[name]['detail']:
+        if not method or name == 'app-pair-screen':
+            continue
+        if name.startswith('app-push-') and not bundle_ready(BUNDLE):
+            result(name, 'skip', PUSH_BUNDLE)
+        else:
             ui_check(name, 'ChatChecks/' + method, stack=True)
 
 
@@ -459,8 +463,11 @@ def report():
     (OUT / 'report.md').write_text('\n'.join(lines) + '\n')
 
 
+PUSH_BUNDLE = 'Push checks need your own HEYDAN_BUNDLE_ID in gitignored Local.xcconfig, not the placeholder com.example.HeyDan'
+
+
 def bundle_ready(bundle):
-    return bundle == 'com.tenequm.HeyDan'
+    return bool(bundle) and bundle != 'com.example.HeyDan'
 
 
 def main():
@@ -481,14 +488,6 @@ def main():
             result(name, 'skip', reason)
     result('app-push-extension', 'skip', 'simctl push does not execute the notification service extension; requires real APNs')
     result('app-push-edit', 'skip', 'Replacing a delivered banner requires a real APNs push')
-    for name in ('app-send-reply', 'app-offline-send', 'app-question', 'app-working-status', 'app-download-files', 'app-upload-photo', 'app-upload-document'):
-        if 'HEYDAN_FIXTURE_ATTACHMENT' not in (ROOT / 'HeyDan/Chat/Views/Composer/ComposerView.swift').read_text():
-            result(name, 'skip', 'H4b composer lane is not on this branch yet' + ('; no local stack is running' if no_stack else ''))
-    for name in ('app-pair-screen', 'app-paired-call', 'app-paired-voice', 'app-paired-intent', 'app-unpair'):
-        if not (ROOT / 'HeyDan/Chat/Calls/PairedCallButton.swift').exists():
-            result(name, 'skip', 'H6 calls lane is not on this branch yet' + ('; no local stack is running' if no_stack else ''))
-    if not bundle_ready(BUNDLE):
-        raise RuntimeError('Simulator push checks require HEYDAN_BUNDLE_ID = com.tenequm.HeyDan in gitignored Local.xcconfig')
 
     attempts = os.environ.get('HEYDAN_E2E_ATTEMPTS', '2')
     if attempts not in ('1', '2'):
@@ -512,7 +511,6 @@ def main():
     state = sim('spawn', UDID, 'launchctl', 'print', domain)
     (OUT / 'logs/sim-launchctl-before.log').write_text(state)
     # Registered ports can still leave notificationSettings() waiting on dasd indefinitely.
-    kicked = True
     sim('spawn', UDID, 'launchctl', 'kickstart', '-k', f'{domain}/com.apple.dasd')
     deadline = time.monotonic() + 30
     while not notifications_ready(state) and time.monotonic() < deadline:
@@ -521,7 +519,7 @@ def main():
     (OUT / 'logs/sim-launchctl-after.log').write_text(state)
     if not notifications_ready(state):
         raise RuntimeError('Notification services not checked in after dasd recovery')
-    result(CHECK, 'pass', f'Device booted; dasd kickstart={kicked}', ['logs/sim-launchctl-after.log'])
+    result(CHECK, 'pass', 'Device booted; dasd kickstarted', ['logs/sim-launchctl-after.log'])
     CHECK = 'sim-local-ca'
     ca = os.environ.get('HEYDAN_LOCAL_CA')
     if ca:
@@ -547,7 +545,11 @@ def main():
         raise RuntimeError('The microphone permission check did not run; see logs/sim-permission.log')
     sim('privacy', UDID, 'grant', 'microphone', BUNDLE)
     result(CHECK, 'pass', 'SpringBoard Allow tapped on microphone permission alert', ['logs/sim-permission.log'])
-    chat_checks()
+    try:
+        chat_checks()
+    except RuntimeError as error:
+        # A broken stack fails its own check; the saved-line call below still runs.
+        result(CHECK, 'fail', str(error))
     CHECK = 'sim-call'
     if os.environ.get('HEYDAN_LOCAL_BASE') or not LINK:
         result(CHECK, 'skip', 'Saved-line calls disabled for stack runs' if os.environ.get('HEYDAN_LOCAL_BASE') else 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')

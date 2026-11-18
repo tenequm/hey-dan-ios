@@ -1,5 +1,22 @@
 import Foundation
 
+/// One host as one string, however a pair link, a saved pairing or a push's `h` spells it: scheme and host lowercased,
+/// the default port and any path, query or trailing slash dropped.
+public enum PairedHost {
+    public static func key(_ url: URL) -> String {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
+        let scheme = parts.scheme?.lowercased()
+        parts.scheme = scheme
+        parts.percentEncodedHost = parts.percentEncodedHost?.lowercased()
+        if (scheme == "https" && parts.port == 443) || (scheme == "http" && parts.port == 80) { parts.port = nil }
+        parts.user = nil; parts.password = nil
+        parts.path = ""; parts.query = nil; parts.fragment = nil
+        return parts.string ?? url.absoluteString
+    }
+
+    public static func key(_ text: String) -> String? { URL(string: text).map(key) }
+}
+
 public struct PairingLink: Sendable, Equatable {
     public let baseURL: URL
     public let code: String

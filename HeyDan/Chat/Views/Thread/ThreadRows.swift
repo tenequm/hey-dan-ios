@@ -75,7 +75,7 @@ struct MessageRow: View {
 
     @ViewBuilder private var delivery: some View {
         if let outboxState, ![.stored, .routed, .reached, .failed, .outcomeUnknown].contains(outboxState) {
-            Text(outboxLabel(outboxState)).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+            Text(outboxState.label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
         } else if let state = message.delivery {
             switch state {
             case .stored, .routed, .reached:
@@ -89,21 +89,6 @@ struct MessageRow: View {
                 }
             case .unknown: EmptyView()
             }
-        }
-    }
-
-    private func outboxLabel(_ state: Outbox.State) -> String {
-        switch state {
-        case .queued: "Queued"
-        case .uploading: "Uploading"
-        case .sending: "Sending"
-        case .waiting: "Waiting to retry"
-        case .held: "Held"
-        case .stored: "Stored"
-        case .routed: "Routed"
-        case .reached: "Reached"
-        case .failed: "Failed"
-        case .outcomeUnknown: "Outcome unknown"
         }
     }
 }
@@ -164,7 +149,7 @@ struct OutboxRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(entry.request.text).textSelection(.enabled)
-            Text(label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+            Text(entry.state.label).font(Theme.sans(12)).foregroundStyle(Theme.muted)
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
                 Text(attachment.name)
                 if entry.state == .uploading {
@@ -189,9 +174,11 @@ struct OutboxRow: View {
             Button("Send again") { retry(entry.request.clientId) }
         }
     }
+}
 
-    private var label: String {
-        switch entry.state {
+private extension Outbox.State {
+    var label: String {
+        switch self {
         case .queued: "Queued"
         case .uploading: "Uploading"
         case .sending: "Sending"

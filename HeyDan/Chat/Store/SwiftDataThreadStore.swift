@@ -85,7 +85,7 @@ actor SwiftDataThreadStore: ThreadStore {
             let marker = directory.appending(path: "schema")
             let previous = try? String(contentsOf: marker, encoding: .utf8)
             if previous != String(version), manager.fileExists(atPath: directory.path) {
-                await CallLog.log(.store, "wipe reason=schema")
+                CallLog.log(.store, "wipe reason=schema")
                 try manager.removeItem(at: directory)
             }
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -99,7 +99,7 @@ actor SwiftDataThreadStore: ThreadStore {
         do { container = try ModelContainer(for: schema, configurations: configuration) }
         catch {
             guard !inMemory else { throw error }
-            await CallLog.log(.store, "wipe reason=container")
+            CallLog.log(.store, "wipe reason=container")
             try manager.removeItem(at: directory)
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Data(String(version).utf8).write(to: directory.appending(path: "schema"), options: .atomic)
@@ -112,7 +112,7 @@ actor SwiftDataThreadStore: ThreadStore {
         let worker = try await worker(host: host)
         do { return try await worker.load(deviceId: deviceId) }
         catch is DecodingError {
-            await CallLog.log(.store, "wipe reason=decode")
+            CallLog.log(.store, "wipe reason=decode")
             try await worker.clear(deviceId: deviceId)
             return ThreadSnapshot()
         }
@@ -121,7 +121,7 @@ actor SwiftDataThreadStore: ThreadStore {
         let began = ContinuousClock.now
         let worker = try await worker(host: host)
         try await Self.ingest(snapshot, deviceId: deviceId, worker: worker, beforeCommit: beforeCommit)
-        await CallLog.log(.store, "save cursor=\(snapshot.cursor) count=\(snapshot.entities.count + snapshot.conversations.count) ms=\(CallLog.ms(since: began))")
+        CallLog.log(.store, "save cursor=\(snapshot.cursor) count=\(snapshot.entities.count + snapshot.conversations.count) ms=\(CallLog.ms(since: began))")
     }
     @concurrent private static func ingest(_ snapshot: ThreadSnapshot, deviceId: String,
                                            worker: ThreadStoreWorker, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)?) async throws {
@@ -181,17 +181,16 @@ actor SwiftDataThreadStore: ThreadStore {
             let cursor = try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(
                 predicate: #Predicate { $0.deviceId == deviceId })).first
             if snapshot.hasCursor {
-            if let cursor {
-                cursor.cursor = max(cursor.cursor, snapshot.cursor)
-                var floors = try cursor.historyFloors.map { try JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
-                floors.merge(snapshot.historyFloors) { _, new in new }
-                cursor.historyFloors = try encoder.encode(floors)
-            }
-            else {
-                let record = CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)
-                record.historyFloors = try encoder.encode(snapshot.historyFloors)
-                modelContext.insert(record)
-            }
+                if let cursor {
+                    cursor.cursor = max(cursor.cursor, snapshot.cursor)
+                    var floors = try cursor.historyFloors.map { try JSONDecoder().decode([String: Int64].self, from: $0) } ?? [:]
+                    floors.merge(snapshot.historyFloors) { _, new in new }
+                    cursor.historyFloors = try encoder.encode(floors)
+                } else {
+                    let record = CachedStreamCursor(deviceId: deviceId, cursor: snapshot.cursor)
+                    record.historyFloors = try encoder.encode(snapshot.historyFloors)
+                    modelContext.insert(record)
+                }
             }
             try beforeCommit?(snapshot)
             try modelContext.save()

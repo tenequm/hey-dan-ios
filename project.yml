@@ -145,7 +145,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).NotificationService
         TARGETED_DEVICE_FAMILY: "1"
-  # Simulator checks of what used to need the phone (`just sim-checks`); never part of the app's build.
   HeyDanTests:
     type: bundle.unit-test
     platform: iOS

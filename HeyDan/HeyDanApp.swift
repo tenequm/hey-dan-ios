@@ -46,7 +46,7 @@ struct HeyDanApp: App {
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
                 .fullScreenCover(isPresented: Binding(
                     get: { CallController.shared.showsPairedCall },
-                    set: { CallController.shared.showsPairedCall = $0 }
+                    set: { if $0 { CallController.shared.showsPairedCall = true } else { CallController.shared.closePairedCall() } }
                 )) {
                     if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
                 }
@@ -658,6 +658,11 @@ enum IntentCall {
             if inBackground { throw CallNotStarted(message: CallFailure.noLine.message) }
             return
         }
+        // Before resolving a paired agent, which can switch the app's active pairing.
+        if controller.isCallActive {
+            CallLog.log(.intent, "a call is on already: not started")
+            return
+        }
         let started: UUID?
         if let target = try await pairedTarget(id: lineID) {
             started = await controller.start(target: target)
@@ -695,26 +700,33 @@ enum IntentCall {
 
     static func pairedTarget(id: UUID?) async throws -> CallTarget? {
         let pairings = Pairings.shared
-        let selected = pairings.entries.lazy.compactMap { entry -> (Pairings.Entry, HeyDanCore.Agent)? in
-            guard let agent = entry.agents.first(where: {
-                PairedAgentID.make(host: entry.host, agentId: $0.id) == id
-            }) else { return nil }
-            return (entry, agent)
-        }.first
-        let fallback = pairings.active.flatMap { entry in entry.agents.first.map { (entry, $0) } }
-        guard let (entry, agent) = selected ?? (id == nil ? fallback : nil) else { return nil }
-        let chat = ChatController.shared
-        guard let conversation = await chat.conversation(forAgent: agent.id, host: entry.host) else {
-            throw CallNotStarted(message: chat.error?.message ?? "This agent has no conversation yet.")
+        let selected = pairings.entries.lazy.filter { $0.features.contains("calls") }
+            .compactMap { entry -> (Pairings.Entry, HeyDanCore.Agent)? in
+                guard let agent = entry.agents.first(where: {
+                    PairedAgentID.make(host: entry.host, agentId: $0.id) == id
+                }) else { return nil }
+                return (entry, agent)
+            }.first
+        guard let (entry, agent) = selected ?? (id == nil ? defaultPairedAgent() : nil) else { return nil }
+        let found: (conversation: Conversation?, service: any AppService)
+        do { found = try await ChatController.shared.pairedConversation(agentId: agent.id, entry: entry) }
+        catch { throw CallNotStarted(message: error.message) }
+        guard let conversation = found.conversation else {
+            throw CallNotStarted(message: "This agent has no conversation yet.")
         }
         guard conversation.canCall else {
             throw CallNotStarted(message: conversation.callRefusal?.message ?? "Calling is unavailable.")
         }
-        guard chat.host == entry.host, chat.pairing?.deviceId == entry.deviceId else {
-            throw CallNotStarted(message: "The pairing changed. Try again.")
-        }
         return CallTarget(paired: PairedCallTarget(host: entry.host, deviceId: entry.deviceId,
-            conversation: conversation), service: chat.service)
+            conversation: conversation), service: found.service)
+    }
+
+    /// An empty destination keeps calling the saved line picked in the app; only a phone with no saved line calls
+    /// the active host's first agent.
+    static func defaultPairedAgent() -> (Pairings.Entry, HeyDanCore.Agent)? {
+        guard CallController.shared.lines.entries.isEmpty, let entry = Pairings.shared.active,
+              entry.features.contains("calls"), let agent = entry.agents.first else { return nil }
+        return (entry, agent)
     }
 
     /// A CallKit refusal in the background is no fault of the line: the caller needs the way that works, not a retry.
@@ -746,11 +758,14 @@ struct VoiceLineEntity {
     let agent: String
     var person: IntentPerson
 
-    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(agent)") }
+    /// A paired agent and a saved line for the same agent read alike: the subtitle tells them apart.
+    let source: String
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(agent)", subtitle: "\(source)") }
 
-    init(id: UUID, agent: String) {
+    init(id: UUID, agent: String, source: String) {
         self.id = id
         self.agent = agent
+        self.source = source
         person = IntentPerson(identifier: .applicationDefined(id.uuidString), name: .displayName(agent), handle: nil)
     }
 }
@@ -759,9 +774,9 @@ struct VoiceLineQuery: EntityStringQuery {
     func suggestedEntities() async -> [VoiceLineEntity] {
         try? await IntentCall.readyPairings()
         return await MainActor.run {
-            CallController.shared.lines.entries.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
-                + Pairings.shared.entries.flatMap { entry in
-                    entry.agents.map { VoiceLineEntity(id: PairedAgentID.make(host: entry.host, agentId: $0.id), agent: $0.name) }
+            CallController.shared.lines.entries.map { VoiceLineEntity(line: $0) }
+                + Pairings.shared.entries.filter { $0.features.contains("calls") }.flatMap { entry in
+                    entry.agents.map { VoiceLineEntity(entry: entry, agent: $0) }
                 }
         }
     }
@@ -778,11 +793,17 @@ struct VoiceLineQuery: EntityStringQuery {
     func defaultResult() async -> VoiceLineEntity? {
         try? await IntentCall.readyPairings()
         return await MainActor.run {
-            if let entry = Pairings.shared.active, let agent = entry.agents.first {
-                return VoiceLineEntity(id: PairedAgentID.make(host: entry.host, agentId: agent.id), agent: agent.name)
-            }
-            return CallController.shared.lines.selected.map { VoiceLineEntity(id: $0.id, agent: $0.name.capitalizedFirst) }
+            if let line = CallController.shared.lines.selected { return VoiceLineEntity(line: line) }
+            return IntentCall.defaultPairedAgent().map { VoiceLineEntity(entry: $0.0, agent: $0.1) }
         }
+    }
+}
+
+private extension VoiceLineEntity {
+    init(line: VoiceLines.Entry) { self.init(id: line.id, agent: line.name.capitalizedFirst, source: "Call link") }
+    init(entry: Pairings.Entry, agent: HeyDanCore.Agent) {
+        self.init(id: PairedAgentID.make(host: entry.host, agentId: agent.id), agent: agent.name,
+            source: entry.host.host() ?? "Paired host")
     }
 }
 

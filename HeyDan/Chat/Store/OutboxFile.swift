@@ -33,10 +33,7 @@ actor OutboxFile {
     }
 
     func clear(host: URL, deviceId: String) throws {
-        let directory = directory(host: host, deviceId: deviceId)
-        if FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.removeItem(at: directory)
-        }
+        try Self.remove(directory(host: host, deviceId: deviceId))
     }
 }
 
@@ -51,7 +48,7 @@ extension OutboxFile {
                 defer { if access { attachment.fileURL.stopAccessingSecurityScopedResource() } }
                 let size = try attachment.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard size <= Outbox.maximumFileBytes else {
-                    throw AppError.server(status: 400, body: ErrorBody(error: "local_limit", message: "Files must be at most 25 MiB."))
+                    throw AppError.limit("Files must be at most \(Outbox.maximumFileBytes / 1024 / 1024) MiB.")
                 }
                 let data = try Data(contentsOf: attachment.fileURL)
                 let name = UUID().uuidString
@@ -71,10 +68,14 @@ extension OutboxFile {
     func removeCopies(_ entries: [Outbox.Entry], host: URL, deviceId: String) throws {
         for entry in entries {
             for attachment in entry.attachments {
-                let file = directory(host: host, deviceId: deviceId).appending(path: attachment.localFileName)
-                if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+                try Self.remove(directory(host: host, deviceId: deviceId).appending(path: attachment.localFileName))
             }
         }
+    }
+    /// Removes without a separate existence check: a file already gone is not an error.
+    private static func remove(_ url: URL) throws {
+        do { try FileManager.default.removeItem(at: url) }
+        catch CocoaError.fileNoSuchFile {}
     }
     private func safeName(_ name: String) -> String {
         let value = name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? "attachment"
@@ -88,9 +89,13 @@ extension OutboxFile {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
     func cache(_ data: Data, fileId: String, name: String, host: URL, deviceId: String) throws -> URL {
-        let url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
+        var url = downloadURL(fileId: fileId, name: name, host: host, deviceId: deviceId)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        // A download can be fetched again: it stays out of the device backup.
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
         return url
     }
 }

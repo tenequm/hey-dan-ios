@@ -1,7 +1,6 @@
 import Foundation
 import Testing
 import HeyDanCore
-@testable import HeyDan
 
 private final class FixtureBundle {}
 

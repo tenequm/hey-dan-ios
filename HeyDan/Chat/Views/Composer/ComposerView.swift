@@ -3,7 +3,7 @@ import PhotosUI
 import HeyDanCore
 
 struct ComposerView: View {
-    var features: [String]? = nil
+    var features: [String]?
     private var availableFeatures: [String] { features ?? ChatController.shared.features }
     let send: (String, [StagedAttachment]) async -> Bool
     @State var text = ""

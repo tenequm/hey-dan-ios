@@ -9,25 +9,19 @@ struct PairedCallButton: View {
 
     var body: some View {
         if callsEnabled {
-            VStack {
-                Button("Call") {
-                    if call.pairedCallTarget != nil, call.isCallActive {
-                        call.showsPairedCall = true
-                        return
-                    }
-                    guard !call.isCallActive else { return }
-                    let callTarget = CallTarget(paired: target, service: service)
-                    Task {
-                        _ = await call.start(target: callTarget)
-                    }
+            Button("Call") {
+                if call.pairedCallTarget != nil, call.isCallActive {
+                    call.showsPairedCall = true
+                    return
                 }
-                .disabled(call.isCallActive ? call.pairedCallTarget == nil : !target.conversation.canCall)
-                .accessibilityIdentifier("chat.call")
-                if !target.conversation.canCall, let refusal = target.conversation.callRefusal {
-                    Text(refusal.message)
-                        .accessibilityIdentifier("chat.call.refusal")
+                guard !call.isCallActive else { return }
+                let callTarget = CallTarget(paired: target, service: service)
+                Task {
+                    _ = await call.start(target: callTarget)
                 }
             }
+            .disabled(call.isCallActive ? call.pairedCallTarget == nil : !target.conversation.canCall)
+            .accessibilityIdentifier("chat.call")
         }
     }
 }
@@ -37,13 +31,25 @@ struct PairedCallCover: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ContentView(pairedTarget: target)
-            .overlay(alignment: .topTrailing) {
+        // Its own row: over the call screen's header it would sit on the settings gear and the call clock.
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
                 Button("Close", systemImage: "xmark") { dismiss() }
-                    .padding()
+                    .font(Theme.sans(15))
+                    .foregroundStyle(Theme.muted)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
                     .accessibilityIdentifier("chat.call.close")
             }
-            .onAppear { if let paired = target.paired { ChatController.shared.openConversation(paired.conversation.id) } }
+            ContentView(pairedTarget: target)
+        }
+        .background(Theme.page.ignoresSafeArea())
+        .onAppear {
+            if let paired = target.paired, ChatController.shared.host == paired.host {
+                ChatController.shared.openConversation(paired.conversation.id)
+            }
+        }
     }
 }
 

@@ -5,41 +5,63 @@ import XCTest
 import Synchronization
 @testable import HeyDan
 
+private final class FixtureBundle {}
+
 @MainActor final class CallTargetTests: XCTestCase {
-    func testPairedSignedRequestsAndGrantDecoding() async throws {
+    private func fixture(_ name: String) throws -> Data {
+        let url = try XCTUnwrap(Bundle(for: FixtureBundle.self).url(forResource: "app-contract.fixtures", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try JSONSerialization.data(withJSONObject: XCTUnwrap(object[name]))
+    }
+
+    private let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
+        agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
+
+    /// The signed start, end and cancel as the contract fixtures write them, and the fixture grant decoded.
+    func testPairedRequestsMatchTheContract() async throws {
+        let grantBody = try fixture("callGrant")
+        let expectedStart = try JSONDecoder().decode(CallRequest.self, from: fixture("callRequest"))
         let seen = Mutex<[URLRequest]>([])
-        let attempt = UUID().uuidString
         CallHTTP.handler.withLock { $0 = { request in
             seen.withLock { $0.append(request) }
-            if request.url!.path == "/app/calls" {
-                return Data("{\"protocol\":6,\"url\":\"wss://example.invalid\",\"token\":\"fixture\",\"callId\":\"call_fixture\",\"attemptId\":\"\(attempt)\",\"agent\":\"Stan\",\"chat\":\"Stan (app)\",\"silenceMs\":1400,\"limit\":{\"ms\":90000,\"kind\":\"duration\"}}".utf8)
-            }
-            return Data()
+            return request.url!.path == "/app/calls" ? grantBody : Data()
         } }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CallHTTP.self]
         let key = P256.Signing.PrivateKey()
         let service = SignedClient(host: URL(string: "https://example.invalid")!, deviceId: "dev_test",
             configuration: configuration, signer: { data, _ in try key.signature(for: data).derRepresentation })
-        let conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
-            deviceId: "dev_test", conversation: conversation), service: service, attemptId: attempt)
+            deviceId: "dev_test", conversation: conversation), service: service, attemptId: expectedStart.attemptId)
         let http = URLSession(configuration: .ephemeral)
         defer { http.invalidateAndCancel() }
         let grant = try await target.grant(over: http)
-        XCTAssertEqual(grant.callId, "call_fixture")
-        XCTAssertEqual(grant.agent, "Stan")
-        try await target.end(callId: grant.callId, reason: .noAgent, over: http)
-        try await target.cancel(over: http)
+        XCTAssertEqual(grant.callId, "call_5tGh2")
+        XCTAssertEqual(grant.agent, "Taylor")
+        XCTAssertEqual(grant.names.version, 6)
+        try await target.end(callId: grant.callId, reason: nil, over: http)
+        try await target.cancel()
         let requests = seen.withLock { $0 }
-        XCTAssertEqual(requests.map { $0.url!.path }, ["/app/calls", "/app/calls/call_fixture/end", "/app/calls/attempts/\(attempt)/cancel"])
+        XCTAssertEqual(requests.map { $0.url!.path }, ["/app/calls", "/app/calls/call_5tGh2/end", "/app/calls/attempts/\(expectedStart.attemptId)/cancel"])
+        let bodies = requests.map { request -> Data in
+            guard let stream = request.httpBodyStream else { return request.httpBody ?? Data() }
+            stream.open(); defer { stream.close() }
+            var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+            return data
+        }
+        XCTAssertEqual(try JSONDecoder().decode(CallRequest.self, from: bodies[0]), expectedStart)
+        XCTAssertEqual(try JSONDecoder().decode(CallEndRequest.self, from: bodies[1]),
+            try JSONDecoder().decode(CallEndRequest.self, from: fixture("callEndRequest")))
+        XCTAssertEqual(try JSONDecoder().decode(CallCancelRequest.self, from: bodies[2]),
+            try JSONDecoder().decode(CallCancelRequest.self, from: fixture("callCancelRequest")))
         for request in requests {
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("HeyDan-Sig ") == true)
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("HeyDan-Sig v=1,p=1,d=dev_test,") == true)
         }
     }
 
+    /// The saved line's requests, written out rather than rebuilt by the builders the call path uses.
     func testSavedLineRequestsRemainUnchanged() async throws {
         let line = try XCTUnwrap(VoiceLine(callLink: "https://example.invalid/voice?t=fixture"))
         let seen = Mutex<[URLRequest]>([])
@@ -58,10 +80,10 @@ import Synchronization
         try await target.end(callId: grant.callId, reason: .noAgent, over: http)
         let requests = seen.withLock { $0 }
         XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests[0].url, line.tokenRequest.url)
+        XCTAssertEqual(requests[0].url?.absoluteString, "https://example.invalid/voice/livekit/token?t=fixture&v=6")
         XCTAssertEqual(requests[0].httpMethod, "POST")
         XCTAssertNil(requests[0].value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(requests[1].url, line.endRequest(callId: grant.callId).url)
+        XCTAssertEqual(requests[1].url?.absoluteString, "https://example.invalid/voice/livekit/end?t=fixture")
         XCTAssertEqual(requests[1].httpMethod, "POST")
         XCTAssertFalse(target.usesRelay)
     }
@@ -69,8 +91,6 @@ import Synchronization
     func testCancelWhileGrantIsPendingUsesTheSameAttempt() async throws {
         let service = CallServiceSpy()
         service.delaysGrant = true
-        let conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service)
         let http = URLSession(configuration: .ephemeral)
@@ -79,7 +99,7 @@ import Synchronization
         let deadline = ContinuousClock.now + .seconds(2)
         while service.pendingGrant == nil, ContinuousClock.now < deadline { await Task.yield() }
         let continuation = try XCTUnwrap(service.pendingGrant)
-        try await target.cancel(over: http)
+        try await target.cancel()
         XCTAssertEqual(service.cancels.first?.0, target.attemptId)
         continuation.resume()
         service.pendingGrant = nil
@@ -88,34 +108,61 @@ import Synchronization
         XCTAssertEqual(service.ends.first?.0, grant.callId)
     }
 
-    func testPairedAttemptPersistsAcrossRetriesAndCleanup() async throws {
+    /// A grant for another attempt is a call this app cannot match: it ends that call and cancels its own attempt.
+    func testMismatchedAttemptEndsTheCallAndCancels() async throws {
         let service = CallServiceSpy()
-        let conversation = Conversation(kind: .conversation, id: "conv_stan01", seq: 1,
-            agent: Agent(id: "ag_stan", name: "Stan"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
-        let identity = PairedCallTarget(host: URL(string: "https://example.com")!, deviceId: "dev_test", conversation: conversation)
-        let target = CallTarget(paired: identity, service: service)
+        service.grantAttempt = "another-attempt"
+        let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.com")!, deviceId: "dev_test",
+            conversation: conversation), service: service)
         let http = URLSession(configuration: .ephemeral)
         defer { http.invalidateAndCancel() }
-        let grant = try await target.grant(over: http)
-        _ = try await target.grant(over: http)
-        XCTAssertEqual(service.starts.count, 2)
-        XCTAssertEqual(service.starts[0], service.starts[1])
-        XCTAssertEqual(service.starts[0].conversationId, conversation.id)
-        XCTAssertEqual(service.starts[0].voiceProtocol, 6)
-        XCTAssertNil(service.starts[0].jev)
-        XCTAssertEqual(grant.names.version, 6)
-        try await target.end(callId: grant.callId, reason: nil, over: http)
-        try await target.cancel(over: http)
+        do {
+            _ = try await target.grant(over: http)
+            XCTFail("a mismatched attempt must not be joined")
+        } catch { XCTAssertEqual(error, .malformedGrant) }
+        XCTAssertEqual(service.starts.first?.voiceProtocol, VoiceProtocol.requestedVersion)
+        XCTAssertNil(service.starts.first?.jev)
         XCTAssertEqual(service.ends.first?.0, "call_test")
-        XCTAssertEqual(service.ends.first?.1.reason, "hangup")
-        XCTAssertEqual(service.cancels.first?.0, service.starts[0].attemptId)
-        XCTAssertEqual(service.cancels.first?.1.reason, "hangup")
-        XCTAssertNotEqual(CallTarget(paired: identity, service: service).attemptId, target.attemptId)
+        XCTAssertEqual(service.ends.first?.1.reason, "updating")
+        XCTAssertEqual(service.cancels.first?.0, target.attemptId)
+        XCTAssertNotEqual(CallTarget(paired: target.paired!, service: service).attemptId, target.attemptId)
+    }
+
+    func testPairedFailuresKeepTheirMeaning() {
+        let refusal = ErrorBody(error: "no_line", message: "Calls are not set up for this agent.")
+        XCTAssertEqual(AppError.server(status: 403, body: refusal).callFailure,
+            .server(status: 403, code: "no_line", message: refusal.message))
+        XCTAssertEqual(AppError.transport(.invalidResponse).callFailure, .malformedGrant)
+        XCTAssertEqual(AppError.transport(.offline).callFailure, .pairedTransport)
+        XCTAssertEqual(AppError.keyUnavailable.callFailure.message, AppError.keyUnavailable.message)
+        XCTAssertEqual(AppError.notPaired.voiceFailure.message, AppError.notPaired.message)
+        XCTAssertEqual(AppError.transport(.invalidResponse).voiceFailure, .malformed)
+        XCTAssertEqual(AppError.transport(.timeout).voiceFailure, .pairedTransport)
+    }
+
+    func testPairedVoicePickerAdaptsRequests() async throws {
+        let service = CallServiceSpy()
+        let picker = PairedVoicePickerService(target: PairedCallTarget(host: URL(string: "https://example.com")!,
+            deviceId: "dev_test", conversation: conversation), service: service)
+        _ = try? await picker.updateVoice(.reset)
+        XCTAssertEqual(service.patches.first.map { String(decoding: try! JSONEncoder().encode($0), as: UTF8.self) }, #"{"reset":true}"#)
+        let long = String(repeating: "a", count: 511) + "\u{1F600}" + "b"
+        _ = try? await picker.voices(VoiceCatalogQuery(provider: "gemini", q: long, language: nil, gender: nil, cursor: nil, limit: 500))
+        _ = try? await picker.voices(VoiceCatalogQuery(provider: "gemini", q: nil, language: nil, gender: nil, cursor: nil, limit: 0))
+        XCTAssertEqual(service.catalogQueries.first?.q, String(repeating: "a", count: 511))
+        XCTAssertEqual(service.catalogQueries.map(\.limit), [100, 1])
+        do {
+            _ = try await picker.voice()
+            XCTFail("the spy refuses")
+        } catch { XCTAssertEqual(error, .pairedTransport) }
     }
 }
 
 @MainActor private final class CallServiceSpy: AppService {
     var delaysGrant = false
+    var grantAttempt: String?
+    var patches: [VoicePatchRequest] = []
+    var catalogQueries: [VoiceCatalogQuery] = []
     var pendingGrant: CheckedContinuation<Void, Never>?
     var starts: [CallRequest] = []
     var ends: [(String, CallEndRequest)] = []
@@ -136,14 +183,20 @@ import Synchronization
         starts.append(request)
         if delaysGrant { await withCheckedContinuation { pendingGrant = $0 } }
         return CallGrant(protocol: 6, url: "wss://example.com", token: "test", callId: "call_test",
-            attemptId: request.attemptId, agent: "Stan", chat: "Stan (app)", silenceMs: 1400,
+            attemptId: grantAttempt ?? request.attemptId, agent: "Taylor", chat: "Taylor (app)", silenceMs: 1400,
             limit: CallLimit(ms: 3600000, kind: .duration))
     }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) { ends.append((callId, request)) }
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) { cancels.append((attemptId, request)) }
     func voice(conversationId: String) async throws(AppError) -> VoiceView { throw .transport(.unavailable) }
-    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView { throw .transport(.unavailable) }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog { throw .transport(.unavailable) }
+    func updateVoice(conversationId: String, request: VoicePatchRequest) async throws(AppError) -> VoiceView {
+        patches.append(request)
+        throw .transport(.unavailable)
+    }
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> VoiceCatalog {
+        catalogQueries.append(query)
+        throw .transport(.unavailable)
+    }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) -> Void { throw .transport(.unavailable) }
     func unpair() async throws(AppError) -> Void { throw .transport(.unavailable) }
 }

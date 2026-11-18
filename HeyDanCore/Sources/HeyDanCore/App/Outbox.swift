@@ -12,7 +12,9 @@ public struct StagedAttachment: Sendable, Equatable {
 public struct Outbox: Sendable {
     public static let maximumTextBytes = 32 * 1024
     public static let maximumFiles = 10
-    public static let maximumFileBytes: Int64 = 26_214_400
+    public static let maximumFileBytes: Int64 = 25 * 1024 * 1024
+    /// The codes a host answers when this device is no longer paired: everything it holds for the host stops.
+    public static let revokedCodes: Set<String> = ["device_revoked", "unknown_device"]
 
     public enum State: Sendable, Equatable, Codable {
         case queued, uploading, sending, waiting, held, stored, routed, reached, failed, outcomeUnknown
@@ -55,14 +57,6 @@ public struct Outbox: Sendable {
             self.host = host; self.conversationId = conversationId; self.request = request; self.state = state
             self.attachments = attachments; self.attempts = attempts; self.nextAttemptAt = nextAttemptAt
             self.lastServerError = lastServerError; self.serverSeq = serverSeq
-        }
-        public func resend(clientId: String) -> Entry {
-            Entry(host: host, conversationId: conversationId,
-                request: SendRequest(clientId: clientId, text: request.text, fileIds: []),
-                attachments: attachments.map {
-                    Attachment(localFileName: $0.localFileName, name: $0.name,
-                        mimeType: $0.mimeType, size: $0.size, sha256: $0.sha256)
-                })
         }
     }
     public enum Action: Sendable, Equatable {
@@ -143,7 +137,7 @@ public struct Outbox: Sendable {
         case .serverError(let status, let body, let retryAfter):
             entry.lastServerError = body
             switch body.error {
-            case "device_revoked", "unknown_device": entry.state = .held; entry.nextAttemptAt = nil
+            case let code where Self.revokedCodes.contains(code): entry.state = .held; entry.nextAttemptAt = nil
             case "stale_timestamp": retryCorrection(&entry, now: now, jitter: jitter)
             case "ticket_expired":
                 for i in entry.attachments.indices where !entry.attachments[i].uploaded &&
@@ -161,7 +155,7 @@ public struct Outbox: Sendable {
         return entry
     }
     public mutating func apply(_ result: Result, clientId: String, now: Date, jitter: TimeInterval = 0) {
-        if case .serverError(_, let body, _) = result, ["device_revoked", "unknown_device"].contains(body.error) {
+        if case .serverError(_, let body, _) = result, Self.revokedCodes.contains(body.error) {
             heldError = body
             for i in entries.indices {
                 entries[i].state = .held; entries[i].lastServerError = body; entries[i].nextAttemptAt = nil

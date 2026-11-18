@@ -11,7 +11,8 @@ extension ChatController {
                 guard token == generation else { return }
                 let hello = try await service.hello()
                 guard token == generation, !Task.isCancelled else { return }
-                features = hello.features
+                if features != hello.features { features = hello.features }
+                if let host { Pairings.shared.refreshFeatures(hello.features, host: host) }
                 try await refreshList(token: token)
                 guard token == generation, !paused, !Task.isCancelled else { return }
                 #if DEBUG
@@ -44,15 +45,17 @@ extension ChatController {
                     }
                     guard let host, let pairing else { return }
                     if candidate.cursor != reducer.cursor || !changed.isEmpty {
-                    try await store.save(ThreadSnapshot(cursor: candidate.cursor,
-                        conversations: changed.compactMap { candidate.conversations[$0] },
-                        entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
+                        try await store.save(ThreadSnapshot(cursor: candidate.cursor,
+                            conversations: changed.compactMap { candidate.conversations[$0] },
+                            entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
                     }
                     guard token == generation, !Task.isCancelled else { return }
                     reducer = candidate
+                    for id in changed {
+                        if case .message(let message) = candidate.entities[id] { outbox.reconcile(message) }
+                    }
                     for event in batch {
                         if event.kind == .message, let message = try? event.decode(Message.self) {
-                            outbox.reconcile(message)
                             #if DEBUG
                             if ProcessInfo.processInfo.environment["HEYDAN_CHAT_CHECKS"] == "1", let voice = message.voice {
                                 CallLog.log(.stream, "check thread voice=\(voice.rawValue) id=\(message.id)")

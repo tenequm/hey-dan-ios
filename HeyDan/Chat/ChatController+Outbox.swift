@@ -10,15 +10,18 @@ extension ChatController {
     private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async -> Bool {
         guard ready, let host, let pairing else { error = .transport(.unavailable); return false }
         guard text.utf8.count <= Outbox.maximumTextBytes, attachments.count <= Outbox.maximumFiles else {
-            error = .server(status: 400, body: ErrorBody(error: "local_limit", message: "Use at most 32 KiB of text and 10 files."))
+            error = .limit("Use at most \(Outbox.maximumTextBytes / 1024) KiB of text and \(Outbox.maximumFiles) files.")
             return false
         }
         let token = generation
         do {
             let copied = try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
-            guard token == generation else { return false }
             let entry = Outbox.Entry(host: host, conversationId: conversationId,
                 request: SendRequest(clientId: UUID().uuidString, text: text, fileIds: []), attachments: copied)
+            guard token == generation else {
+                try? await files.removeCopies([entry], host: host, deviceId: pairing.deviceId)
+                return false
+            }
             outbox.enqueue(entry)
             do { try await saveOutbox() }
             catch {
@@ -26,7 +29,8 @@ extension ChatController {
                 try? await files.removeCopies([entry], host: host, deviceId: pairing.deviceId)
                 throw error
             }
-            guard token == generation else { return false }
+            // Saved, so it is sent once its host loads again, even if the pairing changed meanwhile.
+            guard token == generation else { return true }
             durableIDs.insert(entry.request.clientId)
             runOutbox()
             return true
@@ -34,7 +38,10 @@ extension ChatController {
     }
     func retry(clientId: String) async {
         guard let entry = outbox.entries.first(where: { $0.request.clientId == clientId }),
-              [.failed, .outcomeUnknown].contains(entry.state), let host, let pairing else { return }
+              [.failed, .outcomeUnknown].contains(entry.state), let host, let pairing,
+              retrying.insert(clientId).inserted else { return }
+        // A second tap while the copy is staged would send the message twice.
+        defer { retrying.remove(clientId) }
         let directory = await files.directory(host: host, deviceId: pairing.deviceId)
         let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType) }
         if await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId) { await discard(clientId: clientId) }

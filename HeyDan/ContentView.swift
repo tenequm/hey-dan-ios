@@ -2,7 +2,7 @@ import HeyDanCore
 import SwiftUI
 
 struct ContentView: View {
-    var pairedTarget: CallTarget? = nil
+    var pairedTarget: CallTarget?
     @Environment(CallController.self) private var call
     @State private var showsSettings = false
     @State private var showsOptions = false
@@ -53,10 +53,13 @@ struct ContentView: View {
         .sheet(item: $voiceTarget) { target in
             VoicePickerSheet(service: target.service, agentName: target.agentName, callID: target.callID)
         }
-        .onAppear {
-            if preview == nil, call.line == nil, !call.isCallActive {
+        // Only once the pairings are read: a paired phone with no saved line shows the conversation list, not Settings.
+        .onChange(of: Pairings.shared.state, initial: true) { _, state in
+            if state == .none, preview == nil, pairedTarget == nil, call.line == nil, !call.isCallActive {
                 showsSettings = true
             }
+        }
+        .onAppear {
             #if DEBUG && targetEnvironment(simulator)
             if ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_SETTINGS"] == "1" { showsSettings = true }
             #endif
@@ -389,7 +392,7 @@ struct ContentView: View {
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
 
         Button {
-            guard let service = voiceLine else { return }
+            guard let service = voiceService else { return }
             let target = VoiceTarget(service: service, agentName: call.agentName, callID: call.liveCallID)
             if showsOptions {
                 pendingVoiceTarget = target
@@ -399,11 +402,11 @@ struct ContentView: View {
             }
         } label: {
             Text("Voice")
-                .foregroundStyle(voiceLine == nil ? Theme.muted : Theme.text)
+                .foregroundStyle(voiceService == nil ? Theme.muted : Theme.text)
         }
         .buttonStyle(.glass)
         .frame(minWidth: 44, minHeight: 44)
-        .disabled(voiceLine == nil)
+        .disabled(voiceService == nil)
         .accessibilityIdentifier(AXID.controlsVoice)
         .accessibilityLabel("Voice")
         .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
@@ -425,17 +428,19 @@ struct ContentView: View {
     /// The control row capitalizes hands-free, which `Review.modeName` writes lowercase.
     private func modeTitle(_ mode: TurnMode) -> String { mode == .auto ? "Hands-free" : Review.modeName(mode) }
 
+    /// A redial starts from the conversation as the list has it now; the host still decides whether it may call.
     private func startDisplayedCall() async {
         if let target = pairedTarget, let paired = target.paired, let service = target.service {
-            _ = await call.start(target: CallTarget(paired: paired, service: service))
+            let chat = ChatController.shared
+            let live = chat.host == paired.host ? chat.conversations.first { $0.id == paired.conversation.id } : nil
+            _ = await call.start(target: CallTarget(paired: PairedCallTarget(host: paired.host, deviceId: paired.deviceId,
+                conversation: live ?? paired.conversation), service: service))
         } else { _ = await call.start(lineID: call.shownLineID) }
     }
 
-    private var voiceLine: (any VoicePickerService)? {
+    private var voiceService: (any VoicePickerService)? {
         if let service = call.liveVoiceService { return service }
-        if let target = pairedTarget, let paired = target.paired, let service = target.service {
-            return PairedVoicePickerService(target: paired, service: service)
-        }
+        if let pairedTarget { return pairedTarget.voicePickerService }
         return (call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line).map(VoiceSettingsModel.lineService)
     }
 

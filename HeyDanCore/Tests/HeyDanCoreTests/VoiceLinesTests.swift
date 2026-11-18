@@ -108,7 +108,7 @@ struct VoiceLinesTests {
     }
 
     @Test func decodesTheLineInfo() throws {
-        let info = try LineInfo(status: 200, body: Data(#"{"agent":"Emma","caller":"Misha","wakePhrase":null}"#.utf8))
+        let info = try LineInfo(status: 200, body: Data(#"{"agent":"Emma","caller":"Alex","wakePhrase":null}"#.utf8))
         #expect(info.agent == "Emma")
         #expect(throws: CallFailure.refused(status: 403, body: "Unknown call link")) {
             try LineInfo(status: 403, body: Data("Unknown call link".utf8))

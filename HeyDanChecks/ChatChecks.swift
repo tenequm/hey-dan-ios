@@ -33,9 +33,7 @@ final class ChatChecks: XCTestCase {
 
     private func send(_ command: String) throws {
         let text = app.textFields["composer.text"]
-        guard text.waitForExistence(timeout: 5) else {
-            throw XCTSkip("H4b composer is not on this branch yet")
-        }
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
         text.tap()
         text.typeText(command)
         let send = app.buttons["composer.send"]
@@ -50,14 +48,14 @@ final class ChatChecks: XCTestCase {
 
     func testFixtureUnreadRelaunch() {
         launch(["HEYDAN_FIXTURE_CHAT": "1"])
-        let row = app.buttons["chat.conversation.conv_stan01"]
+        let row = app.buttons["chat.conversation.conv_taylor01"]
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         XCTAssertTrue(row.label.contains("2 unread"))
         app.terminate()
         launch(["HEYDAN_FIXTURE_CHAT": "1"])
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         XCTAssertTrue(row.label.contains("2 unread"))
-        XCTAssertEqual(app.buttons.matching(identifier: "chat.conversation.conv_stan01").count, 1)
+        XCTAssertEqual(app.buttons.matching(identifier: "chat.conversation.conv_taylor01").count, 1)
     }
 
     func testPairedList() throws {

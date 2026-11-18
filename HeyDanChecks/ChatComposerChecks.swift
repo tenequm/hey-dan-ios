@@ -13,8 +13,8 @@ final class ChatComposerChecks: XCTestCase {
         app.launch()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"].firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.buttons["chat.conversation.conv_stan01"].waitForExistence(timeout: 15))
-        app.buttons["chat.conversation.conv_stan01"].tap()
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
+        app.buttons["chat.conversation.conv_taylor01"].tap()
         XCTAssertTrue(app.textFields["composer.text"].waitForExistence(timeout: 10))
         return app
     }

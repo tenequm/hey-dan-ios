@@ -166,7 +166,7 @@ final class SignedClientTests: XCTestCase {
         XCTAssertEqual(pairings.state, .paired)
         do { try await pairings.pair(link); XCTFail("Reused code accepted") }
         catch AppError.server(_, let body) { XCTAssertEqual(body.error, "invalid_code") }
-        if let host = pairings.active?.host { try pairings.remove(host: host) }
+        if let active = pairings.active { try pairings.remove(host: active.host, deviceId: active.deviceId) }
     }
 
     @MainActor func testCorruptSavedPairingsCanRecover() async throws {
