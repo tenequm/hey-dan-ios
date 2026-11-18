@@ -33,7 +33,8 @@ struct HeyDanApp: App {
             Group {
                 #if DEBUG
                 if let name = ProcessInfo.processInfo.environment["HEYDAN_GALLERY"] {
-                    Gallery(name: name)
+                    if name.hasPrefix("List/") { ConversationListSpecimen(name: name) }
+                    else { Gallery(name: name) }
                 } else { root }
                 #else
                 root

@@ -246,3 +246,37 @@ struct ConversationRow: View {
         return parts.joined(separator: ", ")
     }
 }
+
+#if DEBUG
+struct ConversationListSpecimen: View {
+    @State private var chat: ChatController
+
+    init(name: String) {
+        let chat = ChatController(service: FixtureAppService(), store: SwiftDataThreadStore(inMemory: true), monitorsNetwork: false)
+        chat.host = URL(string: "https://home.example.net")
+        chat.connectionState = name == "List/Reconnecting" ? .reconnecting : .connected
+        if name != "List/Empty" {
+            let samples = [
+                ("Dan", "Rotating the storage key and re-running backup-job. I'll post the log when it's green."),
+                ("Stan", "Test call done: 640 ms end to end, captions on time, no dropped turns."),
+                ("Juno", "Which calendar should the dentist appointment go on, Personal or Family?")
+            ]
+            for (index, sample) in samples.enumerated() {
+                let id = "preview-\(index)"
+                let last = try? JSONDecoder().decode(LastMessage.self, from: JSONSerialization.data(withJSONObject:
+                    ["id": id, "role": "agent", "preview": sample.1, "at": 0]))
+                let agent = Agent(id: id, name: sample.0)
+                chat.reducer.upsert(Conversation(kind: .conversation, id: id, seq: 1, agent: agent,
+                    lastMessage: last, unread: index == 1 ? 1 : 0, readOrder: 0, canCall: false, createdAt: 0))
+                if index != 1 {
+                    chat.reducer.upsert(Status(kind: .status, conversationId: id, rev: 1,
+                        state: index == 0 ? .working : .waiting, at: Int64(Date.now.timeIntervalSince1970 * 1000) - 42_000))
+                }
+            }
+        }
+        _chat = State(initialValue: chat)
+    }
+
+    var body: some View { ConversationList().environment(chat) }
+}
+#endif
