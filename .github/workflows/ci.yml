@@ -31,6 +31,8 @@ env:
   JUST_SHA256: 6574cea774ed4cae12e24b6aa11857de33e80dab4667cf628fd5840df96a2a9d
   XCODEGEN_VERSION: 2.46.0
   XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
 
 jobs:
   core:
@@ -53,15 +55,10 @@ jobs:
           unzip -q xcodegen.zip
           echo "$PWD/bin" >> "$GITHUB_PATH"
           echo "$PWD/xcodegen/bin" >> "$GITHUB_PATH"
-      - name: Probe the image
-        run: |
-          xcodebuild -version
-          swift --version
-          command -v timeout python3 jq just xcodegen
-          xcrun simctl list runtimes
-          xcrun simctl list devicetypes | grep -i iphone
-          sysctl -n hw.ncpu hw.memsize
-          df -h /
+      - &timeout
+        # The image has no `timeout`; the Simulator scripts and two harness tests need it.
+        name: Install GNU timeout
+        run: brew install coreutils
       - run: just test
 
   build:
@@ -88,6 +85,7 @@ jobs:
     steps:
       - *checkout
       - *tools
+      - *timeout
       - *packages
       - name: Create the Simulator
         run: |
