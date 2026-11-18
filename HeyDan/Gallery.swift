@@ -10,6 +10,16 @@ struct Gallery: View {
     let name: String
 
     var body: some View {
+        if name == "CallScreen" {
+            let target = PairedCallTarget(host: URL(string: "https://example.invalid")!, deviceId: "sample",
+                                          conversation: ThreadPreviewValues.conversation)
+            PairedCallCover(target: CallTarget(paired: target, service: FixtureAppService()))
+        } else {
+            specimens
+        }
+    }
+
+    private var specimens: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: theme.space.s6) {
                 switch name {
@@ -57,11 +67,11 @@ struct Gallery: View {
                                       mimeType: isImage ? "image/png" : "text/plain", size: 48_211,
                                       kind: isImage ? .image : .file, width: 240, height: 180)
             AttachmentView(file: file, download: { _ in Self.samplePhoto })
-        case "ComposerView", "ComposerView-Typing", "ComposerView-Staged", "StagedAttachmentTray":
+        case "StagedAttachmentTray": StagedAttachmentTray(attachments: Self.sampleAttachments, remove: { _ in })
+        case "ComposerView", "ComposerView-Typing", "ComposerView-Staged":
             ComposerView(features: ["files"], send: { _, _ in false },
                          text: name.hasSuffix("Typing") ? "Please check the last backup\nand send the log." : "",
-                         attachments: name.hasSuffix("Staged") || name == "StagedAttachmentTray" ?
-                             [StagedAttachment(fileURL: Self.samplePhoto, name: "Photo.png", mimeType: "image/png")] : [])
+                         attachments: name.hasSuffix("Staged") ? Self.sampleAttachments : [])
         default: EmptyView()
         }
     }
@@ -79,7 +89,15 @@ struct Gallery: View {
         return message
     }
 
+    private static var sampleAttachments: [StagedAttachment] {
+        let log = URL.cachesDirectory.appending(path: "gallery-backup.log")
+        if !FileManager.default.fileExists(atPath: log.path) { try? Data(repeating: 32, count: 2048).write(to: log) }
+        return [StagedAttachment(fileURL: samplePhoto, name: "Photo", mimeType: "image/jpeg"),
+                StagedAttachment(fileURL: log, name: "backup.log", mimeType: "text/plain")]
+    }
+
     private static var samplePhoto: URL {
+        if let path = ProcessInfo.processInfo.environment["HEYDAN_GALLERY_PHOTO"] { return URL(fileURLWithPath: path) }
         let url = URL.cachesDirectory.appending(path: "gallery-photo.png")
         if !FileManager.default.fileExists(atPath: url.path) {
             try? UIImage(systemName: "photo")?.withTintColor(.systemGray, renderingMode: .alwaysOriginal)

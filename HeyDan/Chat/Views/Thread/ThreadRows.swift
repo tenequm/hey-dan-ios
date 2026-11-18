@@ -203,18 +203,24 @@ struct OutboxRow: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: theme.space.s1_5) {
             if !entry.request.text.isEmpty { Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()) }
-            Label(entry.state.label, systemImage: entry.state == .failed ? "exclamationmark.circle" : "clock")
-                .textRole(theme.type.caption).foregroundStyle(entry.state == .failed ? theme.color.danger : theme.color.textSecondary)
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
                 Text(attachment.name)
             }
             if let error = entry.lastServerError { Text(error.message).foregroundStyle(theme.color.danger) }
-            if entry.state == .failed || entry.state == .outcomeUnknown {
-                Button("Retry") {
-                    if entry.state == .outcomeUnknown { confirmsRetry = true }
-                    else { retry(entry.request.clientId) }
+            HStack(spacing: theme.space.s1) {
+                Label(entry.state.label, systemImage: entry.state == .failed ? "exclamationmark.circle" : "clock")
+                    .foregroundStyle(entry.state == .failed ? theme.color.danger : theme.color.textSecondary)
+                if entry.state == .failed || entry.state == .outcomeUnknown {
+                    Text("·").foregroundStyle(theme.color.textTertiary)
+                    Button("Retry") {
+                        if entry.state == .outcomeUnknown { confirmsRetry = true }
+                        else { retry(entry.request.clientId) }
+                    }
+                    .foregroundStyle(theme.color.accentText)
+                    .textRole(theme.type.caption, theme.weight.bold)
                 }
             }
+            .textRole(theme.type.caption)
             if entry.state == .held { Button("Discard", role: .destructive) { discard(entry.request.clientId) } }
         }
         .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)
