@@ -76,10 +76,8 @@ struct MessageRow: View {
                 }
                 ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
                 HStack(spacing: theme.space.s2) {
-                    if message.voice == .caller {
-                        Label("From a call", systemImage: "mic")
-                    } else if message.voice == .spoken {
-                        Label("Spoken", systemImage: "speaker.wave.2")
+                    if message.voice == .caller || message.voice == .spoken {
+                        Label("Spoken", systemImage: message.voice == .caller ? "mic" : "speaker.wave.2")
                     }
                     ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
                         Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
