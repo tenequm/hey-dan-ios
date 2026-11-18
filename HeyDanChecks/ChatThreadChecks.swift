@@ -22,4 +22,36 @@ final class ChatThreadChecks: XCTestCase {
         shot("thread-markdown")
     }
 
+    @MainActor func testRichCardSummary() throws {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        let card = openFixtureCard(in: app)
+        XCTAssertTrue(card.staticTexts["Backup report"].exists)
+        XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "1.2 TB")).firstMatch.exists)
+        XCTAssertTrue(card.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Open report")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Backup report: Green, 1.2 TB, 48 min."].exists)
+        shot("thread-rich-card-summary")
+    }
+
+    @MainActor func testRichCardTable() throws {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_CARD": "table"])
+        let card = openFixtureCard(in: app)
+        let table = card.scrollViews.firstMatch
+        XCTAssertTrue(table.waitForExistence(timeout: 10))
+        let header = table.staticTexts["Files"]
+        let before = header.frame.minX
+        table.swipeLeft()
+        XCTAssertLessThan(header.frame.minX, before)
+        XCTAssertTrue(card.staticTexts["Duration, minutes"].exists)
+        table.swipeRight()
+        shot("thread-rich-card-table")
+    }
+
+    @MainActor private func openFixtureCard(in app: XCUIApplication) -> XCUIElement {
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 15))
+        conversation.tap()
+        let card = app.descendants(matching: .any)["chat.card.msg_card"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 15))
+        return card
+    }
 }

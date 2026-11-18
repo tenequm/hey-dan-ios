@@ -7,6 +7,21 @@ actor FixtureAppService: AppService {
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: "Taylor tester",
         agents: [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
     init() {
+        if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CARD"] == "table",
+           let index = messages.firstIndex(where: { $0.id == "msg_card" }) {
+            messages[index].text = "Last 6 runs. The backup failed on 11-17."
+            messages[index].card = Card(title: "Last 6 runs", description: "Nightly backup job on home server.", parts: [
+                .table(headers: ["Night", "Status", "Size", "Time", "Files"], rows: [
+                    ["11-18", "Green", "1.2 TB", "48 min", "812k"],
+                    ["11-17", "Failed", "-", "-", "-"],
+                    ["11-16", "Green", "1.2 TB", "49 min", "810k"],
+                    ["11-15", "Green", "1.2 TB", "47 min", "809k"]
+                ], align: nil, caption: nil),
+                .chart(title: "Duration, minutes", chart: .plot(.bar, categories: ["13", "14", "15", "16", "17", "18"],
+                    series: [.init(name: "Minutes", values: [39, 34, 45, 56, 0, 48])])),
+                .text(content: "11-17 failed: the storage key had expired.", style: "muted")
+            ], actions: [])
+        }
         if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CALL_REFUSAL"] == "1" {
             conversation.canCall = false
             conversation.callRefusal = ErrorBody(error: "voice_offline", message: "Voice is offline.")
@@ -19,7 +34,7 @@ actor FixtureAppService: AppService {
     private var conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
         agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 2, readOrder: 0, canCall: true, createdAt: 0)
     private var question = Question(kind: .question, id: "q_0123", conversationId: "conv_taylor01",
-        order: 4, seq: 4, title: "Choose an option", text: "Which option do you prefer?",
+        order: 5, seq: 5, title: "Choose an option", text: "Which option do you prefer?",
         options: [QuestionOption(label: "Continue", selectedLabel: "Continued", value: "continue", style: "primary")],
         state: .open, createdAt: 0)
     private var messages: [Message] = [
@@ -31,7 +46,16 @@ actor FixtureAppService: AppService {
                 FileAttachment(id: "file_img01", name: "Image.png", mimeType: "image/png", size: 68,
                     kind: .image, width: 1, height: 1),
                 FileAttachment(id: "file_doc01", name: "Document.pdf", mimeType: "application/pdf", size: 0, kind: .file)
-            ], reactions: [], createdAt: 0)
+            ], reactions: [], createdAt: 0),
+        Message(kind: .message, id: "msg_card", conversationId: "conv_taylor01", order: 4, seq: 4,
+            role: .agent, text: "Backup report: Green, 1.2 TB, 48 min.",
+            card: Card(title: "Backup report", description: "Last night's run, after the storage key rotation.",
+                parts: [.fields([
+                    .init(label: "Status", value: "Green"), .init(label: "Size", value: "1.2 TB"),
+                    .init(label: "Duration", value: "48 min"), .init(label: "Snapshot", value: "02:00"),
+                    .init(label: "Files", value: "812k"), .init(label: "Next run", value: "01:30")
+                ])], actions: [.init(label: "Open report", url: "https://example.org/report", style: "primary")]),
+            files: [], reactions: [], createdAt: 0)
     ]
     private var status: Status { Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0) }
     private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.unread) }

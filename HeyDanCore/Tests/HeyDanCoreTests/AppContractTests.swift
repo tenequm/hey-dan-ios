@@ -114,3 +114,49 @@ private struct CheckFailure: Error { let label: String }
     do { _ = try bounded.feed(Data("abcd".utf8)); throw CheckFailure(label: "unbounded event") }
     catch ContractError.eventTooLarge {}
 }
+
+@Test func richCardWireFixture() throws {
+    let messages = try #require(coreFixtures()["messages"] as? [String: Any])
+    let wire = try #require(messages["richCard"] as? [String: Any])
+    let message = try fixtureDecode(Message.self, wire)
+    let card = try #require(message.card)
+    #expect(message.role == .agent)
+    #expect(!message.text.isEmpty)
+    #expect(card.actions.count == 2)
+    #expect(card.actions.allSatisfy { $0.webURL != nil })
+    #expect(card.parts.count == 5)
+    let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(card)) as? NSDictionary
+    #expect(encoded == wire["card"] as? NSDictionary)
+    #expect(try JSONDecoder().decode(Message.self, from: JSONEncoder().encode(message)) == message)
+}
+
+@Test func cardDecoderPreservesKnownPartsAndLegacyMessages() throws {
+    let messages = try #require(coreFixtures()["messages"] as? [String: Any])
+    var wire = try #require(messages["agentMarkdown"] as? [String: Any])
+    wire.removeValue(forKey: "card")
+    #expect(try fixtureDecode(Message.self, wire).card == nil)
+    wire["card"] = NSNull()
+    #expect(try fixtureDecode(Message.self, wire).card == nil)
+
+    let parts: [Any] = [
+        ["type": "new-part"], ["type": "table", "rows": false],
+        ["type": "chart", "title": "Future", "chart": ["type": "radar"]],
+        ["type": "divider"], ["type": "text", "content": "Still here", "style": "bold"]
+    ]
+    wire["card"] = ["parts": parts, "actions": []] as [String: Any]
+    let message = try fixtureDecode(Message.self, wire)
+    #expect(message.card?.parts == [.divider, .text(content: "Still here", style: "bold")])
+    #expect(message.text == wire["text"] as? String)
+}
+
+@Test func cardChartShapesRoundTrip() throws {
+    let pie = try fixtureDecode(CardChart.self, ["type": "pie", "segments": [["label": "Photos", "value": 2.5]]])
+    #expect(pie == .pie([.init(label: "Photos", value: 2.5)]))
+    for type in [CardChart.Plot.bar, .line, .area] {
+        let wire: [String: Any] = ["type": type.rawValue, "categories": ["A", "B"],
+                                    "series": [["name": "Size", "values": [0.5, 2]]]]
+        let chart = try fixtureDecode(CardChart.self, wire)
+        #expect(chart == .plot(type, categories: ["A", "B"], series: [.init(name: "Size", values: [0.5, 2])]))
+        #expect(try JSONDecoder().decode(CardChart.self, from: JSONEncoder().encode(chart)) == chart)
+    }
+}

@@ -61,6 +61,13 @@ struct MessageRow: View {
     var retry: (String) -> Void = { _ in }
     @State private var confirmsRetry = false
 
+    private var visibleCard: Card? {
+        guard message.role == .agent, let card = message.card,
+              card.title?.isEmpty == false || card.description?.isEmpty == false ||
+              !card.parts.isEmpty || card.actions.contains(where: { $0.webURL != nil }) else { return nil }
+        return card
+    }
+
     var body: some View {
         // Not only a role filter: without this branch, a sent message that takes over its outbox row's ForEach id
         // never reaches UI checks with its own identifier and label (ChatComposerChecks.testTextSend).
@@ -71,6 +78,10 @@ struct MessageRow: View {
                     if !message.text.isEmpty {
                         Text(message.text).textSelection(.enabled).modifier(UserBubble())
                     }
+                } else if let card = visibleCard {
+                    RichCard(card: card)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier(AXID.card(message.id))
                 } else if !message.text.isEmpty {
                     MessageBody(text: message.text)
                 }
@@ -100,7 +111,7 @@ struct MessageRow: View {
             .foregroundStyle(theme.color.textPrimary)
             .padding(.leading, outgoing ? theme.space.s10 : 0)
             .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: visibleCard == nil ? .combine : .contain)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
                 Button("Send again") { if let id = message.clientId { retry(id) } }
