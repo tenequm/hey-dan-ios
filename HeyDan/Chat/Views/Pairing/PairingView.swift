@@ -59,7 +59,7 @@ struct PairingView: View {
                             Text("Pairing link").padding(.horizontal, theme.space.s4)
                             HStack(spacing: theme.space.s3) {
                                 Text("Link")
-                                Text(link.isEmpty ? "https://host/app/pair#…" : host.map { "\($0)/app/pair#••••" } ?? "Link pasted")
+                                Text(verbatim: link.isEmpty ? "https://host/app/pair#…" : host.map { "\($0)/app/pair#••••" } ?? "Link pasted")
                                     .foregroundStyle(link.isEmpty ? theme.color.placeholder : theme.color.textPrimary)
                                     .accessibilityIdentifier("pairing.link")
                                 Spacer()
@@ -101,6 +101,7 @@ struct PairingView: View {
                     }
                 }
                 .labelStyle(.titleAndIcon).buttonBorderShape(.capsule)
+                .tint(theme.color.surfaceCard)
                 .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget + theme.space.s1)
                 .background(theme.color.surfaceCard, in: Capsule())
                 .accessibilityLabel("Paste from clipboard")
