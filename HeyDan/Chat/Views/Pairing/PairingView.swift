@@ -22,16 +22,19 @@ struct PairingView: View {
 
     var body: some View {
         VStack(spacing: theme.space.s2) {
-            HStack {
-                if isPresented { GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() } }
-                Text(paired == nil ? "Pair a host" : "Paired").textRole(theme.type.headline, theme.weight.bold)
-                Spacer()
-                if paired == nil {
-                    GlassIconButton(title: "Confirm pairing", systemImage: "checkmark", action: submit)
-                        .disabled(working || link.isEmpty)
+            ZStack {
+                Text(paired == nil ? "Pair a host" : "Paired").textRole(theme.type.headline, theme.weight.semibold)
+                HStack {
+                    if isPresented { GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() } }
+                    Spacer()
+                    if paired == nil {
+                        GlassIconButton(title: "Confirm pairing", systemImage: "checkmark", action: submit)
+                            .disabled(working || link.isEmpty)
+                            .opacity(working || link.isEmpty ? 0.45 : 1)
+                    }
                 }
             }
-            .padding(.top, theme.space.s2)
+            .frame(minHeight: theme.control.touchTarget + theme.space.s3)
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
                     VStack(alignment: .leading, spacing: theme.space.s2) {
@@ -74,7 +77,7 @@ struct PairingView: View {
                             .padding(theme.space.s4)
                             .background(theme.color.surfaceGrouped, in: RoundedRectangle(cornerRadius: theme.radius.field))
                             .overlay {
-                                if failure != nil { RoundedRectangle(cornerRadius: theme.radius.field).strokeBorder(theme.color.dangerBorder) }
+                                if failure != nil { RoundedRectangle(cornerRadius: theme.radius.field).strokeBorder(theme.color.danger) }
                             }
                             Text(failure ?? host.map { "Host: \($0)" } ?? "The host keeps its own keys. This phone gets a device key.")
                                 .foregroundStyle(failure == nil ? theme.color.textSecondary : theme.color.danger)
