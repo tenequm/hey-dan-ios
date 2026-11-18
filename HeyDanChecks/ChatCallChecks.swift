@@ -28,7 +28,7 @@ import XCTest
         let host = app.buttons["chat.settings.host.app.example.com"]
         host.tap()
         XCTAssertTrue(app.buttons["Unpair"].waitForExistence(timeout: 5))
-        app.buttons["Back"].tap()
+        app.buttons["chat.settings.host.back"].tap()
         let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Voice lines")).firstMatch
         lines.tap()
         XCTAssertTrue(app.staticTexts["Saved lines"].waitForExistence(timeout: 5))
@@ -64,7 +64,7 @@ import XCTest
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         shot("unpair-sheet")
         cancel.tap()
-        app.buttons["Back"].tap()
+        app.buttons["chat.settings.host.back"].tap()
         app.buttons["Chats"].tap()
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }
