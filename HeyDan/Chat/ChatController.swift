@@ -43,7 +43,7 @@ import UIKit
     var statuses: [String: Status] { reducer.statuses }
     var badge: Badge? { reducer.badge }
     var hasMoreBefore: Bool { openConversationId.flatMap { reducer.hasMoreBefore[$0] } ?? false }
-    var outboxStates: [String: Outbox.State] { Dictionary(uniqueKeysWithValues: outbox.entries.map { ($0.request.clientId, $0.state) }) }
+    var outboxStates: [String: Outbox.State] { Dictionary(outbox.entries.map { ($0.request.clientId, $0.state) }, uniquingKeysWith: { first, _ in first }) }
     var reducer = ThreadReducer()
     var outbox = Outbox()
     @ObservationIgnored private(set) var service: any AppService
@@ -58,8 +58,12 @@ import UIKit
     @ObservationIgnored var runnerSleep: Task<Void, any Error>?
     @ObservationIgnored var ready = false
     @ObservationIgnored var hasCursor = false
-    @ObservationIgnored var paused = false
+    private enum PauseReason { case keyUnavailable, incompatibleProtocol }
+    @ObservationIgnored private var pauseReason: PauseReason?
+    var paused: Bool { pauseReason != nil }
     @ObservationIgnored var streamTask: Task<Void, Never>?
+    @ObservationIgnored private var loadRetry: Task<Void, Never>?
+    @ObservationIgnored private var loadAttempts = 0
     @ObservationIgnored var loadTask: Task<Void, Never>?
     @ObservationIgnored var runnerID = UUID()
     @ObservationIgnored var savedEntries: [Outbox.Entry] = []
@@ -102,11 +106,7 @@ import UIKit
         protectedTask = Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: UIApplication.protectedDataDidBecomeAvailableNotification) {
                 guard let self else { return }
-                if case .keyUnavailable = self.error { self.paused = false }
-                if !self.ready, let pairing = self.pairing, let host = self.host {
-                    self.selectPairing(nil, host: host)
-                    self.selectPairing(pairing, host: host)
-                } else { self.restart() }
+                self.protectedDataAvailable()
             }
         }
     }
@@ -125,23 +125,36 @@ import UIKit
     }
     #endif
 
+    func protectedDataAvailable() {
+        if pauseReason == .keyUnavailable { pauseReason = nil }
+        restart()
+    }
+
     func selectPairing(_ pairing: PairResponse?, host: URL) {
         guard self.host != host || self.pairing != pairing else { return }
         flushRead()
         let pendingOpen = self.host == nil || self.host == host ? openConversationId : nil
         generation = UUID()
         loadTask?.cancel(); streamTask?.cancel(); runner?.cancel(); readTask?.cancel()
-        runner = nil; streamTask = nil
+        runner = nil; streamTask = nil; loadTask = nil
+        loadRetry?.cancel(); loadAttempts = 0
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); historyStale = false; openConversationId = pairing == nil ? nil : pendingOpen
         historyFloors = [:]
-        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; paused = false; error = nil
+        savedEntries = []; durableIDs = []; ready = false; hasCursor = false; pauseReason = nil; error = nil
         features = pairing == nil ? [] : Pairings.shared.entries.first { $0.host == host }?.features ?? []
         connectionState = .disconnected
         guard let pairing else { return }
         if !fixedService { service = SignedClient(host: host, deviceId: pairing.deviceId) }
+        loadCache()
+    }
+
+    private func loadCache() {
+        guard !ready, loadTask == nil, let host, let pairing else { return }
+        loadRetry?.cancel()
         let token = generation
         loadTask = Task {
+            defer { if token == generation { loadTask = nil } }
             do {
                 let snapshot = try await store.load(host: host, deviceId: pairing.deviceId)
                 let entries = try await files.load(host: host, deviceId: pairing.deviceId)
@@ -160,7 +173,18 @@ import UIKit
                 ready = true
                 restart()
                 if openConversationId != nil { await loadHistory(newest: true) }
-            } catch { if token == generation { self.error = AppError.map(error) } }
+            } catch {
+                guard token == generation else { return }
+                self.error = AppError.map(error)
+                guard active else { return }
+                loadAttempts += 1
+                let delay = Outbox.backoff(attempt: loadAttempts)
+                loadRetry = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                    guard let self, self.active, self.generation == token else { return }
+                    self.loadCache()
+                }
+            }
         }
     }
     func openConversation(_ id: String) {
@@ -178,6 +202,7 @@ import UIKit
         if active { endBackgroundDelivery() } else { keepDeliveringInBackground() }
     }
     func restart() {
+        if active && !ready { loadCache() }
         guard active, networkAvailable, ready, !paused, pairing != nil else {
             streamTask?.cancel(); streamTask = nil
             runnerSleep?.cancel()
@@ -208,6 +233,7 @@ import UIKit
         try Task.checkCancellation()
     }
     func refresh() async {
+        loadCache()
         await loadTask?.value
         guard ready else { return }
         let token = generation
@@ -216,15 +242,23 @@ import UIKit
     }
     func refreshList(token: UUID) async throws {
         guard ready else { throw AppError.transport(.unavailable) }
+        let requestedCursor = reducer.cursor
         let list = try await service.conversations()
         guard token == generation, !Task.isCancelled, let host, let pairing else { return }
-        let cursor = hasCursor ? reducer.cursor : list.seq
+        let restored = list.seq < requestedCursor
+        let cursor = hasCursor && !restored ? reducer.cursor : list.seq
         let allowed = Set(list.conversations.map(\.id))
         var snapshot = ThreadSnapshot(cursor: cursor, conversations: list.conversations)
         snapshot.allowedConversations = allowed
-        snapshot.historyFloors = historyFloors
+        snapshot.historyFloors = restored ? [:] : historyFloors
+        snapshot.replacesCache = restored
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
         guard token == generation, !Task.isCancelled else { return }
+        if restored {
+            reducer = ThreadReducer()
+            historyFloors.removeAll()
+            historyStale = openConversationId != nil
+        }
         reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
             switch $0.value { case .message(let m): allowed.contains(m.conversationId); case .question(let q): allowed.contains(q.conversationId); case .unknown: false }
         },
@@ -353,8 +387,7 @@ import UIKit
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }
-        var snapshot = ThreadSnapshot(cursor: hasCursor ? reducer.cursor : nil,
-            conversations: changed.compactMap { reducer.conversations[$0] },
+        var snapshot = ThreadSnapshot(conversations: changed.compactMap { reducer.conversations[$0] },
             entities: changed.compactMap { reducer.entities[$0] })
         snapshot.historyFloors = historyFloors
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
@@ -365,7 +398,7 @@ import UIKit
         CallLog.log(.net, "failure code=\(mapped.logName)")
         error = mapped
         switch mapped {
-        case .keyUnavailable: paused = true
+        case .keyUnavailable: if pauseReason == nil { pauseReason = .keyUnavailable }
         case .server(let status, let body):
             if Outbox.revokedCodes.contains(body.error), let host, let pairing {
                 CallLog.log(.store, "revoke")
@@ -373,7 +406,7 @@ import UIKit
                 do { try await forget(host: host, deviceId: pairing.deviceId) } catch { self.error = AppError.map(error) }
                 return
             }
-            if status == 426 { paused = true }
+            if status == 426 { pauseReason = .incompatibleProtocol }
         default: break
         }
         if paused { streamTask?.cancel(); runner?.cancel(); connectionState = .disconnected }

@@ -156,8 +156,50 @@ struct ThreadStoreTests {
             #expect(await service.cursors.isEmpty)
             #expect(!chat.hasCursor)
             #expect(chat.pairing != nil)
+            chat.error = .transport(.timeout)
+            chat.protectedDataAvailable()
+            if case .keyUnavailable = failure {
+                try await waitUntil { chat.connectionState == .connected }
+            } else {
+                #expect(chat.paused)
+            }
             chat.setActive(false)
         }
+    }
+
+    @MainActor @Test func restoredHostReplacesTheCachedTimeline() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = ScriptedAppService()
+        let store = SwiftDataThreadStore(inMemory: true)
+        var old = ThreadSnapshot(cursor: 80, conversations: [conversation(seq: 80)])
+        old.historyFloors = ["conv_taylor01": 78]
+        try await store.save(old, host: host, deviceId: "dev_fixture")
+        let chat = await paired(service, store: store, files: OutboxFile(root: root), active: true)
+        try await waitUntil { chat.connectionState == .connected }
+        chat.setActive(false)
+        #expect(await service.cursors == [10])
+        let saved = try await store.load(host: host, deviceId: "dev_fixture")
+        #expect(saved.cursor == 10)
+        #expect(saved.conversations.first?.seq == 1)
+        #expect(saved.historyFloors.isEmpty)
+    }
+
+    @MainActor @Test func refreshingRetriesFailedLocalLoad() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = OutboxFile(root: root)
+        let directory = await files.directory(host: host, deviceId: "dev_fixture").appending(path: "entries.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let chat = await paired(FixtureAppService(), files: files)
+        #expect(!chat.ready)
+        try FileManager.default.removeItem(at: directory)
+        await chat.refresh()
+        #expect(chat.ready)
+        #expect(chat.hasCursor)
+        for id in ["conversation1", "conversation2"] {
+            chat.outbox.enqueue(Outbox.Entry(host: host, conversationId: id,
+                request: SendRequest(clientId: "duplicate", text: "", fileIds: [])))
+        }
+        #expect(chat.outboxStates == ["duplicate": .queued])
     }
 
     @MainActor @Test func lostFileResponsesReuseIdentities() async throws {
@@ -417,6 +459,7 @@ private actor ScriptedAppService: AppService {
     var sentIDs: [String] = []
     var cursors: [Int64] = []
     var mintKeys: [String] = []
+    var emittedSeq: Int64 = 0
     var scriptedEvents: [AppEvent]?
     var scriptedPages: [HistoryPage] = []
     var beforeOrders: [Int64?] = []
@@ -432,7 +475,12 @@ private actor ScriptedAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse { try check("hello"); return try await base.hello() }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { try check("pair"); return try await base.pair(request) }
-    func conversations() async throws(AppError) -> ConversationsResponse { try check("conversations"); return try await base.conversations() }
+    func conversations() async throws(AppError) -> ConversationsResponse {
+        try check("conversations")
+        var list = try await base.conversations()
+        list.seq = max(list.seq, emittedSeq)
+        return list
+    }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage { beforeOrders.append(query.before)
         try check("history")
         if !scriptedPages.isEmpty { return scriptedPages.removeFirst() }
@@ -442,6 +490,7 @@ private actor ScriptedAppService: AppService {
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse { try check("answer"); return try await base.answer(questionId: questionId, request: request) }
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> { cursors.append(query.after); try check("events")
         if let scriptedEvents {
+            for event in scriptedEvents { emittedSeq = (try? event.cursor(after: emittedSeq)) ?? emittedSeq }
             return AsyncThrowingStream { continuation in
                 for event in scriptedEvents { continuation.yield(event) }
             }

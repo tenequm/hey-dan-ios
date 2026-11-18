@@ -164,6 +164,7 @@ actor SwiftDataThreadStore: ThreadStore {
     func save(_ snapshot: ThreadSnapshot, deviceId: String, beforeCommit: (@Sendable (ThreadSnapshot) throws -> Void)? = nil) throws {
         modelContext.autosaveEnabled = false
         do {
+            if snapshot.replacesCache { try deleteRecords(deviceId: deviceId) }
             let encoder = JSONEncoder()
             if let allowed = snapshot.allowedConversations.map(Array.init) {
                 for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
@@ -221,16 +222,19 @@ actor SwiftDataThreadStore: ThreadStore {
     func clear(deviceId: String) throws {
         modelContext.autosaveEnabled = false
         do {
-            for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate { $0.deviceId == deviceId })) {
-                modelContext.delete(row)
-            }
-            for row in try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(predicate: #Predicate { $0.deviceId == deviceId })) {
-                modelContext.delete(row)
-            }
+            try deleteRecords(deviceId: deviceId)
             try modelContext.save()
         } catch {
             modelContext.rollback()
             throw error
+        }
+    }
+    private func deleteRecords(deviceId: String) throws {
+        for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate { $0.deviceId == deviceId })) {
+            modelContext.delete(row)
+        }
+        for row in try modelContext.fetch(FetchDescriptor<CachedStreamCursor>(predicate: #Predicate { $0.deviceId == deviceId })) {
+            modelContext.delete(row)
         }
     }
 }
