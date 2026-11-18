@@ -45,6 +45,25 @@ jobs:
     steps:
       - *checkout
       - *setup
+      - &cache-config
+        name: Configure compilation cache
+        id: compiler
+        run: |
+          xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')
+          echo "prefix=xcode-$xcode-$RUNNER_ARCH-$GITHUB_JOB" >> "$GITHUB_OUTPUT"
+          cat > "$RUNNER_TEMP/compile-cache.xcconfig" <<'EOF'
+          COMPILATION_CACHE_ENABLE_CACHING = YES
+          COMPILATION_CACHE_KEEP_CAS_DIRECTORY = YES
+          EOF
+          echo "XCODE_XCCONFIG_FILE=$RUNNER_TEMP/compile-cache.xcconfig" >> "$GITHUB_ENV"
+      - &compile-cache
+        name: Restore compilation cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/CompilationCache.noindex
+          key: ${{ steps.compiler.outputs.prefix }}-${{ hashFiles('project.yml', 'Config.xcconfig', '**/Package.resolved', 'HeyDanCore/Package.swift', 'justfile', 'scripts/sim_tests.py', '**/*.swift') }}
+          restore-keys: |
+            ${{ steps.compiler.outputs.prefix }}-
       - run: just build
 
   app-tests:
@@ -59,4 +78,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           simulator: true
+      - *cache-config
+      - *compile-cache
       - run: just app-test

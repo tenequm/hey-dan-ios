@@ -50,11 +50,14 @@ def test_products(build, destination, env):
 
     stamp.unlink(missing_ok=True)
     subprocess.run(['xcodegen', 'generate', *(['--use-cache'] if Path('HeyDan.xcodeproj').is_dir() else [])], check=True)
+    build_env = env.copy()
+    if 'XCODE_XCCONFIG_FILE' in os.environ:
+        build_env['XCODE_XCCONFIG_FILE'] = os.environ['XCODE_XCCONFIG_FILE']
     subprocess.run(['timeout', '900', 'xcodebuild', 'build-for-testing', '-project', 'HeyDan.xcodeproj',
                     '-scheme', 'HeyDanSimulatorTests', '-destination', destination, '-derivedDataPath', build,
                     '-disableAutomaticPackageResolution', '-skipPackageUpdates', '-enableCodeCoverage', 'NO',
                     # Nothing reads a command-line build's index; Xcode indexes in its own DerivedData.
-                    'COMPILER_INDEX_STORE_ENABLE=NO', '-quiet'], check=True, env=env)
+                    'COMPILER_INDEX_STORE_ENABLE=NO', '-quiet'], check=True, env=build_env)
     manifest, = products.glob(pattern)
     stamp.write_text(key)
     return manifest
