@@ -1,5 +1,6 @@
 import SwiftUI
 
+// Compilation cache benchmark.
 /// The voice page's "te" skin, dark colorway: the colours and the mono typeface the call readout and the Live
 /// Activity still use.
 enum Theme {
