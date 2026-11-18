@@ -20,8 +20,10 @@ final class ChatComposerChecks: XCTestCase {
         let app = try launch()
         XCTAssertFalse(app.buttons["composer.send"].isEnabled)
         let field = app.textFields["composer.text"]
-        field.tap()
+        app.buttons["composer.dictation"].tap()
+        XCTAssertTrue(app.staticTexts["Tap the microphone on your keyboard to dictate."].waitForExistence(timeout: 5))
         field.typeText("Composer fixture")
+        XCTAssertFalse(app.staticTexts["Tap the microphone on your keyboard to dictate."].exists)
         app.buttons["composer.send"].tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'chat.message.' AND label CONTAINS %@ AND label CONTAINS 'Reached'", "Composer fixture")).firstMatch.waitForExistence(timeout: 15))
         XCTAssertEqual(field.value as? String, "Message")
