@@ -23,8 +23,9 @@ nonisolated enum AttachmentStaging {
     }
 
     private static func checkSize(_ url: URL) throws {
-        guard let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { throw CocoaError(.fileReadUnknown) }
-        guard size <= Outbox.maximumFileBytes else { throw AppError.limit(Outbox.fileLimitMessage) }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        guard try file.seekToEnd() <= UInt64(Outbox.maximumFileBytes) else { throw AppError.limit(Outbox.fileLimitMessage) }
     }
 
     private static func destination(extension suffix: String) throws -> URL {
