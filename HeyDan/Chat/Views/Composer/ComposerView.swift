@@ -17,6 +17,8 @@ struct ComposerView: View {
     @State private var staging = false
     @State private var sending = false
     @State private var importFailed = false
+    @FocusState private var textFocused: Bool
+    @State private var showsDictationHint = false
 
     var body: some View {
         let canSend = !staging && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
@@ -32,6 +34,11 @@ struct ComposerView: View {
                 Label("Could not read the selected attachment. Try selecting it again.", systemImage: "exclamationmark.circle")
                     .textRole(theme.type.caption).foregroundStyle(theme.color.danger)
                     .padding(.horizontal, theme.space.s3)
+            }
+            if showsDictationHint && textFocused {
+                Text("Tap the microphone on your keyboard to dictate.")
+                    .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+                    .padding(.horizontal, theme.space.s3).padding(.top, theme.space.s2)
             }
             HStack(alignment: .bottom, spacing: 0) {
                 if availableFeatures.contains("files") {
@@ -49,11 +56,25 @@ struct ComposerView: View {
                 }
                 TextField("Message", text: $text, prompt: Text("Message").foregroundStyle(theme.color.placeholder), axis: .vertical)
                     .lineLimit(1...6)
+                    .focused($textFocused)
+                    .onChange(of: text) { showsDictationHint = false }
+                    .onChange(of: textFocused) { if !textFocused { showsDictationHint = false } }
                     .textRole(theme.type.body)
                     .foregroundStyle(theme.color.textPrimary)
                     .padding(.horizontal, theme.space.s1).padding(.vertical, theme.space.s2_5)
                     .accessibilityIdentifier(AXID.composerText)
                 if staging { ProgressView() }
+                Button {
+                    textFocused = true
+                    showsDictationHint = true
+                } label: {
+                    Image(systemName: "mic")
+                        .foregroundStyle(theme.color.icon)
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Use keyboard dictation")
+                .accessibilityIdentifier(AXID.composerDictation)
                 Button {
                     sending = true
                     Task {
@@ -177,6 +198,6 @@ struct StagedAttachmentTray: View {
 extension AXID {
     static let composerText = "composer.text", composerSend = "composer.send",
         composerAttach = "composer.attach", composerPhotos = "composer.photos",
-        composerRemove = "composer.remove"
+        composerRemove = "composer.remove", composerDictation = "composer.dictation"
     static let attachmentOpen = "attachment.open"
 }
