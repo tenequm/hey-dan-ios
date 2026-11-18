@@ -53,7 +53,8 @@ through the host's voice mode. The protocol details are in [AGENTS.md](AGENTS.md
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen), [just](https://github.com/casey/just) and [jq](https://jqlang.org);
   Python 3.9+ and GNU `timeout` (from [coreutils](https://www.gnu.org/software/coreutils/)) for the test recipes;
   [uv](https://docs.astral.sh/uv/) for `just testflight`.
-- An Apple Developer team for device builds and TestFlight; Simulator and unsigned builds need none.
+- A paid Apple Developer Program team for device builds and TestFlight (the push entitlements rule out a free
+  personal team), with Xcode signed in to it; Simulator and unsigned builds need none.
 - A [NanoClaw](https://github.com/tenequm/nanoclaw) host the phone reaches over HTTPS: its
   [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) for chat, pushes and paired calls,
   or only [voice mode](https://github.com/tenequm/nanoclaw/blob/main/.claude/skills/add-voice-mode/SKILL.md) for
@@ -72,12 +73,16 @@ through the host's voice mode. The protocol details are in [AGENTS.md](AGENTS.md
 3. Install: `just device` signs, installs and launches the app on the connected iPhone; or ship it through
    [TestFlight](#testflight).
 4. Pair a host: send `/pair` to your agent in Telegram, or run `ncl devices pair --user <user-id> --agents <agent-id>`
-   on the host. In Hey Dan tap **Pair a host** (in Settings, which opens on first launch, or **+** on the chat list),
-   then **Paste** and **Pair with ...**. The link works once and expires after 10 minutes. For pushes, the host needs
-   an APNs key from your team and `APP_APNS_TOPIC` set to your `HEYDAN_BUNDLE_ID`.
+   on the host. In Hey Dan tap **Pair a host** (in Settings, which opens on first launch; once a host is paired, also
+   **+** on the chat list), then **Paste** and **Pair with ...**. The link works once and expires after 10 minutes.
+   Until a host is paired, Settings opens again from the call screen's Options > Voice lines and paired hosts. For
+   pushes, the host needs your team's APNs key and `APP_APNS_TOPIC` set to your `HEYDAN_BUNDLE_ID` (all keys: the
+   [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) doc); a `just device` build
+   registers for sandbox pushes.
 5. Or call without pairing: in Settings > Calls > Voice lines, add the call link from the host's voice mode
-   (`https://<host>/voice?t=<token>`). With several lines, tap the one the Action Button should call. A tailnet-only
-   host needs Tailscale on the phone.
+   (`https://<host>/voice?t=<token>`). With several lines, tap the one the Action Button should call. Later changes
+   (another line, another pick, a deleted line, a host to pair) go through Options > Voice lines and paired hosts on
+   the call screen. A tailnet-only host needs Tailscale on the phone.
 6. Set up the Action Button.
 
 ### Action Button
@@ -100,16 +105,16 @@ call there.
 | --- | --- |
 | `just test` | `HeyDanCore` tests on the Mac (no Simulator) and the `sim-e2e` harness's own tests |
 | `just build` | Compile-checks a device build without signing |
-| `just app-test` | The app-hosted `HeyDanTests` in the Simulator; shares one build with `sim-checks` |
-| `just sim` | Builds and launches in the Simulator "Hey Dan iPhone" (created on first run) with `TEST_CALL_LINK` saved as a line |
+| `just app-test` | The app-hosted `HeyDanTests` in that Simulator (run `just sim` once to create it); shares one build with `sim-checks` |
+| `just sim` | Builds and launches in the Simulator "Hey Dan iPhone" (created on first run) with `TEST_CALL_LINK` saved as a line; without `TEST_CALL_LINK` it stops before the launch |
 | `just sim-checks <check>` | UI checks: fixture classes such as `ChatThreadChecks` need no server; bare names such as `LiveActivityOnLockScreen` call the test line |
 | `just sim-e2e` | Unattended checks on their own Simulator, results in `build/e2e`: a hands-free call to the test line, or the chat rows against a local NanoClaw stack |
-| `just screens` | Captures the fixture screens into `.local/screens/<commit>/`; resets that Simulator's keychain |
+| `just screens` | Captures the fixture screens in that Simulator into `.local/screens/<commit>/`; resets its keychain |
 | `just device` | Signs, installs and launches on the connected iPhone |
 | `just logs [since]` | The Simulator's app and LiveKit log for the last `since` (default `15m`) |
 | `just testflight [dry]` | Archives, signs, uploads and waits for processing; `dry` validates without uploading |
 
-`just --list` shows the rest (`gen`, `sim-call`, `device-call`, `device-logs`, `server-logs`), and
+`just --list` shows the rest (`gen`, `sim-call`, `device-call`, `device-logs`, `server-logs`, `lane-ready`), and
 [AGENTS.md](AGENTS.md) has the traps and what the stack checks need. CI: [ci.yml](.github/workflows/ci.yml) runs the
 core tests, the device build and the app tests on pull requests and pushes to `main`;
 [ui-checks.yml](.github/workflows/ui-checks.yml) runs the fixture UI checks by hand.
@@ -129,8 +134,8 @@ One-time setup:
    distribution certificate (403 on `DISTRIBUTION_MANAGED`).
 2. In your [Apple Developer account](https://developer.apple.com/account), register the App Group
    `group.<HEYDAN_BUNDLE_ID>` and enable it on both App IDs, `<HEYDAN_BUNDLE_ID>` and
-   `<HEYDAN_BUNDLE_ID>.NotificationService`. The API key cannot do this, and `just testflight` cannot sign until it is
-   done.
+   `<HEYDAN_BUNDLE_ID>.NotificationService` (create them there if `just device` has not). The API key cannot do this,
+   and `just testflight` cannot sign until it is done.
 3. [App Store Connect](https://appstoreconnect.apple.com) > Apps > + > New App: platform iOS, a name of your choice,
    your `HEYDAN_BUNDLE_ID`, any SKU. Put its Apple ID (App Information) in `.env.local` as `ASC_APP_ID`.
 4. After the first upload: TestFlight > Internal Testing > + to add a group with yourself, add the build, then install

@@ -4,14 +4,16 @@ Commands are `just` recipes: [README.md](README.md#development) lists them and t
 each. Below: the traps agents hit, how the app talks to the host, and what test runs need.
 
 Git hooks are [lefthook](https://github.com/evilmartians/lefthook) ([lefthook.yml](lefthook.yml)): run
-`lefthook install` once per clone. Commits that touch a workflow run `actionlint`; checkouts sync the agent skills
-in [kasetto.yaml](kasetto.yaml) ([kasetto](https://github.com/pivoshenko/kasetto), `kst`; skipped without `kst`).
+`lefthook install` once per clone, then `kst sync` once: the hook syncs only on the next checkout. Commits that touch
+a workflow run `actionlint`; checkouts sync the agent skills in [kasetto.yaml](kasetto.yaml)
+([kasetto](https://github.com/pivoshenko/kasetto), `kst`; skipped without `kst`).
 
 - **Notification permission on a new Simulator.** No CLI grants it (`simctl privacy`, `XCUIProtectedResource` and
   `devicectl device settings` have no notifications entry). On a Simulator that never ran the app,
-  `MessageNotificationTests` fails until the prompt is answered: run `just sim` once and tap Allow, or use a Simulator
-  that already granted it (a clone keeps the grant). Do not try to automate the grant in `just app-test`. CI runs
-  on a Simulator that never ran the app, so its workflow skips that test by name (`HEYDAN_SKIP_TESTS`).
+  `MessageNotificationTests` fails until the prompt is answered: run `just sim` once (it needs `TEST_CALL_LINK`) and
+  tap Allow, or use a Simulator that already granted it (a clone keeps the grant). Do not try to automate the grant in
+  `just app-test`. CI runs on a Simulator that never ran the app, so its workflow skips that test by name
+  (`HEYDAN_SKIP_TESTS`).
 - **`just sim-checks` selectors.** `ChatThreadChecks` (or any `*Checks` class) runs that class,
   `ChatThreadChecks/testRichCardTable` one method, and a bare name like `LiveActivityOnLockScreen` the
   `HeyDanChecks/test<name>` method. A selector that matches no test, or whose tests all skip (the stack checks in
@@ -62,8 +64,8 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
 - **Manual mode** (the page's review mode) is offered only when the worker sets `<ns>.review` = "1": talk, done, read
   the draft, then send or discard it over `<ns>.{mode,talk,done,send,discard}`. The Hands-free or Manual pick is kept
   for the next call.
-- **Live Activity** (`HeyDanActivity`): the call's agent, state and clock on the lock screen and in the Dynamic
-  Island; its end key is a `LiveActivityIntent`, which runs in the app's process, where the call is.
+- **Live Activity** (`HeyDanActivity`): its end key is a `LiveActivityIntent`, which runs in the app's process, where
+  the call is.
 - **Logs**: subsystem = the bundle ID, one category per area, built only from ids, states, codes and durations, never
   a token, URL or anything said. Each call line carries `c=<call> cid=<first 8 of the host callId> +ms`, and
   `just server-logs <cid>` shows the host's side of that call.
@@ -71,7 +73,9 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
 ## Test runs
 
 - Test calls go to a test line (`TEST_CALL_LINK` in `.env.local`, or `HEYDAN_E2E_CALL_LINK` for `just sim-e2e`),
-  never the main agent's: a test turn keeps that agent busy on the owner's own calls.
+  never the main agent's: a test turn keeps that agent busy on the owner's own calls. On a wake-enabled line set
+  `HEYDAN_E2E_SAY` to words that start with the wake phrase
+  (`HEYDAN_E2E_SAY='Hey Dan. What is two plus two? Zulu.' just sim-e2e`); the default has none.
 - A DEBUG build launched with `HEYDAN_FIXTURE_CHAT=1` gets a paired fixture host and no network; the fixture
   `Chat*Checks` and `just screens` run on it.
 - The stack checks in `ChatChecks` run as the `app-*` rows of `just sim-e2e` and need a local nanoclaw stack:
