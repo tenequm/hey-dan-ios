@@ -69,8 +69,6 @@ import XCTest
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }
 
-    /// The fixture refuses every start with 503: the cover shows the host's words, its own close control and the
-    /// call screen's settings gear, and closing it returns to the thread.
     func testFixtureCallCoverShowsTheRefusal() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1"])
         call.tap()
@@ -80,8 +78,11 @@ import XCTest
         XCTAssertTrue(close.isHittable)
         XCTAssertEqual(close.label, "Close")
         XCTAssertGreaterThanOrEqual(close.frame.height, 44)
-        XCTAssertTrue(app.buttons["settings"].exists)
-        XCTAssertTrue(close.frame.intersection(app.buttons["settings"].frame).isNull)
+        XCTAssertTrue(app.buttons["keys.call"].isEnabled)
+        app.buttons["controls.options"].tap()
+        app.buttons["options.voice"].tap()
+        XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 5))
+        app.buttons["picker.close"].tap()
         close.tap()
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
         XCTAssertTrue(call.isHittable)

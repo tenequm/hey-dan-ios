@@ -212,20 +212,10 @@ struct CommandWordsTests {
 
     @Test func hintsQuoteTheFlaggedWordsElseTheFirst() throws {
         #expect(CommandWords.builtIn.sendHint == #""zulu" or "copy""#)
-        #expect(CommandWords.builtIn.discardHints == ["scratch that"])
         let unflagged = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"over"},{"say":"roger"}],"discard":[{"say":"belay"},{"say":"cancel"}]}"#))
         #expect(unflagged.sendHint == #""over""#)
-        #expect(unflagged.discardHints == ["belay"])
         let three = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"a","hint":true},{"say":"b","hint":true},{"say":"Прийом","hint":true}]}"#))
         #expect(three.sendHint == #""a", "b" or "Прийом""#)
-        #expect(CommandWords.join(three.sendHints, quoted: false) == "a, b or Прийом")
-        #expect(CommandWords.join([]) == "")
-    }
-
-    @Test func theExplainerQuotesEverySendWord() throws {
-        #expect(CommandWords.builtIn.explainer == #"say "zulu", "copy", "copy that" or "прийом" to send now, "scratch that" to drop it."#)
-        let sendOnly = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"over"}]}"#))
-        #expect(sendOnly.explainer == #"say "over" to send now."#)
     }
 
     @Test(arguments: [4, 6])

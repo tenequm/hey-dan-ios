@@ -7,7 +7,9 @@ struct ContentView: View {
     var minimize: (() -> Void)?
     @Environment(CallController.self) private var call
     @State private var showsSettings = false
-    @State private var showsOptions = false
+    @State private var presentsCallOptions = false
+    @State private var optionsHeight: CGFloat = 240
+    @State private var optionsVoice: VoiceSettingsModel?
     @State private var voiceTarget: VoiceTarget?
     @State private var pendingVoiceTarget: VoiceTarget?
     @State private var settingsBusy = false
@@ -21,7 +23,7 @@ struct ContentView: View {
 
     private struct VoiceTarget: Identifiable {
         let id = UUID()
-        let service: any VoicePickerService
+        let model: VoiceSettingsModel
         let agentName: String
         let callID: UUID?
     }
@@ -45,13 +47,13 @@ struct ContentView: View {
         .sheet(isPresented: $showsSettings) {
             NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
         }
-        .sheet(isPresented: $showsOptions, onDismiss: {
+        .sheet(isPresented: $presentsCallOptions, onDismiss: {
             guard let target = pendingVoiceTarget else { return }
             pendingVoiceTarget = nil
             voiceTarget = target
-        }) { optionsSheet }
+        }) { callOptions }
         .sheet(item: $voiceTarget) { target in
-            VoicePickerSheet(service: target.service, agentName: target.agentName, callID: target.callID)
+            VoicePickerSheet(model: target.model, agentName: target.agentName, callID: target.callID)
         }
         // Only once the pairings are read: a paired phone with no saved line shows the conversation list, not Settings.
         .onChange(of: Pairings.shared.state, initial: true) { _, state in
@@ -83,12 +85,7 @@ struct ContentView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: theme.space.s2) {
-            if let minimize {
-                GlassIconButton(title: "Close", systemImage: "chevron.down", action: minimize)
-                    .accessibilityIdentifier("chat.call.close")
-            }
-            Spacer(minLength: 0)
+        ZStack {
             VStack(spacing: 0) {
                 Text(displayName).textRole(theme.type.headline, theme.weight.semibold)
                 HStack(spacing: theme.space.s1) {
@@ -99,9 +96,12 @@ struct ContentView: View {
                 }
                 .lineLimit(1).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             }
-            Spacer(minLength: 0)
-            GlassIconButton(title: "settings", systemImage: "gearshape") { showsOptions = true }
-                .accessibilityIdentifier(AXID.controlsOptions)
+            .padding(.horizontal, minimize == nil ? 0 : theme.control.touchTarget)
+            if let minimize {
+                GlassIconButton(title: "Close", systemImage: "chevron.down", action: minimize)
+                    .accessibilityIdentifier("chat.call.close")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -259,14 +259,17 @@ struct ContentView: View {
     private var controls: some View {
         VStack(spacing: theme.space.s2) {
             if hintIsError && reviewKeys == nil {
-                Button { Task { await startDisplayedCall() } } label: {
-                    Text("Call again").textRole(theme.type.body, theme.weight.medium)
-                        .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
-                        .background(theme.color.accent, in: Capsule())
-                        .foregroundStyle(theme.color.onAccent)
-                }
+                HStack(spacing: theme.space.s3) {
+                    optionsControl.fixedSize()
+                    Button { Task { await startDisplayedCall() } } label: {
+                        Text("Call again").textRole(theme.type.body, theme.weight.medium)
+                            .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
+                            .background(theme.color.accent, in: Capsule())
+                            .foregroundStyle(theme.color.onAccent)
+                    }
                     .accessibilityIdentifier(AXID.keysCall)
                     .disabled(!hasLine)
+                }
             } else {
                 ViewThatFits(in: .horizontal) {
                     HStack { controlButtons }
@@ -298,7 +301,7 @@ struct ContentView: View {
             .accessibilityValue(micLabel)
         }
         modeControl
-        voiceControl
+        optionsControl
 
         if reviewKeys == nil {
             Button {
@@ -311,6 +314,16 @@ struct ContentView: View {
             .accessibilityLabel(callKey.spoken)
             .disabled((!isCallActive && !hasLine) || (isSettingUp && !cancelArmed))
         }
+    }
+
+    private var optionsControl: some View {
+        Button {
+            optionsVoice = voiceService.map { VoiceSettingsModel(service: $0) }
+            presentsCallOptions = true
+        } label: {
+            CallControlLabel(title: "Options", symbol: "ellipsis")
+        }
+        .accessibilityIdentifier(AXID.controlsOptions)
     }
 
     private var modeControl: some View {
@@ -337,25 +350,6 @@ struct ContentView: View {
         .accessibilityLabel("Turn mode")
         .accessibilityValue(modeLabel)
         .accessibilityHint(modeCaption(pendingMode ?? review.mode))
-    }
-
-    private var voiceControl: some View {
-        Button {
-            guard let service = voiceService else { return }
-            let target = VoiceTarget(service: service, agentName: call.agentName, callID: call.liveCallID)
-            if showsOptions {
-                pendingVoiceTarget = target
-                showsOptions = false
-            } else {
-                voiceTarget = target
-            }
-        } label: {
-            CallControlLabel(title: "Voice", symbol: "waveform")
-        }
-        .disabled(voiceService == nil)
-        .accessibilityIdentifier(AXID.controlsVoice)
-        .accessibilityLabel("Voice")
-        .accessibilityHint("Choose \(call.agentName)'s voice for this line.")
     }
 
     private var pendingMode: TurnMode? { review.pending?.op == .mode ? review.pending?.to : nil }
@@ -395,101 +389,81 @@ struct ContentView: View {
         )
     }
 
-    private var optionsSheet: some View {
-        NavigationStack {
-            Form {
-                if hintIsError { HStack { modeControl; voiceControl } }
-                if !isCallActive {
-                    NavigationLink("Voice lines and paired hosts") { VoiceLinesSettings() }
+    private var callOptions: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: theme.space.s4) {
+                HStack {
+                    VStack(alignment: .leading, spacing: theme.space.s1) {
+                        Text("Call options").textRole(theme.type.headline, theme.weight.bold)
+                            .accessibilityAddTraits(.isHeader)
+                        Text("\(displayName) · this call").textRole(theme.type.label)
+                            .foregroundStyle(theme.color.textSecondary)
+                    }
+                    Spacer()
+                    GlassIconButton(title: "Close", systemImage: "xmark") { presentsCallOptions = false }
                 }
-                if let shown = shownSettings {
-                    let enabled = shown.enabled && !settingsBusy
-                    if review.mode == .auto, reviewKeys == nil {
-                        Section("Voice commands") {
-                            Toggle("wait for \"\(wakePhrase)\"", isOn: settingBinding(shown.wake) { change(wake: $0) })
-                                .frame(minHeight: theme.control.touchTarget)
-                                .accessibilityIdentifier(AXID.optionsWake)
-                                .accessibilityHint("Nothing is sent until you say \(wakePhrase); then say \(CommandWords.join(commandWords.sendHints, quoted: false)) to send.")
-                            if shown.wake {
-                                Toggle("a pause also sends", isOn: settingBinding(shown.pauseSends) { change(pauseSends: $0) })
-                                    .frame(minHeight: theme.control.touchTarget)
-                                    .accessibilityIdentifier(AXID.optionsPauseSends)
-                                    .accessibilityHint("After the wake phrase a pause sends too, not only \(CommandWords.join(commandWords.sendHints, quoted: false)).")
-                            }
+                SettingsSection {
+                    Button {
+                        guard let model = optionsVoice else { return }
+                        let picker = model.loading ? VoiceSettingsModel(service: model.service) : model
+                        pendingVoiceTarget = VoiceTarget(model: picker, agentName: displayName, callID: call.liveCallID)
+                        presentsCallOptions = false
+                    } label: {
+                        SettingsRow(title: "Voice", icon: "waveform", detail: optionsVoiceName, navigates: true)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(optionsVoice == nil)
+                    .accessibilityIdentifier(AXID.optionsVoice)
+                    Divider().overlay(theme.color.border)
+                        .padding(.leading, theme.space.s4 + theme.control.glassIcon + theme.space.s3)
+                    Toggle(isOn: Binding(get: { commands?.typing ?? call.settingsPicks.typing }, set: { typing in
+                        settingsBusy = true
+                        Task {
+                            await call.updateSettings(typing: typing)
+                            settingsBusy = false
                         }
-                        .disabled(!enabled)
+                    })) {
+                        SettingsRow(title: "Typing sound", icon: "keyboard", subtitle: "Quiet keys while \(displayName) works on your turn")
                     }
-                    Section {
-                        Toggle("typing sound", isOn: settingBinding(shown.typing) { change(typing: $0) })
-                            .frame(minHeight: theme.control.touchTarget)
-                            .accessibilityIdentifier(AXID.optionsTyping)
-                            .accessibilityHint("A quiet keyboard sound while the agent works on your turn.")
-                    }
-                    .disabled(!enabled)
-                } else {
-                    Section {
-                        Text("Options are unavailable until the voice service shares its settings.")
-                            .foregroundStyle(theme.color.textSecondary)
-                    }
-                }
-                if review.mode == .auto, reviewKeys == nil {
-                    Section("Spoken commands") {
-                        Text(commandWords.explainer)
-                            .foregroundStyle(theme.color.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if let note = review.note {
-                    Section {
-                        Text(asWritten(note, keep: keepWords)).foregroundStyle(theme.color.textSecondary)
-                    }
+                    .toggleStyle(.switch).tint(theme.color.accent)
+                    .padding(.trailing, theme.space.s4)
+                    .disabled(settingsBusy || !canChangeTyping)
+                    .accessibilityIdentifier(AXID.optionsTyping)
                 }
             }
-            .textRole(theme.type.body)
-            .toggleStyle(.switch)
-            .tint(theme.color.accentText)
-            .navigationTitle("Call settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(role: .close) { showsOptions = false }
-                        .accessibilityLabel("Close")
-                        .frame(minWidth: 44, minHeight: theme.control.touchTarget)
-                }
-            }
-            .controlSize(.large)
-            .buttonSizing(.flexible)
-            .buttonBorderShape(.capsule)
-            .buttonStyle(.glass)
+            .foregroundStyle(theme.color.textPrimary)
+            .padding(theme.space.s4)
+            .padding(.vertical, theme.space.s2)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { optionsHeight = $0.rounded(.up) }
         }
-        .foregroundStyle(theme.color.textPrimary)
-        .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
+        .task(id: voiceService?.identity) {
+            if optionsVoice?.service.identity != voiceService?.identity {
+                optionsVoice = voiceService.map { VoiceSettingsModel(service: $0) }
+            }
+            if call.liveCallID == nil || call.liveVoice == nil { await optionsVoice?.load() }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .presentationDetents([.height(optionsHeight)])
         .presentationDragIndicator(.visible)
-        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        .presentationBackground(theme.color.surfaceSheet)
+        .preferredColorScheme(.dark)
     }
 
-    private var shownSettings: (wake: Bool, pauseSends: Bool, typing: Bool, enabled: Bool)? {
-        if let commands { return (commands.wake, commands.pauseSends, commands.typing, isLive) }
-        let picks = call.settingsPicks
-        switch phase {
-        case .idle, .ended: return (picks.wake, picks.pauseSends, picks.typing, true)
-        // The worker has not said yet whether it takes commands: the picks stay in view, not changeable.
-        case .connecting: return (picks.wake, picks.pauseSends, picks.typing, false)
-        case .live, .reconnecting: return nil
+    private var optionsVoiceName: String {
+        if let live = call.liveVoice, call.liveCallID != nil {
+            return VoiceLabel(live.activeDetails, providerDefault: live.active.voice == nil).title
         }
+        if let view = optionsVoice?.view {
+            return VoiceLabel(view.details?.effective, providerDefault: view.effective.voice == nil).title
+        }
+        return optionsVoice?.loading == true ? "Loading…" : "Unavailable"
     }
 
-    /// Reads what the controller holds; a change only asks, so a refused one never shows as taken.
-    private func settingBinding(_ value: Bool, set: @escaping @MainActor @Sendable (Bool) -> Void) -> Binding<Bool> {
-        Binding(get: { value }, set: { new in MainActor.assumeIsolated { set(new) } })
-    }
-
-    private func change(wake: Bool? = nil, pauseSends: Bool? = nil, typing: Bool? = nil) {
-        settingsBusy = true
-        Task {
-            await call.updateSettings(wake: wake, pauseSends: pauseSends, typing: typing)
-            settingsBusy = false
+    private var canChangeTyping: Bool {
+        if commands != nil { return isLive }
+        switch phase {
+        case .idle, .ended: return true
+        case .connecting, .live, .reconnecting: return false
         }
     }
 

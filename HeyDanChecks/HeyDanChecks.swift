@@ -324,22 +324,14 @@ final class HeyDanChecks: XCTestCase {
     }
 
     func testCallOptions() throws {
-        for phase in ["waiting", "manual"] {
-            fixture("saved", phase: phase)
+        for phase in ["waiting", "manual", "connecting"] {
+            fixture("saved", voice: "pending", phase: phase)
             XCTAssertTrue(element(ID.controlsMode).waitForExistence(timeout: 5))
-            XCTAssertTrue(element(ID.controlsVoice).exists)
             element(ID.controlsOptions).tap()
             XCTAssertTrue(element(ID.optionsTyping).waitForExistence(timeout: 5))
-            XCTAssertTrue(element(ID.optionsTyping).isEnabled)
-            if phase == "waiting" {
-                XCTAssertTrue(element(ID.optionsWake).exists)
-                XCTAssertTrue(element(ID.optionsPauseSends).exists)
-                XCTAssertTrue(element(ID.optionsWake).isEnabled)
-                XCTAssertTrue(element(ID.optionsPauseSends).isEnabled)
-            } else {
-                XCTAssertFalse(element(ID.optionsWake).exists)
-                XCTAssertFalse(element(ID.optionsPauseSends).exists)
-            }
+            XCTAssertEqual(element(ID.optionsTyping).isEnabled, phase != "connecting")
+            XCTAssertTrue(app.staticTexts["Call options"].exists)
+            assertText(ID.optionsVoice, "Alnilam")
             shot("options-\(phase)")
         }
     }
@@ -465,9 +457,9 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private enum ID {
-        static let controlsMode = "controls.mode", controlsVoice = "controls.voice",
-            controlsOptions = "controls.options", keysCall = "keys.call", optionsWake = "options.wake",
-            optionsPauseSends = "options.pauseSends", optionsTyping = "options.typing", pickerTitle = "picker.title",
+        static let controlsMode = "controls.mode", optionsVoice = "options.voice",
+            controlsOptions = "controls.options", keysCall = "keys.call",
+            optionsTyping = "options.typing", pickerTitle = "picker.title",
             pickerClose = "picker.close", pickerSaved = "picker.saved", pickerLive = "picker.live", pickerNext = "picker.next",
             pickerProvider = "picker.provider", pickerVoice = "picker.voice", pickerSearch = "picker.search",
             pickerUseForCall = "picker.useForCall", pickerSave = "picker.save", pickerResult = "picker.result",
@@ -518,8 +510,10 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private func openVoice(loaded: Bool = true) {
-        XCTAssertTrue(element(ID.controlsVoice).waitForExistence(timeout: 10))
-        element(ID.controlsVoice).tap()
+        XCTAssertTrue(element(ID.controlsOptions).waitForExistence(timeout: 10))
+        element(ID.controlsOptions).tap()
+        XCTAssertTrue(element(ID.optionsVoice).waitForExistence(timeout: 5))
+        element(ID.optionsVoice).tap()
         XCTAssertTrue(element(ID.pickerTitle).waitForExistence(timeout: 5))
         guard loaded else { return }
         let ready = NSPredicate { [self] _, _ in element(ID.pickerSaved).exists && !text(ID.pickerSaved).contains("Loading") }

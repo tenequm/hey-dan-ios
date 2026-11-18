@@ -404,17 +404,11 @@ final class CallController: NSObject {
         Task { try? await callKit.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) }
     }
 
-    /// Changes auto mode's wake switch, whether a pause sends after the wake phrase, or the typing sound. Mid-call
-    /// the worker has to take it: true once it did, and only then is it kept for the next call; until it answers
-    /// `commands` shows the change, and a refusal puts back what the worker runs (no answer: what its state says it
-    /// runs). Without commands on the call (none yet, or none at all) it only becomes the pick the next call starts
-    /// with.
+    /// During a call the worker must accept the change before it is kept for the next call.
     @discardableResult
-    func updateSettings(wake: Bool? = nil, pauseSends: Bool? = nil, typing: Bool? = nil) async -> Bool {
+    func updateSettings(typing: Bool) async -> Bool {
         var picks = commands.map { SettingsPicks(wake: $0.wake, pauseSends: $0.pauseSends, typing: $0.typing) } ?? settingsPicks
-        if let wake { picks.wake = wake }
-        if let pauseSends { picks.pauseSends = pauseSends }
-        if let typing { picks.typing = typing }
+        picks.typing = typing
         guard let id = call?.id, commands != nil else {
             keepPicks(picks)
             return true
