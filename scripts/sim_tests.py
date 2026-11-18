@@ -10,9 +10,11 @@ import tempfile
 import time
 
 
+TEST_SECONDS = 180
 TEST_FLAGS = ['-collect-test-diagnostics', 'never', '-enableCodeCoverage', 'NO',
               '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
-              '-default-test-execution-time-allowance', '180']
+              '-default-test-execution-time-allowance', str(TEST_SECONDS),
+              '-maximum-test-execution-time-allowance', str(TEST_SECONDS)]
 
 
 def build_key():
@@ -92,9 +94,19 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
 
         def test(selector):
             result = Path(results) / (selector.replace('/', '-') + '.xcresult')
-            proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', '600', 'xcodebuild',
-                                   'test-without-building', '-xctestrun', manifest, '-destination', destination,
-                                   *TEST_FLAGS, '-resultBundlePath', result, '-only-testing:' + selector],
+            command = ['xcodebuild', 'test-without-building', '-xctestrun', manifest, '-destination', destination,
+                       *TEST_FLAGS, '-only-testing:' + selector]
+            count = 1
+            if selector.count('/') < 2:
+                inventory = Path(results) / 'tests.txt'
+                subprocess.run(['timeout', '180', *command, '-enumerate-tests', '-test-enumeration-style', 'flat',
+                                '-test-enumeration-format', 'text', '-test-enumeration-output-path', inventory],
+                               check=True, env=runner, stdout=subprocess.DEVNULL)
+                count = max(1, len(inventory.read_text().splitlines()))
+            # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
+            deadline = str(240 + TEST_SECONDS * count)
+            proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', deadline, *command,
+                                   '-resultBundlePath', result],
                                   env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             # XCTest activity trees and assertion values can contain chat text or pairing links.
             for line in proc.stdout.splitlines():
