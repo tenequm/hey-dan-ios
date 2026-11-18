@@ -40,7 +40,6 @@ jobs:
 
   build:
     name: Device build
-    needs: core
     runs-on: xcode-27
     timeout-minutes: 15
     steps:
@@ -50,7 +49,6 @@ jobs:
 
   app-tests:
     name: App tests
-    needs: core
     runs-on: xcode-27
     timeout-minutes: 25
     env:
