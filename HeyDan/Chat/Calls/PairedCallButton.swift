@@ -9,13 +9,14 @@ struct PairedCallButton: View {
 
     var body: some View {
         if callsEnabled {
-            Button("Call") {
+            Button {
                 if call.pairedCallTarget != nil, call.isCallActive {
                     call.showsPairedCall = true
                     return
                 }
                 Task { _ = await call.start(target: CallTarget(paired: target, service: service)) }
-            }
+            } label: { ThreadCallLabel() }
+            .buttonStyle(.plain)
             .disabled(call.isCallActive ? call.pairedCallTarget == nil : !target.conversation.canCall)
             .accessibilityIdentifier("chat.call")
         }
@@ -92,5 +93,18 @@ extension View {
             .overlay { Capsule().strokeBorder(Tokens.Color.composerBorder) }
             .shadow(color: Tokens.Color.shadow, radius: 8, y: 4)
             .contentShape(Capsule())
+    }
+}
+
+struct ThreadCallLabel: View {
+    var body: some View {
+        HStack(spacing: Tokens.Space.s1_5) {
+            Image(systemName: "phone").font(.system(size: 17))
+            Text("Call").font(.custom("DMSans-Medium", size: 15, relativeTo: .body))
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 16)
+        .frame(minHeight: 44)
+        .glassCapsule()
     }
 }

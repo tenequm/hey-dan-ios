@@ -15,6 +15,7 @@ struct Gallery: View {
                 case "GlassIconButton":
                     GlassIconButton(title: "Back", systemImage: "chevron.left") {}
                         .galleryButton(name)
+                case "ThreadCallButton": ThreadCallLabel().galleryButton(name)
                 default: Text("No gallery for \(name)").textRole(.body).foregroundStyle(Tokens.Color.textSecondary)
                 }
             }
