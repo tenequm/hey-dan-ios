@@ -1419,18 +1419,6 @@ private struct Preview {
     #endif
 }
 
-/// The mascot as a pincer in dots: the notch opens while the call is live.
-private enum Claw {
-    static let open = [
-        ".........", "...##....", "..###....", ".###+....", ".##+++##.",
-        ".###+###.", "..#####..", "...###...", ".........",
-    ]
-    static let closed = [
-        ".........", "...###...", "..####...", ".###+.##.", ".##+++##.",
-        ".###+###.", "..#####..", "...###...", ".........",
-    ]
-}
-
 /// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.
 struct VoiceLinesSettings: View {
     @Environment(\.theme) private var theme
