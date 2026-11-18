@@ -219,8 +219,10 @@ struct ConversationRow: View {
             HStack(spacing: theme.space.s1) {
                 if reduceMotion { Image(systemName: "circle.dashed") }
                 else { ProgressView().controlSize(.mini).tint(theme.color.statusWorking) }
-                Text(Date(timeIntervalSince1970: Double(status.at) / 1000), style: .timer)
-                    .monospacedDigit().fixedSize()
+                if status.at > 0 {
+                    Text(Date(timeIntervalSince1970: Double(status.at) / 1000), style: .timer)
+                        .monospacedDigit().fixedSize()
+                }
             }
             .foregroundStyle(theme.color.statusWorking).accessibilityIdentifier(AXID.status)
         } else if status?.state == .waiting {
