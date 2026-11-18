@@ -2,20 +2,18 @@ import HeyDanCore
 import SwiftUI
 
 extension EnvironmentValues {
-    @Entry var holdingPairingScreen: Binding<Bool> = .constant(false)
-    @Entry var pairedChatsRoot: Binding<UUID>?
+    @Entry var pairingConfirmation: Binding<Pairings.Entry?> = .constant(nil)
 }
 
 struct PairingView: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isPresented) private var isPresented
-    @Environment(\.holdingPairingScreen) private var hold
-    @Environment(\.pairedChatsRoot) private var chatsRoot
+    @Environment(\.pairingConfirmation) private var confirmation
     @State private var link = ""
     @State private var working = false
     @State private var message: String?
-    @State private var paired: Pairings.Entry?
+    var paired: Pairings.Entry? = nil
 
     private var host: String? { PairingLink(link, allowsLocalNetworking: true)?.baseURL.host() }
     private var failure: String? { message ?? Pairings.shared.error?.message }
@@ -90,10 +88,8 @@ struct PairingView: View {
             }
             if paired != nil {
                 Button("Open chats") {
-                    dismiss()
-                    hold.wrappedValue = false
                     ChatController.shared.closeConversation()
-                    chatsRoot?.wrappedValue = UUID()
+                    confirmation.wrappedValue = nil
                 }
                 .buttonStyle(PanelActionStyle())
             } else {
@@ -121,12 +117,10 @@ struct PairingView: View {
         .foregroundStyle(theme.color.textPrimary)
         .background(theme.color.surface.ignoresSafeArea())
         .interactiveDismissDisabled(working)
-        .onDisappear { hold.wrappedValue = false }
     }
 
     private func submit() {
         guard !working, !link.isEmpty else { return }
-        if Pairings.shared.active == nil { hold.wrappedValue = true }
         working = true
         message = nil
         Task {
@@ -134,7 +128,7 @@ struct PairingView: View {
             do {
                 try await Pairings.shared.pair(link)
                 link = ""
-                paired = Pairings.shared.active
+                confirmation.wrappedValue = Pairings.shared.active
             } catch let error as AppError { message = error.message }
             catch { message = error.localizedDescription }
         }

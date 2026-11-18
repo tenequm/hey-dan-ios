@@ -13,8 +13,7 @@ import SwiftUI
 @main
 struct HeyDanApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var holdingPairingScreen = false
-    @State private var rootID = UUID()
+    @State private var pairedHost: Pairings.Entry?
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     init() {
         // Before anything touches LiveKit: its logger is fixed on first use. Debug builds keep the SDK's own story of
@@ -40,9 +39,7 @@ struct HeyDanApp: App {
                 root
                 #endif
             }
-                .id(rootID)
-                .environment(\.holdingPairingScreen, $holdingPairingScreen)
-                .environment(\.pairedChatsRoot, $rootID)
+                .environment(\.pairingConfirmation, $pairedHost)
                 .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
                 .fullScreenCover(isPresented: Binding(
                     get: { CallController.shared.showsPairedCall },
@@ -61,7 +58,9 @@ struct HeyDanApp: App {
     }
 
     @ViewBuilder private var root: some View {
-        if ChatController.shared.pairing != nil && !holdingPairingScreen {
+        if let pairedHost {
+            PairingView(paired: pairedHost)
+        } else if ChatController.shared.pairing != nil {
             ConversationList()
         } else {
             #if DEBUG
