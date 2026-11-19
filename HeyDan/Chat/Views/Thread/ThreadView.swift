@@ -28,6 +28,12 @@ struct ThreadView: View {
             markRead: { order in Task { await chat.markRead(order: order) } },
             loadHistory: { await chat.loadHistory(before: $0) }
         )
+        .sensoryFeedback(.error, trigger: chat.outbox.entries) { previous, current in
+            current.contains { entry in
+                entry.conversationId == conversation.id && entry.state.canSendAgain &&
+                    previous.contains { $0.request.clientId == entry.request.clientId && !$0.state.canSendAgain }
+            }
+        }
         .safeAreaBar(edge: .bottom) {
             ComposerView(send: { text, attachments in
                 await chat.send(text: text, attachments: attachments)

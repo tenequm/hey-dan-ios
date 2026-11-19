@@ -6,12 +6,23 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     static let apsEnvironmentKey = "HeyDanAPSEnvironment"
+    static let replyAction = "message.reply"
+    static let readAction = "message.read"
+    static var messageCategory: UNNotificationCategory {
+        let reply = UNTextInputNotificationAction(identifier: replyAction, title: "Reply", options: [.authenticationRequired],
+            textInputButtonTitle: "Send", textInputPlaceholder: "Message")
+        let read = UNNotificationAction(identifier: readAction, title: "Mark as Read")
+        return UNNotificationCategory(identifier: "message", actions: [reply, read], intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: "New message", options: [])
+    }
+
     private static var permissionRequested = false
     private var synchronizing = false
     private var synchronizeAgain = false
     private var token: String?
     private var uploaded: [String: String] = [:]
     private var pendingTap: PushData?
+    private var pendingReply: Task<Void, Never>?
     private var reads: [String: Int64] = [:]
     private var lastBadge: Badge?
     private var lastPairing: String?
@@ -23,7 +34,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.setNotificationCategories([UNNotificationCategory(identifier: "message", actions: [], intentIdentifiers: [], hiddenPreviewsBodyPlaceholder: "New message", options: [])])
+        center.setNotificationCategories([Self.messageCategory])
         Task {
             // A reconnect retries an upload that failed while the app stayed open.
             for await _ in Observations({ (Pairings.shared.entries, Pairings.shared.state, ChatController.shared.connectionState == .connected) }) {
@@ -159,12 +170,69 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
         let data = MessageNotification.payload(from: response.notification.request.content.userInfo)?.hd
+        let action = response.actionIdentifier
+        let text = (response as? UNTextInputNotificationResponse)?.userText
         Task { @MainActor in
-            receiveTap(data)
+            await handleResponse(action: action, text: text, data: data)
             // UIKit updates state restoration from this completion on the main thread.
             completionHandler()
         }
     }
+    func handleResponse(action: String, text: String?, data: PushData?, pairings: Pairings = .shared,
+                        chat: ChatController = .shared) async {
+        if action == UNNotificationDefaultActionIdentifier { receiveTap(data); return }
+        pairings.loadIfNeeded()
+        guard let data, let entry = Self.entry(for: data, in: pairings.entries) else { return }
+        do {
+            switch action {
+            case Self.replyAction:
+                guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                let previous = pendingReply
+                pendingReply = Task {
+                    await previous?.value
+                    guard pairings.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else { return }
+                    do {
+                        // The selected host owns the durable outbox and resumes its sends on reconnect.
+                        if pairings.active?.host != entry.host { try pairings.setActive(host: entry.host) }
+                        chat.selectPairing(entry.pairing, host: entry.host)
+                        if UIApplication.shared.applicationState == .background { chat.setActive(false) }
+                        if !(await chat.enqueueReply(text, conversationId: data.c, entry: entry)) {
+                            CallLog.log(.store, "push reply_not_queued")
+                        }
+                    } catch { CallLog.log(.net, "push reply_failed \(AppError.map(error).logName)") }
+                }
+                await pendingReply?.value
+            case Self.readAction:
+                try await markRead(data, entry: entry, pairings: pairings, chat: chat)
+            default: break
+            }
+        } catch { CallLog.log(.net, "push action_failed \(AppError.map(error).logName)") }
+    }
+
+    private func markRead(_ data: PushData, entry: Pairings.Entry, pairings: Pairings, chat: ChatController) async throws {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().compactMap { notification -> String? in
+            guard let item = MessageNotification.payload(from: notification.request.content.userInfo)?.hd,
+                  item.c == data.c, PairedHost.key(item.h) == PairedHost.key(entry.host) else { return nil }
+            return notification.request.identifier
+        }
+        let samePairing = { chat.host == entry.host && chat.pairing?.deviceId == entry.deviceId }
+        let client: any AppService = samePairing() ? chat.service : SignedClient(host: entry.host, deviceId: entry.deviceId)
+        // Protocol 1 pushes carry an item id but no order. A newest-page read covers the delivered snapshot.
+        let page = try await client.history(conversationId: data.c, query: HistoryQuery(limit: 1))
+        guard let order = page.items.compactMap(\.order).max() else { return }
+        let read = try await client.markRead(conversationId: data.c, request: ReadRequest(order: order))
+        center.removeDeliveredNotifications(withIdentifiers: delivered)
+        guard pairings.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else { return }
+        if samePairing() {
+            chat.reducer.upsert(read.badge)
+            try await chat.persist(chat.reducer.upsert(read.conversation))
+        }
+        if let total = try HostBadges.shared?.update(host: PairedHost.key(entry.host), count: read.badge.unreadTotal) {
+            try await center.setBadgeCount(total)
+        }
+    }
+
     private func receiveTap(_ data: PushData?) {
         pendingTap = data
         if data == nil { ChatController.shared.closeConversation() }

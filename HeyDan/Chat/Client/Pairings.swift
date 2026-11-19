@@ -73,7 +73,7 @@ import UIKit
             return
         }
         #endif
-        Task { @MainActor in reload() }
+        Task { @MainActor in loadIfNeeded() }
         Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: UIApplication.protectedDataDidBecomeAvailableNotification) {
                 if self?.state == .unreadable { self?.reload() }
@@ -85,6 +85,10 @@ import UIKit
         }
         #endif
     }
+    func loadIfNeeded() {
+        if state == .unreadable { reload() }
+    }
+
     private func reload() {
         let data: Data?
         do { data = try IdentityKeychain.load(account: account) }

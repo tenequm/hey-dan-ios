@@ -1,6 +1,35 @@
 import XCTest
 
 final class ChatThreadChecks: XCTestCase {
+    @MainActor func testCopyMessage() throws {
+        seedPasteboard("Before Copy")
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 15))
+        conversation.tap()
+        let thread = app.scrollViews["chat.thread"]
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        thread.swipeDown()
+        let message = app.descendants(matching: .any)["chat.message.msg_2101"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        message.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).press(forDuration: 1)
+        let copy = app.buttons["doc.on.doc"].firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Share"].firstMatch.exists)
+        copy.tap()
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 5))
+        let composer = app.descendants(matching: .any)["composer.text"].firstMatch
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.tap()
+        let paste = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Paste")).firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let pasted = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND value == %@", "composer.text",
+            "## Hello\n\nThis is **Taylor**.\n\n- One\n- Two\n\n```swift\nprint(42)\n```")).firstMatch
+        XCTAssertTrue(pasted.waitForExistence(timeout: 5))
+    }
+
     @MainActor func testFixtureThread() throws {
         let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
         let conversation = app.buttons["chat.conversation.conv_taylor01"]
