@@ -49,6 +49,12 @@ import XCTest
         XCTAssertTrue(app.staticTexts["Hidden. Show it again in Settings > Agents."].exists)
 
         app.buttons["Settings"].tap()
+        XCTAssertFalse(app.buttons["Voice: Taylor"].exists)
+        let host = app.buttons["chat.settings.host.app.example.com"]
+        XCTAssertFalse(host.label.contains(" · Taylor"))
+        host.tap()
+        XCTAssertFalse(app.buttons["Voice: Taylor"].exists)
+        app.buttons["chat.settings.host.back"].tap()
         app.buttons["Agents"].tap()
         let toggle = app.switches["chat.settings.agent.ag_taylor"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
@@ -56,7 +62,9 @@ import XCTest
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         let shown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '1'"), object: toggle)
         XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed)
-        app.navigationBars["Agents"].buttons.firstMatch.tap()
+        app.buttons["chat.settings.agents.back"].tap()
+        XCTAssertTrue(app.buttons["Voice: Taylor"].waitForExistence(timeout: 5))
+        XCTAssertTrue(host.label.contains(" · Taylor"))
         app.buttons["Chats"].tap()
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }

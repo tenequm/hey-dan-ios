@@ -35,6 +35,22 @@ private final class FixtureBundle {}
         XCTAssertEqual(restored.active?.agents, [])
     }
 
+    func testInactiveHostDiscoversAgentsWithoutSwitching() async throws {
+        let account = "test-inactive-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        let inactive = URL(string: "https://old.example.com")!
+        let active = URL(string: "https://active.example.com")!
+        for host in [inactive, active] {
+            try pairings.add(FixtureAppService.pairing, host: host, features: [])
+        }
+        await pairings.refreshInactiveAgents { _ in FixtureAppService() }
+        XCTAssertEqual(pairings.active?.host, active)
+        XCTAssertEqual(pairings.entries.first { $0.host == inactive }?.features.contains("agents"), true)
+        XCTAssertEqual(pairings.active?.features, [])
+    }
+
     /// The signed start, end and cancel as the contract fixtures write them, and the fixture grant decoded.
     func testPairedRequestsMatchTheContract() async throws {
         let grantBody = try fixture("callGrant")

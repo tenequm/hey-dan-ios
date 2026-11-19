@@ -45,8 +45,14 @@ extension ChatController {
                     // Applied again to the live reducer, not swapped in: a history page, read or send that landed
                     // during the save would be lost with the copy. Upserts keep the higher seq, so this is idempotent.
                     if moved {
-                        Self.apply(batch, to: &reducer, logs: false)
+                        let applied = Self.apply(batch, to: &reducer, logs: false)
                         if let id = openConversationId, reducer.hiddenConversations[id] != nil { closeConversation() }
+                        let rosterChanges = applied.filter { reducer.conversationRecord($0) != nil }
+                        if !rosterChanges.isEmpty {
+                            await updateRoster(removed: rosterChanges.filter { reducer.hiddenConversations[$0] != nil },
+                                               host: host, deviceId: pairing.deviceId)
+                            guard token == generation, !Task.isCancelled else { return }
+                        }
                     }
                     for id in changed {
                         if case .message(let message) = reducer.entities[id] { outbox.reconcile(message) }
