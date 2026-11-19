@@ -7,7 +7,8 @@ struct ConversationList: View {
     @State private var tab = Tab.chats
     @State private var query = ""
     @State private var pairing = false
-    @State private var hiddenNotice = false
+    @State private var hiddenNotice: UUID?
+    private let hiddenMessage = "Hidden. Show it again in Settings > Agents."
     @State private var actionError: String?
 
     private enum Tab { case chats, settings, search }
@@ -90,12 +91,11 @@ struct ConversationList: View {
                                     .swipeActions(edge: .trailing) {
                                         if chat.features.contains("agents") {
                                             Button {
-                                                let service = chat.service
                                                 Task {
                                                     do {
-                                                        _ = try await service.setAgent(id: conversation.agent.id,
-                                                            request: AgentVisibilityRequest(shown: false))
-                                                        hiddenNotice = true
+                                                        try await chat.hide(conversation)
+                                                        hiddenNotice = UUID()
+                                                        AccessibilityNotification.Announcement(hiddenMessage).post()
                                                     } catch { actionError = AppError.map(error).message }
                                                 }
                                             } label: { Label("Hide", systemImage: "eye.slash") }
@@ -112,12 +112,13 @@ struct ConversationList: View {
             }
             .safeAreaInset(edge: .bottom) {
                 VStack {
-                    if hiddenNotice {
-                        Text("Hidden. Show it again in Settings > Agents.")
+                    if let notice = hiddenNotice {
+                        Text(hiddenMessage)
                             .textRole(theme.type.footnote).padding(theme.space.s2)
-                            .task {
+                            .background(theme.color.surfaceGrouped, in: Capsule())
+                            .task(id: notice) {
                                 try? await Task.sleep(for: .seconds(3))
-                                if !Task.isCancelled { hiddenNotice = false }
+                                if !Task.isCancelled { hiddenNotice = nil }
                             }
                     }
                     tabBar
@@ -134,6 +135,8 @@ struct ConversationList: View {
                 if chat.openConversationId == nil { await AppDelegate.requestPermission() }
             }
         }
+        .id(chat.notificationListID)
+        .onChange(of: chat.notificationListID) { tab = .chats }
         .foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)
         .task(id: chat.host) { await Pairings.shared.refreshInactiveAgents() }

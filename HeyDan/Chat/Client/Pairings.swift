@@ -129,11 +129,15 @@ import UIKit
         next.active = host.absoluteString
         try commit(next)
     }
-    func refreshInactiveAgents() async {
+    func refreshInactiveAgents(clientFor: (Entry) -> any AppService = { SignedClient(host: $0.host, deviceId: $0.deviceId) }) async {
         guard !fixture else { return }
-        for entry in entries where entry.host != active?.host && entry.features.contains("calls") {
+        for entry in entries where entry.host != active?.host {
             guard !Task.isCancelled else { return }
-            let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
+            let client = clientFor(entry)
+            if let hello = try? await client.hello(), !Task.isCancelled, entry.host != active?.host,
+               saved.entries[entry.host.absoluteString]?.deviceId == entry.deviceId {
+                refreshFeatures(hello.features, host: entry.host)
+            }
             guard let list = try? await client.conversations(), !Task.isCancelled, entry.host != active?.host else { continue }
             refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
         }

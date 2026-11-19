@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     private var synchronizeAgain = false
     private var token: String?
     private var uploaded: [String: String] = [:]
+    private var routingTap: Task<Void, Never>?
     private var pendingTap: PushData?
     private var pendingReply: Task<Void, Never>?
     private var reads: [String: Int64] = [:]
@@ -234,8 +235,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     private func receiveTap(_ data: PushData?) {
+        routingTap?.cancel()
         pendingTap = data
-        if data == nil, !CallController.shared.openActiveConversation() { ChatController.shared.closeConversation() }
+        if data == nil, !CallController.shared.openActiveConversation() { ChatController.shared.showNotificationList() }
         routePendingTap()
     }
     private func routePendingTap() {
@@ -244,13 +246,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if CallController.shared.openActiveConversation() { return }
         guard let entry = Self.entry(for: data, in: Pairings.shared.entries) else {
             CallLog.log(.net, "push unknown_host")
-            ChatController.shared.closeConversation()
+            ChatController.shared.showNotificationList()
             return
         }
         do {
             if Pairings.shared.active?.host != entry.host { try Pairings.shared.setActive(host: entry.host) }
-            ChatController.shared.openConversation(data.c)
+            routingTap = Task { await ChatController.shared.routeNotification(to: data.c) }
         } catch { CallLog.log(.net, "push routing_failed \(AppError.map(error).logName)") }
+    }
+
+    static func clearHidden(host: URL, conversations: Set<String> = [], agentID: String? = nil) async {
+        let center = UNUserNotificationCenter.current()
+        let ids = await center.deliveredNotifications().compactMap { notification -> String? in
+            guard let data = MessageNotification.payload(from: notification.request.content.userInfo)?.hd,
+                  matchesHidden(data, host: host, conversations: conversations, agentID: agentID) else { return nil }
+            return notification.request.identifier
+        }
+        center.removeDeliveredNotifications(withIdentifiers: ids)
+    }
+
+    static func matchesHidden(_ data: PushData, host: URL, conversations: Set<String>, agentID: String?) -> Bool {
+        PairedHost.key(data.h) == PairedHost.key(host) && (conversations.contains(data.c) || data.a.id == agentID)
     }
 
     private static func badgeHosts() -> [String: String] {
@@ -284,7 +300,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         guard chat.host == active?.host, chat.pairing?.deviceId == active?.deviceId else { return }
         var orders: [String: Int64] = [:]
-        for conversation in chat.conversations {
+        for conversation in chat.reducer.conversations.values {
             let key = identity + ":" + conversation.id
             let previous = reads.updateValue(conversation.readOrder, forKey: key)
             if Self.clearsDelivered(previous: previous, readOrder: conversation.readOrder) { pendingClears.insert(key) }
