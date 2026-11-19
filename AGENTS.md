@@ -59,7 +59,7 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
 
 ## Test runs
 
-- Test calls use `HEYDAN_CALL_PAIR_CMD` from `.env.local` to mint one Stan-only pairing link. The DEBUG app keeps
+- Test calls use `HEYDAN_CALL_PAIR_CMD` from `.env.local` to mint a link restricted to the single agent named by `HEYDAN_CALL_AGENT`. The DEBUG app keeps
   the test run's pairing and key in their own Keychain namespace and unpairs after the call. The runner retries
   cleanup for the same run on failure. `HEYDAN_E2E_SAY` overrides the synthesized wake phrase and question.
 - A DEBUG build launched with `HEYDAN_FIXTURE_CHAT=1` gets a paired fixture host and no network; the fixture
@@ -67,5 +67,5 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
 - The stack checks in `ChatChecks` run as the `app-*` rows of `just sim-e2e` and need a local nanoclaw stack:
   `HEYDAN_LOCAL_BASE` (its base URL) and `HEYDAN_PAIR_CMD` (prints one fresh pairing link, a secret), optionally
   `HEYDAN_LOCAL_CA`, `HEYDAN_STACK_RESTART_CMD`, `HEYDAN_REVOKED_CMD` and `HEYDAN_CHAT_ONLY` (`scripts/sim-e2e.py`).
-  Without a stack those rows skip. Stan call rows can run independently.
+  Without a stack those rows skip. Test call rows can run independently.
 - `just sim` forwards debug hooks except commands and links. Most hooks live in `HeyDanApp.swift`.

@@ -38,15 +38,15 @@ sim: gen
     xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination "id=$udid" -derivedDataPath "{{sim_build}}" build -quiet
     xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
     xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
-    for name in $(compgen -e | rg '^HEYDAN_' || true); do
+    for name in $(compgen -A export HEYDAN_); do
         case "$name" in *_CMD|*_LINK) continue ;; esac
         export "SIMCTL_CHILD_$name=${!name}"
     done
     xcrun simctl launch --terminate-running-process "$udid" {{bundle_id}}
 
-# A hands-free call with a disposable Stan pairing and per-row evidence.
+# A hands-free call with a disposable test pairing and per-row evidence.
 sim-call seconds="65" say="":
-    @HEYDAN_CALL_SECONDS={{quote(seconds)}} HEYDAN_CALL_SAY={{quote(say)}} python3 scripts/sim-e2e.py {{bundle_id}} call
+    @HEYDAN_SIM={{quote(sim_name)}} HEYDAN_DERIVED_DATA={{quote(sim_build)}} HEYDAN_CALL_SECONDS={{quote(seconds)}} HEYDAN_CALL_SAY={{quote(say)}} python3 scripts/sim-e2e.py {{bundle_id}} call
 
 # A hands-free Simulator call with machine-readable evidence in HEYDAN_RUN_DIR (default build/e2e).
 sim-e2e:

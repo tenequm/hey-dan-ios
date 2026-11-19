@@ -35,14 +35,31 @@ struct HeyDanApp: App {
 
     private static func removeLegacyLinks() {
         let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: "removedLegacyCallLinks") else { return }
-        for account in ["voice-lines", "call-link"] {
-            let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: Bundle.main.bundleIdentifier ?? "HeyDan", kSecAttrAccount as String: account]
-            let status = SecItemDelete(query as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else { return }
+        let marker = "removedLegacyCallLinksAndBackups"
+        guard IdentityKeychain.callTestRun == nil, !defaults.bool(forKey: marker) else { return }
+        if removeLegacyLinks(service: Bundle.main.bundleIdentifier ?? "HeyDan") {
+            defaults.set(true, forKey: marker)
         }
-        defaults.set(true, forKey: "removedLegacyCallLinks")
+    }
+
+    static func removeLegacyLinks(service: String) -> Bool {
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+        var search = base
+        search[kSecReturnAttributes as String] = true
+        search[kSecMatchLimit as String] = kSecMatchLimitAll
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(search as CFDictionary, &result)
+        if status == errSecItemNotFound { return true }
+        guard status == errSecSuccess, let items = result as? [[String: Any]] else { return false }
+        for item in items {
+            guard let account = item[kSecAttrAccount as String] as? String else { return false }
+            guard account == "voice-lines" || account == "call-link" || account.hasPrefix("voice-lines-unreadable-") else { continue }
+            var query = base
+            query[kSecAttrAccount as String] = account
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { return false }
+        }
+        return true
     }
 
     var body: some Scene {
@@ -189,8 +206,7 @@ extension HeyDanApp {
             } catch { CallLog.log(.net, "check voice failed") }
             return
         }
-        let pairedFeed = env["HEYDAN_CHAT_CHECKS"] == "1" && env["HEYDAN_PAIRED_FEED"] == "1"
-        guard pairedFeed || env["HEYDAN_AUTOCALL"] == "1" else { return }
+        guard env["HEYDAN_AUTOCALL"] == "1", let run = IdentityKeychain.callTestRun else { return }
         if let steps = env["HEYDAN_STEPS"], !steps.isEmpty { DebugStep.schedule(steps) }
         var feed: Task<Void, Never>?
         defer { feed?.cancel() }
@@ -208,30 +224,12 @@ extension HeyDanApp {
             let gated = env["HEYDAN_FEED_ON_VOICE"] == "1"
             if gated { VoiceDebug.gateFeed(launched: launched) }
             feed = Task.detached {
-                if pairedFeed {
-                    while await CallController.shared.pairedCallTarget == nil, !Task.isCancelled {
-                        try? await Task.sleep(for: .milliseconds(50))
-                    }
-                }
-                guard !Task.isCancelled else { return }
                 await AudioFeed.run(path: path, after: delay, gated: gated)
             }
             #else
             feed = Task.detached { await AudioFeed.run(path: path, after: delay) }
             #endif
         }
-        if pairedFeed {
-            let deadline = ContinuousClock.now + .seconds(60)
-            while CallController.shared.pairedCallTarget == nil, ContinuousClock.now < deadline, !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            guard CallController.shared.pairedCallTarget != nil else { return }
-            while CallController.shared.isCallActive, !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            return
-        }
-        guard let run = IdentityKeychain.callTestRun else { return }
         do {
             try await IntentCall.readyPairings()
             if let link = env["HEYDAN_CALL_PAIR_LINK"] {
@@ -241,8 +239,7 @@ extension HeyDanApp {
             guard let entry = Pairings.shared.active else { throw AppError.notPaired }
             CallLog.log(.net, "test pair run=\(run) device=\(entry.deviceId)")
             if env["HEYDAN_CALL_CLEANUP"] != "1" {
-                guard entry.agents.count == 1, let agent = entry.agents.first,
-                      agent.name.caseInsensitiveCompare("Stan") == .orderedSame else { throw AppError.notPaired }
+                let agent = try IntentCall.testAgent(in: entry, expected: env["HEYDAN_CALL_AGENT"])
                 if env["HEYDAN_CALL_SEED"] == "1" {
                     CallLog.log(.net, "test intent ready run=\(run)")
                     return
@@ -560,15 +557,15 @@ struct StartConversationIntent: AppIntent {
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     @Parameter(title: "Agent", description: "Choose a paired agent or use the default from Settings.")
-    var agent: AgentEntity?
+    var line: VoiceLineEntity?
 
-    static var parameterSummary: some ParameterSummary { Summary("Call \(\.$agent)") }
+    static var parameterSummary: some ParameterSummary { Summary("Call \(\.$line)") }
 
     init() {}
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        try await IntentCall.run(agentID: agent?.id, inBackground: false)
+        try await IntentCall.run(agentID: line?.id, inBackground: false)
         return .result()
     }
 }
@@ -591,7 +588,7 @@ struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         let mode = systemContext.currentMode == .background ? "background" : "foreground"
         CallLog.log(.intent, "intent call-agent start mode=\(mode) unlocked=\(UIApplication.shared.isProtectedDataAvailable)")
-        let agentID: UUID? = if case let .agent(agent) = destination { agent.id } else { nil }
+        let agentID: UUID? = if case let .line(agent) = destination { agent.id } else { nil }
         try await IntentCall.run(agentID: agentID, inBackground: true)
         return .result()
     }
@@ -640,21 +637,38 @@ enum IntentCall {
         }
     }
 
+    #if DEBUG
+    static func testAgent(in entry: Pairings.Entry, expected: String?) throws -> HeyDanCore.Agent {
+        guard entry.agents.count == 1, let agent = entry.agents.first else {
+            CallLog.log(.call, "debug autocall refused agent_count")
+            throw AppError.notPaired
+        }
+        guard let expected, !expected.isEmpty, agent.name.caseInsensitiveCompare(expected) == .orderedSame else {
+            CallLog.log(.call, "debug autocall refused agent_name")
+            throw AppError.notPaired
+        }
+        return agent
+    }
+    #endif
+
     static func pairedTarget(id: UUID?) async throws -> CallTarget {
         let entries = Pairings.shared.entries.filter { $0.features.contains("calls") }
         var preference = UserDefaults.standard.string(forKey: "defaultCallAgent").flatMap(UUID.init(uuidString:))
         #if DEBUG
         if IdentityKeychain.callTestRun != nil { preference = nil }
         #endif
-        let wanted = (id == nil || id == AgentEntity.defaultID) ? preference : id
-        let picked = entries.lazy.compactMap { entry in
-            entry.agents.first { PairedAgentID.make(host: entry.host, agentId: $0.id) == wanted }.map { (entry, $0) }
-        }.first
+        guard !Pairings.shared.entries.isEmpty else { throw CallNotStarted(message: "Open Hey Dan and pair a host to call an agent.") }
+        func pick(_ id: UUID?) -> (Pairings.Entry, HeyDanCore.Agent)? {
+            guard let id, id != AgentEntity.defaultID else { return nil }
+            return entries.lazy.compactMap { entry in
+                entry.agents.first { PairedAgentID.make(host: entry.host, agentId: $0.id) == id }.map { (entry, $0) }
+            }.first
+        }
         let active = Pairings.shared.active
         let automatic = active.flatMap { entry in
             entry.features.contains("calls") ? entry.agents.first.map { (entry, $0) } : nil
         }
-        guard let (entry, agent) = wanted == nil ? automatic : picked else {
+        guard let (entry, agent) = pick(id) ?? (preference == nil ? automatic : pick(preference)) else {
             throw CallNotStarted(message: "Choose an available paired agent in Settings or Shortcuts.")
         }
         let found: (conversation: Conversation?, service: any AppService)
@@ -666,10 +680,16 @@ enum IntentCall {
         guard conversation.canCall else {
             throw CallNotStarted(message: conversation.callRefusal?.message ?? "Calling is unavailable.")
         }
-        guard Pairings.shared.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else {
+        guard let current = Pairings.shared.entries.first(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else {
             throw CallNotStarted(message: "This host is no longer paired.")
         }
-        return CallTarget(paired: PairedCallTarget(host: entry.host, deviceId: entry.deviceId,
+        #if DEBUG
+        if IdentityKeychain.callTestRun != nil {
+            let allowed = try testAgent(in: current, expected: ProcessInfo.processInfo.environment["HEYDAN_CALL_AGENT"])
+            guard allowed == conversation.agent else { throw AppError.notPaired }
+        }
+        #endif
+        return CallTarget(paired: PairedCallTarget(host: current.host, deviceId: current.deviceId,
             conversation: conversation), service: found.service)
     }
 
@@ -682,7 +702,7 @@ enum IntentCall {
 
 @UnionValue
 enum CallDestination {
-    case agent(AgentEntity)
+    case line(VoiceLineEntity)
 }
 
 @AppEnum(schema: .phone.audioVisualMode)
@@ -693,11 +713,18 @@ enum CallAVMode: String {
     static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [.audio: "Audio", .video: "Video"]
 }
 
+// Shortcuts persists the entity type name, destination case and parameter name.
+typealias AgentEntity = VoiceLineEntity
+
 @AppEntity(schema: .phone.phonePerson)
-struct AgentEntity {
+struct VoiceLineEntity {
     static let defaultQuery = AgentQuery()
     static let defaultID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-    static var defaultAgent: Self { Self(id: defaultID, agent: "Default agent", source: "Hey Dan Settings") }
+    static var defaultAgent: Self { Self(defaultFor: defaultID) }
+
+    fileprivate init(defaultFor id: UUID) {
+        self.init(id: id, agent: "Default agent", source: "Hey Dan Settings")
+    }
 
     let id: UUID
     let agent: String
@@ -725,7 +752,10 @@ struct AgentQuery: EntityStringQuery {
     }
 
     func entities(for identifiers: [UUID]) async -> [AgentEntity] {
-        await suggestedEntities().filter { identifiers.contains($0.id) }
+        let available = await suggestedEntities()
+        return identifiers.map { id in
+            available.first { $0.id == id } ?? AgentEntity(defaultFor: id)
+        }
     }
 
     func entities(matching string: String) async -> [AgentEntity] {
@@ -749,8 +779,8 @@ struct HeyDanShortcuts: AppShortcutsProvider {
             phrases: [
                 "Talk to \(.applicationName)",
                 "Start a conversation with \(.applicationName)",
-                "Call \(\.$agent) with \(.applicationName)",
-                "Talk to \(\.$agent) with \(.applicationName)",
+                "Call \(\.$line) with \(.applicationName)",
+                "Talk to \(\.$line) with \(.applicationName)",
             ],
             shortTitle: "Start conversation",
             systemImageName: "waveform"

@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     private var invalidEnvironmentLogged = false
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        guard IdentityKeychain.callTestRun == nil else { return true }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories([Self.messageCategory])
@@ -69,7 +70,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// Asked once per launch, and only once a paired host sends pushes: a refusal cannot be asked again.
     static func requestPermission() async {
-        guard !permissionRequested, Pairings.shared.entries.contains(where: { $0.features.contains("push") }) else { return }
+        guard IdentityKeychain.callTestRun == nil, !permissionRequested, Pairings.shared.entries.contains(where: { $0.features.contains("push") }) else { return }
         permissionRequested = true
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
@@ -87,6 +88,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static func tokenString(_ deviceToken: Data) -> String { deviceToken.map { String(format: "%02x", $0) }.joined() }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        guard IdentityKeychain.callTestRun == nil else { return }
         token = Self.tokenString(deviceToken)
         Task { await synchronizePairings() }
     }

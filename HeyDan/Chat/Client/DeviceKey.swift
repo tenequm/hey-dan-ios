@@ -38,6 +38,8 @@ struct DeviceKey: Sendable {
 enum IdentityKeychain {
     #if DEBUG
     static let callTestRun = ProcessInfo.processInfo.environment["HEYDAN_CALL_RUN"].flatMap(UUID.init(uuidString:))?.uuidString
+    #else
+    static let callTestRun: String? = nil
     #endif
     private static var service: String {
         let base = (Bundle.main.bundleIdentifier ?? "HeyDan") + ".identity"

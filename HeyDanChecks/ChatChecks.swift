@@ -179,21 +179,26 @@ final class ChatChecks: XCTestCase {
 
     func testPairedIntent() async throws {
         guard let run = env["HEYDAN_CALL_RUN"], UUID(uuidString: run) != nil else { throw XCTSkip("Requires a test pairing") }
-        launch(["HEYDAN_CALL_RUN": run, "HEYDAN_HANGUP_AFTER": "30"])
+        let expected = try XCTUnwrap(env["HEYDAN_CALL_AGENT"])
+        launch(["HEYDAN_CALL_RUN": run, "HEYDAN_CALL_AGENT": expected, "HEYDAN_HANGUP_AFTER": "30"])
         XCTAssertTrue(conversation().waitForExistence(timeout: 20))
         let bundle = String(Bundle(for: ChatChecks.self).bundleIdentifier!.dropLast(".Checks".count))
         let definitions = IntentDefinitions(bundleIdentifier: bundle)
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-        let matches = try await definitions.entities["AgentEntity"].entities(identifiers: [id])
+        let matches = try await definitions.entities["VoiceLineEntity"].entities(identifiers: [id])
         let agent = try XCTUnwrap(matches.first)
-        let suggestions = try await definitions.entities["AgentEntity"].suggestedEntities()
+        let suggestions = try await definitions.entities["VoiceLineEntity"].suggestedEntities()
         XCTAssertTrue(suggestions.contains(agent))
         let intent = definitions.intents["CallLineIntent"].makeIntent(
             destination: agent, audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))
         XCUIDevice.shared.press(.home)
         try await intent.run()
-        try await Task.sleep(for: .seconds(40))
         app.activate()
+        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
+        let end = app.buttons["keys.call"]
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        end.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["composer.text"].firstMatch.waitForExistence(timeout: 10))
     }
 
     func testUnpair() throws {

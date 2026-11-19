@@ -251,6 +251,7 @@ def ui_check(name, method, stack=False, call_run=None):
     logfile = container / 'Library/Caches/heydan.log'
     if call_run:
         runner['TEST_RUNNER_HEYDAN_CALL_RUN'] = call_run
+        runner['TEST_RUNNER_HEYDAN_CALL_AGENT'] = os.environ['HEYDAN_CALL_AGENT']
     baseline = len(logfile.read_text()) if logfile.exists() else 0
     revoked = container / 'Library/Caches/revoked-request.json'
     if name == 'app-unpair':
@@ -311,7 +312,12 @@ def ui_check(name, method, stack=False, call_run=None):
                 cleared = bool(counts and counts[-1] == ('0', '0'))
                 result(name, 'pass' if delivered and cleared else 'fail', 'Delivered notification and badge cleared' if delivered and cleared else 'Notification/badge cleanup not observed', evidence)
             elif name == 'app-paired-intent':
-                passed = 'paired=true' in delta and ' connected ms=' in delta and 'end reason=hangup acknowledged' in delta
+                deadline = time.monotonic() + 10
+                while 'end reason=hangup acknowledged' not in delta and time.monotonic() < deadline:
+                    time.sleep(0.25)
+                    delta = logfile.read_text()[baseline:]
+                passed = ('intent call-agent start mode=background' in delta and 'paired=true' in delta
+                          and ' connected ms=' in delta and 'end reason=hangup acknowledged' in delta)
                 result(name, 'pass' if passed else 'fail', 'Paired intent connected and ended' if passed else 'Paired intent call evidence missing', evidence)
             elif name == 'app-send-reply':
                 stored = 'check send acknowledged' in delta and 'delivery=stored' in delta
@@ -541,14 +547,26 @@ def main():
             paired_test_call(intent=True)
 
 
+def call_launch_environment(run_id, agent, extra, device=False):
+    hooks = ('HEYDAN_STEPS', 'HEYDAN_VOICE_STEPS', 'HEYDAN_FEED_ON_VOICE', 'HEYDAN_AUDIO_METER',
+             'HEYDAN_PAIRED_ICE', 'HEYDAN_SIMULATE')
+    variables = {} if 'HEYDAN_CALL_CLEANUP' in extra else {key: os.environ[key] for key in hooks if key in os.environ}
+    variables.update(HEYDAN_CALL_AGENT=agent, HEYDAN_CALL_RUN=run_id, HEYDAN_AUTOCALL='1', HEYDAN_CHAT_CHECKS='1')
+    prefix = 'DEVICECTL_CHILD_' if device else 'SIMCTL_CHILD_'
+    return ENV | {prefix + key: value for key, value in (variables | extra).items()}
+
+
 def paired_test_call(device=None, intent=False):
     if not os.environ.get('HEYDAN_CALL_PAIR_CMD'):
         raise RuntimeError('Missing HEYDAN_CALL_PAIR_CMD')
+    agent = os.environ.get('HEYDAN_CALL_AGENT', '').strip()
+    if not agent:
+        raise RuntimeError('Missing HEYDAN_CALL_AGENT')
     duration = int(os.environ.get('HEYDAN_CALL_SECONDS', HANGUP_AFTER))
     if duration < 1:
         raise ValueError('Call duration must be positive')
     run_id = str(uuid.uuid4()).upper()
-    speech = os.environ.get('HEYDAN_CALL_SAY') or os.environ.get('HEYDAN_E2E_SAY') or 'Hey Stan. What is two plus two? Zulu.'
+    speech = os.environ.get('HEYDAN_CALL_SAY') or os.environ.get('HEYDAN_E2E_SAY') or f'Hey {agent}. What is two plus two? Zulu.'
     run('say', '-o', BUILD / 'feed.aiff', '-f', '-', stdin=speech)
     wav = BUILD / 'feed.wav'
     run('afconvert', '-f', 'WAVE', '-d', 'LEF32@48000', '-c', '1', BUILD / 'feed.aiff', wav)
@@ -568,9 +586,7 @@ def paired_test_call(device=None, intent=False):
         return logfile.read_text() if logfile.exists() else ''
 
     def launch(extra):
-        prefix = 'DEVICECTL_CHILD_' if device else 'SIMCTL_CHILD_'
-        variables = {'HEYDAN_CALL_RUN': run_id, 'HEYDAN_AUTOCALL': '1', 'HEYDAN_CHAT_CHECKS': '1', **extra}
-        env = ENV | {prefix + k: v for k, v in variables.items()}
+        env = call_launch_environment(run_id, agent, extra, device)
         if device:
             run('xcrun', 'devicectl', 'device', 'process', 'launch', '--terminate-existing', '--device', device, BUNDLE, env=env)
         else:

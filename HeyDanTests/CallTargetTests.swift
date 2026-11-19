@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import HeyDanCore
 import XCTest
+import Security
 import Synchronization
 @testable import HeyDan
 
@@ -16,6 +17,40 @@ private final class FixtureBundle {}
 
     private let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
         agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
+
+    func testDebugCallsRequireExactlyTheConfiguredAgent() throws {
+        func entry(_ agents: [Agent]) -> Pairings.Entry {
+            Pairings.Entry(host: URL(string: "https://example.com")!,
+                pairing: PairResponse(deviceId: "test", userName: "Tester", agents: agents, protocol: 1, serverTime: 0),
+                features: ["calls"])
+        }
+        let agent = conversation.agent
+        XCTAssertEqual(try IntentCall.testAgent(in: entry([agent]), expected: "taylor"), agent)
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([]), expected: agent.name))
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent, agent]), expected: agent.name))
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: "Other"))
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: nil))
+    }
+
+    func testLegacyCleanupDeletesBackupsAndPreservesUnrelatedAccounts() {
+        let service = "test.legacy." + UUID().uuidString
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+        defer { SecItemDelete(base as CFDictionary) }
+        let removed = ["call-link", "voice-lines", "voice-lines-unreadable-1", "voice-lines-unreadable-2"]
+        for account in removed + ["keep"] {
+            var item = base
+            item[kSecAttrAccount as String] = account
+            item[kSecValueData as String] = Data([1])
+            XCTAssertEqual(SecItemAdd(item as CFDictionary, nil), errSecSuccess)
+        }
+        XCTAssertTrue(HeyDanApp.removeLegacyLinks(service: service))
+        XCTAssertTrue(HeyDanApp.removeLegacyLinks(service: service))
+        for account in removed + ["keep"] {
+            var item = base
+            item[kSecAttrAccount as String] = account
+            XCTAssertEqual(SecItemCopyMatching(item as CFDictionary, nil), account == "keep" ? errSecSuccess : errSecItemNotFound)
+        }
+    }
 
     func testLiveCaptionYieldsToTheHostTurn() {
         var transcript = Transcript()

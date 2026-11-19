@@ -17,7 +17,7 @@ struct PairedSettingsSection: View {
         }
     }
     private var defaultName: String {
-        defaultAgent.isEmpty ? "First on active host" : callAgents.first { $0.id.uuidString == defaultAgent }?.agent ?? "Unavailable"
+        defaultAgent.isEmpty ? "First agent on active host" : callAgents.first { $0.id.uuidString == defaultAgent }?.agent ?? "Unavailable"
     }
 
     var body: some View {

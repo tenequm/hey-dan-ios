@@ -62,8 +62,8 @@ See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
 1. Copy the local config, which stays out of git:
    - `Local.xcconfig` from [Local.xcconfig.example](Local.xcconfig.example): your `HEYDAN_BUNDLE_ID` and
      `DEVELOPMENT_TEAM`. Without it the bundle ID is `com.example.HeyDan` and there is no team.
-   - Copy [.env.local.example](.env.local.example) to `.env.local`. Set `HEYDAN_CALL_PAIR_CMD` for test calls.
-     The command prints a fresh one-time pairing link restricted to Stan. Each call run unpairs its own device.
+   - Copy [.env.local.example](.env.local.example) to `.env.local`. Set `HEYDAN_CALL_AGENT` and `HEYDAN_CALL_PAIR_CMD` for test calls.
+     The command prints a fresh one-time pairing link restricted to that one test agent. Each call run unpairs its own device.
      Set `NANOCLAW_SSH` and `NANOCLAW_DIR` for server logs, and `ASC_ENV_CMD` and `ASC_APP_ID` for TestFlight.
    - `local.just` (optional): your own recipes, imported by the [justfile](justfile).
 2. `just gen` generates `HeyDan.xcodeproj` from [project.yml](project.yml).
@@ -81,7 +81,7 @@ See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
 1. Shortcuts > + > Add Action > Hey Dan > Call agent.
 2. Pick **Default agent**. Set it in Hey Dan under **Settings > Calls > Default agent**. With no selection, it
    calls the active host's first agent. Pick a specific agent in the shortcut to always call that agent.
-   Update an existing saved-line shortcut by choosing **Default agent** again.
+   Existing shortcuts for removed lines call the current default agent.
 3. Call type: Audio, not Ask Each Time.
 4. iOS Settings > Action Button > Shortcut > that shortcut.
 
@@ -100,7 +100,7 @@ call there.
 | `just app-test` | The app-hosted `HeyDanTests` in that Simulator (run `just sim` once to create it); shares one build with `sim-checks` |
 | `just sim` | Creates the named Simulator if needed, installs the app and opens it |
 | `just sim-checks <check>` | Runs a UI check, such as `ChatCallChecks` or `LiveActivityOnLockScreen` |
-| `just sim-e2e` | Writes checks to `build/e2e`. Call rows use a temporary Stan pairing. Stack rows use a local NanoClaw host. |
+| `just sim-e2e` | Writes checks to `build/e2e`. Call rows use a temporary test pairing. Stack rows use a local NanoClaw host. |
 | `just screens` | Captures the fixture screens in that Simulator into `.local/screens/<commit>/`; resets its keychain |
 | `just device` | Signs, installs and launches on the connected iPhone |
 | `just logs [since]` | The Simulator's app and LiveKit log for the last `since` (default `15m`) |

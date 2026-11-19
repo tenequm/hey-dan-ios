@@ -105,7 +105,7 @@ import UIKit
         publish()
     }
     private func publish() {
-        if publishes { HeyDanShortcuts.updateAppShortcutParameters() }
+        if publishes, IdentityKeychain.callTestRun == nil { HeyDanShortcuts.updateAppShortcutParameters() }
         state = active == nil ? .none : .paired
         let identity = active.map { $0.host.absoluteString + "|" + $0.pairing.deviceId }
         guard publishes, identity != publishedIdentity else { return }
