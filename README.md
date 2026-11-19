@@ -5,7 +5,7 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
 <p align="center">
   <img src="docs/screenshots/list.png" width="200" alt="Chat list with three agents: one working, one done, one waiting for input">
   <img src="docs/screenshots/thread.png" width="200" alt="A thread with a markdown reply, a code block and a photo">
-  <img src="docs/screenshots/call.png" width="200" alt="A call with the agent speaking, live captions and the Mute, Hands-free, Options and End controls">
+  <img src="docs/screenshots/call.png" width="200" alt="A call with the agent speaking, live captions and the Mute, Options and End controls">
   <img src="docs/screenshots/push.png" width="200" alt="An agent's reply as a notification on the lock screen">
 </p>
 
@@ -32,11 +32,10 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
   fields, tables and charts. What you send offline goes out when the host is back.
 - **Replies on the lock screen** as communication notifications, with one unread badge across all your hosts.
 - **Calls** through CallKit, so they keep going on the lock screen: start one from a thread or the Action Button,
-  talk hands-free or in Manual mode (record, review, then send), follow live captions, and change the agent's voice
+  talk hands-free, follow live captions, and change the agent's voice
   or the typing sound in the Call options sheet.
 - **Pairing** by one-time link: each host gets its own Secure Enclave key on the phone, and requests to the host are
   signed with it. Pair several hosts and pick the active one.
-- **Voice lines** without pairing: save a host's call link and call the agent that answers it.
 - **Live Activity**: the call's agent, state and clock on the lock screen and in the Dynamic Island, with an end key.
 
 ## How it works
@@ -44,8 +43,8 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
 Chat goes to your NanoClaw host's [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) as
 signed HTTPS requests, and one server-sent event stream keeps the chat list, threads and unread counts current. New
 replies arrive as APNs pushes, which the notification service extension turns into communication notifications.
-Calls run over [LiveKit](https://github.com/livekit/client-sdk-swift): a paired call with relay-only ICE, a voice line
-through the host's voice mode. The protocol details are in [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host).
+Calls use relay-only ICE over [LiveKit](https://github.com/livekit/client-sdk-swift). Each call belongs to its chat.
+See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
 
 ## Requirements
 
@@ -56,40 +55,33 @@ through the host's voice mode. The protocol details are in [AGENTS.md](AGENTS.md
 - A paid Apple Developer Program team for device builds and TestFlight (the push entitlements rule out a free
   personal team), with Xcode signed in to it; Simulator and unsigned builds need none.
 - A [NanoClaw](https://github.com/tenequm/nanoclaw) host the phone reaches over HTTPS: its
-  [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) for chat, pushes and paired calls,
-  or only [voice mode](https://github.com/tenequm/nanoclaw/blob/main/.claude/skills/add-voice-mode/SKILL.md) for
-  voice lines.
+  [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) supports chat, pushes and calls.
 
 ## Getting started
 
 1. Copy the local config, which stays out of git:
    - `Local.xcconfig` from [Local.xcconfig.example](Local.xcconfig.example): your `HEYDAN_BUNDLE_ID` and
      `DEVELOPMENT_TEAM`. Without it the bundle ID is `com.example.HeyDan` and there is no team.
-   - `.env.local` from [.env.local.example](.env.local.example), which `just` loads: `TEST_CALL_LINK` for Simulator
-     calls, `NANOCLAW_SSH` and `NANOCLAW_DIR` for `just server-logs`, `ASC_ENV_CMD` and `ASC_APP_ID` for TestFlight.
-     Point `TEST_CALL_LINK` at a test agent's line, never your main agent's: a test turn keeps that agent busy.
+   - Copy [.env.local.example](.env.local.example) to `.env.local`. Set `HEYDAN_CALL_PAIR_CMD` for test calls.
+     The command prints a fresh one-time pairing link restricted to Stan. Each call run unpairs its own device.
+     Set `NANOCLAW_SSH` and `NANOCLAW_DIR` for server logs, and `ASC_ENV_CMD` and `ASC_APP_ID` for TestFlight.
    - `local.just` (optional): your own recipes, imported by the [justfile](justfile).
 2. `just gen` generates `HeyDan.xcodeproj` from [project.yml](project.yml).
 3. Install: `just device` signs, installs and launches the app on the connected iPhone; or ship it through
    [TestFlight](#testflight).
 4. Pair a host: send `/pair` to your agent in Telegram, or run `ncl devices pair --user <user-id> --agents <agent-id>`
-   on the host. In Hey Dan tap **Pair a host** (in Settings, which opens on first launch; once a host is paired, also
-   **+** on the chat list), then **Paste** and **Pair with ...**. The link works once and expires after 10 minutes.
-   Until a host is paired, Settings opens again from the call screen's Options > Voice lines and paired hosts. For
-   pushes, the host needs your team's APNs key and `APP_APNS_TOPIC` set to your `HEYDAN_BUNDLE_ID` (all keys: the
+   on the host. Hey Dan opens pairing on first launch. Tap **Paste** and **Pair with ...**. To pair another host,
+   open Settings from the chat list. For pushes, set your team's APNs key and `APP_APNS_TOPIC` to your bundle ID (see the
    [app channel](https://github.com/tenequm/nanoclaw/blob/main/docs/app-channel.md) doc); a `just device` build
    registers for sandbox pushes.
-5. Or call without pairing: in Settings > Calls > Voice lines, add the call link from the host's voice mode
-   (`https://<host>/voice?t=<token>`). With several lines, tap the one the Action Button should call. Later changes
-   (another line, another pick, a deleted line, a host to pair) go through Options > Voice lines and paired hosts on
-   the call screen. A tailnet-only host needs Tailscale on the phone.
-6. Set up the Action Button.
+5. Open a chat and tap **Call**, or set up the Action Button.
 
 ### Action Button
 
 1. Shortcuts > + > Add Action > Hey Dan > Call agent.
-2. Agent: it comes filled in with the line picked in Hey Dan (with no saved line, the active host's first agent);
-   change it to call another agent.
+2. Pick **Default agent**. Set it in Hey Dan under **Settings > Calls > Default agent**. With no selection, it
+   calls the active host's first agent. Pick a specific agent in the shortcut to always call that agent.
+   Update an existing saved-line shortcut by choosing **Default agent** again.
 3. Call type: Audio, not Ask Each Time.
 4. iOS Settings > Action Button > Shortcut > that shortcut.
 
@@ -106,9 +98,9 @@ call there.
 | `just test` | `HeyDanCore` tests on the Mac (no Simulator) and the `sim-e2e` harness's own tests |
 | `just build` | Compile-checks a device build without signing |
 | `just app-test` | The app-hosted `HeyDanTests` in that Simulator (run `just sim` once to create it); shares one build with `sim-checks` |
-| `just sim` | Builds and launches in the Simulator "Hey Dan iPhone" (created on first run) with `TEST_CALL_LINK` saved as a line; without `TEST_CALL_LINK` it stops before the launch |
-| `just sim-checks <check>` | UI checks: fixture classes such as `ChatThreadChecks` need no server; bare names such as `LiveActivityOnLockScreen` call the test line |
-| `just sim-e2e` | Unattended checks on their own Simulator, results in `build/e2e`: a hands-free call to the test line, or the chat rows against a local NanoClaw stack |
+| `just sim` | Creates the named Simulator if needed, installs the app and opens it |
+| `just sim-checks <check>` | Runs a UI check, such as `ChatCallChecks` or `LiveActivityOnLockScreen` |
+| `just sim-e2e` | Writes checks to `build/e2e`. Call rows use a temporary Stan pairing. Stack rows use a local NanoClaw host. |
 | `just screens` | Captures the fixture screens in that Simulator into `.local/screens/<commit>/`; resets its keychain |
 | `just device` | Signs, installs and launches on the connected iPhone |
 | `just logs [since]` | The Simulator's app and LiveKit log for the last `since` (default `15m`) |
@@ -148,7 +140,6 @@ non-exempt encryption, so builds skip the export compliance question.
 
 - Each paired host gets its own Secure Enclave key, which never leaves the phone. The app signs its requests to that
   host with it; only the version check, the pairing request and ticketed file uploads go unsigned.
-- Call links stay in the Keychain, on this phone only.
 - The thread cache and the outbox stay on the phone and out of its backups.
 - Logs carry only ids, states, codes and durations: never a token, a link or anything said or written.
 - No analytics or tracking. A push carries a preview of the message through Apple's push service.

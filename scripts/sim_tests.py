@@ -83,10 +83,6 @@ def selected_tests(inventory, selector):
                for line in inventory.splitlines())
 
 
-def needs_call_link(selector):
-    return selector.split('/')[:2] == ['HeyDanChecks', 'HeyDanChecks']
-
-
 @contextmanager
 def test_results(build, keep_failed):
     with tempfile.TemporaryDirectory() as results:
@@ -175,16 +171,10 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             raise RuntimeError('Simulator push checks need HEYDAN_BUNDLE_ID in Local.xcconfig')
         if mode == 'sim-checks':
             subprocess.run([*sim, 'privacy', udid, 'grant', 'microphone', bundle], check=True)
-            if needs_call_link(selector):
-                link = subprocess.check_output(['just', '_test-link'], text=True).strip()
-                subprocess.run([*sim, 'launch', '--terminate-running-process', udid, bundle], check=True,
-                               env={**env, 'SIMCTL_CHILD_HEYDAN_CALL_LINK': link}, stdout=subprocess.DEVNULL)
-                time.sleep(3)
-                subprocess.run([*sim, 'terminate', udid, bundle], check=True)
             out = Path('build/checks').resolve()
             out.mkdir(parents=True, exist_ok=True)
             # Links and the stack's commands can carry secrets, and a result bundle records the runner's environment.
-            withheld = {'HEYDAN_CALL_LINK', 'HEYDAN_E2E_CALL_LINK', 'HEYDAN_PAIR_LINK'}
+            withheld = {'HEYDAN_CALL_PAIR_LINK', 'HEYDAN_PAIR_LINK'}
             runner.update({'TEST_RUNNER_' + k: v for k, v in os.environ.items()
                            if k.startswith('HEYDAN_') and k not in withheld and not k.endswith('_CMD')})
             runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(out)

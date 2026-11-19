@@ -12,12 +12,12 @@ import sys
 import tempfile
 import time
 import threading
+import uuid
 
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = Path(os.environ.get('HEYDAN_RUN_DIR', ROOT / 'build/e2e')).resolve()
 BUILD = (ROOT / os.environ.get('HEYDAN_DERIVED_DATA', 'build/sim-e2e')).resolve()
-LINK = os.environ.get('HEYDAN_E2E_CALL_LINK') or os.environ.get('TEST_CALL_LINK', '')
 # Xcode archives its environment. Only simctl's seeding launch receives the link.
 ENV = {k: v for k, v in os.environ.items() if k in (
     'PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME')}
@@ -50,12 +50,13 @@ APP_CHECKS = {
     'app-push-communication': None,
     'app-push-extension': None,
     'app-push-edit': None,
-    'app-paired-call': 'testPairedCall',
+    'app-paired-call': None,
     'app-paired-voice': None,
     'app-voice-picker-screen': 'testPairedVoicePicker',
-    'app-paired-intent': 'testPairedIntent',
+    'app-paired-intent': None,
     'app-unpair': 'testUnpair',
-    'app-line-call': None,
+    'app-call-pair': None,
+    'app-call-unpair': None,
 }
 RECORDS = {}
 
@@ -139,11 +140,10 @@ def notifications_ready(state):
     return True
 
 
-# A plain line offers review and answers with a reply event; a jev line offers neither, so its proof is the agent
-# thinking after the caller's caption, then its own caption.
+# A Jev worker has no command vocabulary or reply events. Its thinking transition and final caption prove the reply.
 def grade(text):
     caller = text.find('e2e caption final caller=true')
-    jev = 'review grace ran out: not offered' in text and 'e2e reply ' not in text
+    jev = (' commands=- ' in text and not re.search(r' commands=[23] ', text) and 'e2e reply ' not in text)
     if caller < 0:
         reply = False
     elif jev:
@@ -158,7 +158,7 @@ def grade(text):
         mode='jev' if jev else 'plain', connected=connected, reply=reply,
         audio='agent audio subscribed sid=' in text,
         clean=bool(re.search(r'finish site=.* cause=caller .*connected=true mic=true live=true', text)),
-        ended=bool(re.search(r'end reason=hangup status=2\d\d', text)),
+        ended=bool(re.search(r'end reason=hangup acknowledged', text)),
         fed=bool(re.search(r'debug feed: wav frames=[1-9]\d*', text)),
         refused=REFUSED in text,
         # CallLog.describe prints LiveKit's timedOut by its description; -1001 is URLError.timedOut.
@@ -171,7 +171,7 @@ def grade_paired(text):
     # A jev call speaks its reply without marking the thread's copy spoken.
     marks = ('caller', 'spoken') if evidence['mode'] == 'plain' else ('caller',)
     return (all(evidence[key] for key in ('connected', 'reply', 'audio', 'clean', 'ended', 'fed'))
-            and bool(re.search(r'end reason=hangup status=2\d\d[^\n]*paired=true', text))
+            and bool(re.search(r'end reason=hangup acknowledged[^\n]*paired=true', text))
             and all('check thread voice=' + voice in text for voice in marks))
 
 
@@ -220,7 +220,7 @@ def push_driver(directory, enabled):
             raise RuntimeError(failures[0])
 
 
-def ui_check(name, method, stack=False):
+def ui_check(name, method, stack=False, call_run=None):
     global CHECK
     selected = set(filter(None, os.environ.get('HEYDAN_CHAT_ONLY', '').split(',')))
     if selected and name not in selected:
@@ -247,19 +247,10 @@ def ui_check(name, method, stack=False):
             data += f'trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
             attachment.write_bytes(data)
         runner['TEST_RUNNER_HEYDAN_CHAT_ATTACHMENT'] = str(attachment)
-    if name == 'app-paired-call':
-        speech = os.environ.get('HEYDAN_E2E_SAY')
-        if not speech:
-            result(name, 'skip', 'Missing HEYDAN_E2E_SAY with the stack wake phrase')
-            return
-        run('say', '-o', BUILD / 'feed.aiff', '-f', '-', stdin=speech)
-        run('afconvert', '-f', 'WAVE', '-d', 'LEF32@48000', '-c', '1', BUILD / 'feed.aiff', BUILD / 'feed.wav')
-        runner['TEST_RUNNER_HEYDAN_CHAT_WAV'] = str(BUILD / 'feed.wav')
     container = Path(sim('get_app_container', UDID, BUNDLE, 'data'))
     logfile = container / 'Library/Caches/heydan.log'
-    if name == 'app-paired-intent':
-        metadata = json.loads((container / 'Library/Caches/chat-check-context.json').read_text())
-        runner['TEST_RUNNER_HEYDAN_CHAT_INTENT_ID'] = metadata[0]['intentId']
+    if call_run:
+        runner['TEST_RUNNER_HEYDAN_CALL_RUN'] = call_run
     baseline = len(logfile.read_text()) if logfile.exists() else 0
     revoked = container / 'Library/Caches/revoked-request.json'
     if name == 'app-unpair':
@@ -320,12 +311,8 @@ def ui_check(name, method, stack=False):
                 cleared = bool(counts and counts[-1] == ('0', '0'))
                 result(name, 'pass' if delivered and cleared else 'fail', 'Delivered notification and badge cleared' if delivered and cleared else 'Notification/badge cleanup not observed', evidence)
             elif name == 'app-paired-intent':
-                passed = 'paired=true' in delta and ' connected ms=' in delta and 'end reason=hangup status=204' in delta
+                passed = 'paired=true' in delta and ' connected ms=' in delta and 'end reason=hangup acknowledged' in delta
                 result(name, 'pass' if passed else 'fail', 'Paired intent connected and ended' if passed else 'Paired intent call evidence missing', evidence)
-            elif name == 'app-paired-call':
-                passed = grade_paired(delta)
-                (OUT / 'logs/app-paired-call-app.log').write_text(delta)
-                result(name, 'pass' if passed else 'fail', 'Paired call audio and end grading ' + ('passed' if passed else 'failed'), evidence + ['logs/app-paired-call-app.log'])
             elif name == 'app-send-reply':
                 stored = 'check send acknowledged' in delta and 'delivery=stored' in delta
                 result(name, 'pass' if stored else 'fail', 'UI reply and stored acknowledgement observed' if stored else 'UI reply passed; stored acknowledgement missing', evidence)
@@ -341,12 +328,12 @@ def ui_check(name, method, stack=False):
                 (current / 'Library/Caches/revoked-request.json').unlink(missing_ok=True)
 
 
-def pair_link():
-    command = os.environ['HEYDAN_PAIR_CMD']
+def pair_link(variable='HEYDAN_PAIR_CMD'):
+    command = os.environ[variable]
     # stdout is a secret and stderr is intentionally discarded by run().
     link = run('sh', '-c', command, env=os.environ.copy()).stdout.strip()
     if not link or '\n' in link:
-        raise RuntimeError('HEYDAN_PAIR_CMD did not return exactly one link')
+        raise RuntimeError(f'{variable} did not return exactly one link')
     return link
 
 
@@ -470,18 +457,16 @@ def bundle_ready(bundle):
 
 def main():
     global UDID, CHECK
-    for name in ('sim-setup', 'sim-local-ca', 'sim-build', 'sim-permission', 'sim-call'):
+    for name in (() if call_only else ('sim-setup', 'sim-local-ca', 'sim-build', 'sim-permission', 'sim-call')):
         result(name, 'skip', 'Not reached in this invocation')
     no_stack = not os.environ.get('HEYDAN_LOCAL_BASE') or not os.environ.get('HEYDAN_PAIR_CMD')
-    for name in APP_CHECKS:
+    for name in (() if call_only else APP_CHECKS):
         result(name, 'skip', 'No local stack is running: HEYDAN_LOCAL_BASE and HEYDAN_PAIR_CMD required'
                if no_stack else 'Not reached in this invocation')
-    result('app-push-extension', 'skip', 'simctl push does not execute the notification service extension; requires real APNs')
-    result('app-push-edit', 'skip', 'Replacing a delivered banner requires a real APNs push')
+    if not call_only:
+        result('app-push-extension', 'skip', 'simctl push does not execute the notification service extension; requires real APNs')
+        result('app-push-edit', 'skip', 'Replacing a delivered banner requires a real APNs push')
 
-    attempts = os.environ.get('HEYDAN_E2E_ATTEMPTS', '2')
-    if attempts not in ('1', '2'):
-        raise RuntimeError('HEYDAN_E2E_ATTEMPTS must be 1 or 2')
     devices = json.loads(sim('list', 'devices', 'available', '-j'))['devices']
     name = os.environ.get('HEYDAN_SIM', 'Hey Dan e2e')
     matches = [d for group in devices.values() for d in group if d['name'] == name]
@@ -522,6 +507,11 @@ def main():
     build('build-for-testing', '-quiet', seconds=900)
     sim('install', UDID, BUILD / 'Build/Products/Debug-iphonesimulator/HeyDan.app')
     result(CHECK, 'pass', 'Built and installed app and UI checks', ['logs/sim-build.log'])
+    if call_only:
+        sim('privacy', UDID, 'grant', 'microphone', BUNDLE)
+        CHECK = 'sim-call'
+        paired_test_call()
+        return
     CHECK = 'sim-permission'
     sim('privacy', UDID, 'reset', 'microphone', BUNDLE)
     with tempfile.TemporaryDirectory(prefix='checks-', dir=BUILD) as temporary:
@@ -538,65 +528,116 @@ def main():
     try:
         chat_checks()
     except RuntimeError as error:
-        # A broken stack fails its own check; the saved-line call below still runs.
         result(CHECK, 'fail', str(error))
-    CHECK = 'sim-call'
-    if os.environ.get('HEYDAN_LOCAL_BASE') or not LINK:
-        result(CHECK, 'skip', 'Saved-line calls disabled for stack runs' if os.environ.get('HEYDAN_LOCAL_BASE') else 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')
-        result('app-line-call', 'skip', 'Saved-line calls disabled for stack runs' if os.environ.get('HEYDAN_LOCAL_BASE') else 'Missing HEYDAN_E2E_CALL_LINK or TEST_CALL_LINK')
-        return
-    run('say', '-o', BUILD / 'feed.aiff', '-f', '-',
-        stdin=os.environ.get('HEYDAN_E2E_SAY', 'What is two plus two? Please answer briefly.'))
-    run('afconvert', '-f', 'WAVE', '-d', 'LEF32@48000', '-c', '1', BUILD / 'feed.aiff', BUILD / 'feed.wav')
-    container = Path(sim('get_app_container', UDID, BUNDLE, 'data'))
-    logfile = container / 'Library/Caches/heydan.log'
-    call_env = ENV | {f'SIMCTL_CHILD_{k}': v for k, v in {
-        'HEYDAN_CALL_LINK': LINK, 'HEYDAN_AUTOCALL': '1', 'HEYDAN_HANGUP_AFTER': str(HANGUP_AFTER),
-        'HEYDAN_FEED_WAV': str(BUILD / 'feed.wav'), 'HEYDAN_FEED_AFTER': '12',
-        'HEYDAN_TURN_MODE': 'auto',
-    }.items()}
-    for attempt in range(1, int(attempts) + 1):
-        sim('terminate', UDID, BUNDLE, check=False)
-        logfile.unlink(missing_ok=True)
-        sim('launch', '--terminate-running-process', UDID, BUNDLE, env=call_env)
-        deadline = time.monotonic() + LAUNCH_BOUND
-        claimed = False
-        text = ''
-        while time.monotonic() < deadline:
-            time.sleep(1)
-            text = logfile.read_text() if logfile.exists() else ''
-            if REFUSED in text or ('finish site=' in text and re.search(r'end reason=.* status=\d+', text)):
-                break
-            if not claimed and 'claim line=' in text:
-                claimed = True
-                # The app hangs up HANGUP_AFTER after the claim, then the host has up to 10 s to acknowledge it.
-                deadline = time.monotonic() + HANGUP_AFTER + 20
-        sim('terminate', UDID, BUNDLE, check=False)
-        evidence = f'logs/sim-call-{attempt}.log'
-        # The app mirror has states/codes only; never collect LiveKit's SDK log.
-        (OUT / evidence).write_text(text)
-        g = grade(text)
-        if g['refused']:
-            raise RuntimeError(f'Attempt {attempt}: the app refused the autocall: the supplied link is not a call link or was not selected; see {evidence}')
-        if g['connected'] and g['reply'] and g['audio'] and g['clean'] and g['ended'] and g['fed']:
-            result(CHECK, 'pass', f'Attempt {attempt}: mode={g["mode"]}, connected, agent audio subscribed, caller and reply in transcript, clean hangup acknowledged', [evidence])
-            result('app-line-call', 'pass', 'Saved line call passed the audio and clean-end grader', [evidence])
+    selected = set(filter(None, os.environ.get('HEYDAN_CHAT_ONLY', '').split(',')))
+    if not selected or selected.intersection({'sim-call', 'app-paired-call', 'app-paired-intent'}):
+        CHECK = 'sim-call'
+        if not os.environ.get('HEYDAN_CALL_PAIR_CMD'):
+            result(CHECK, 'skip', 'Missing HEYDAN_CALL_PAIR_CMD')
             return
-        # The host admitted the first call before connect failed: retry only once it acknowledged that call's end.
-        if attempt < int(attempts) and g['connect_timeout'] and g['ended']:
-            result(CHECK, 'skip', 'Connect timeout; retrying once', [evidence])
-            continue
-        raise RuntimeError(f'Attempt {attempt}: mode={g["mode"]}, claimed={claimed}, connected={g["connected"]}, reply={g["reply"]}, audio={g["audio"]}, clean={g["clean"]}, endAcknowledged={g["ended"]}, WAV={g["fed"]}; see {evidence}')
+        if not selected or selected.intersection({'sim-call', 'app-paired-call'}):
+            paired_test_call()
+        if not selected or 'app-paired-intent' in selected:
+            paired_test_call(intent=True)
+
+
+def paired_test_call(device=None, intent=False):
+    if not os.environ.get('HEYDAN_CALL_PAIR_CMD'):
+        raise RuntimeError('Missing HEYDAN_CALL_PAIR_CMD')
+    duration = int(os.environ.get('HEYDAN_CALL_SECONDS', HANGUP_AFTER))
+    if duration < 1:
+        raise ValueError('Call duration must be positive')
+    run_id = str(uuid.uuid4()).upper()
+    speech = os.environ.get('HEYDAN_CALL_SAY') or os.environ.get('HEYDAN_E2E_SAY') or 'Hey Stan. What is two plus two? Zulu.'
+    run('say', '-o', BUILD / 'feed.aiff', '-f', '-', stdin=speech)
+    wav = BUILD / 'feed.wav'
+    run('afconvert', '-f', 'WAVE', '-d', 'LEF32@48000', '-c', '1', BUILD / 'feed.aiff', wav)
+    if device:
+        domain = ['--device', device, '--domain-type', 'appDataContainer', '--domain-identifier', BUNDLE]
+        run('xcrun', 'devicectl', 'device', 'copy', 'to', *domain, '--source', wav, '--destination', 'Library/Caches/feed.wav')
+        logfile = OUT / 'logs' / 'phone-app.log'
+    else:
+        logfile = Path(sim('get_app_container', UDID, BUNDLE, 'data')) / 'Library/Caches/heydan.log'
+
+    def read_log():
+        if device:
+            copied = run('xcrun', 'devicectl', 'device', 'copy', 'from', *domain, '--source', 'Library/Caches/heydan.log',
+                         '--destination', logfile, check=False)
+            if copied.returncode:
+                return ''
+        return logfile.read_text() if logfile.exists() else ''
+
+    def launch(extra):
+        prefix = 'DEVICECTL_CHILD_' if device else 'SIMCTL_CHILD_'
+        variables = {'HEYDAN_CALL_RUN': run_id, 'HEYDAN_AUTOCALL': '1', 'HEYDAN_CHAT_CHECKS': '1', **extra}
+        env = ENV | {prefix + k: v for k, v in variables.items()}
+        if device:
+            run('xcrun', 'devicectl', 'device', 'process', 'launch', '--terminate-existing', '--device', device, BUNDLE, env=env)
+        else:
+            sim('launch', '--terminate-running-process', UDID, BUNDLE, env=env)
+
+    marker = f'test unpair run={run_id} ok=true'
+    text = ''
+    baseline = len(read_log())
+    link = pair_link('HEYDAN_CALL_PAIR_CMD')
+    try:
+        if intent:
+            launch({'HEYDAN_CALL_PAIR_LINK': link, 'HEYDAN_CALL_SEED': '1'})
+            deadline = time.monotonic() + LAUNCH_BOUND
+            while time.monotonic() < deadline:
+                text = read_log()[baseline:]
+                if f'test intent ready run={run_id}' in text:
+                    break
+                if REFUSED in text:
+                    raise RuntimeError('Intent test pairing refused')
+                time.sleep(1)
+            else:
+                raise RuntimeError('Intent test pairing timed out')
+            ui_check('app-paired-intent', 'ChatChecks/testPairedIntent', call_run=run_id)
+            return
+        launch({'HEYDAN_CALL_PAIR_LINK': link, 'HEYDAN_HANGUP_AFTER': str(duration),
+                'HEYDAN_FEED_WAV': 'feed.wav' if device else str(wav), 'HEYDAN_FEED_AFTER': '12'})
+        deadline = time.monotonic() + LAUNCH_BOUND + duration
+        while time.monotonic() < deadline:
+            text = read_log()[baseline:]
+            if marker in text or REFUSED in text:
+                break
+            time.sleep(1)
+        evidence = 'logs/paired-call.log'
+        (OUT / evidence).write_text(text)
+        paired = f'test pair run={run_id} device=' in text
+        result('app-call-pair', 'pass' if paired else 'fail', 'Disposable device paired' if paired else 'Pairing not observed')
+        grade_result = grade(text)
+        passed = paired and all(grade_result[k] for k in ('connected', 'reply', 'audio', 'clean', 'ended', 'fed'))
+        result('sim-call' if not device else 'device-call', 'pass' if passed else 'fail',
+               ', '.join(f'{k}={v}' for k, v in grade_result.items()), [evidence])
+        result('app-paired-call', 'pass' if grade_paired(text) else 'fail', 'Graded signed hangup, call audio and thread voice marks', [evidence])
+    finally:
+        if marker not in text:
+            launch({'HEYDAN_CALL_CLEANUP': '1'})
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline:
+                text = read_log()[baseline:]
+                if marker in text:
+                    break
+                time.sleep(1)
+        result('app-call-unpair', 'pass' if marker in text else 'fail',
+               'Test pairing cleared' if marker in text else 'Test pairing cleanup unconfirmed')
 
 
 if __name__ == '__main__':
     BUNDLE = sys.argv[1]
+    call_only = sys.argv[2:3] == ['call']
     for directory in (OUT / 'results', OUT / 'logs', BUILD):
         directory.mkdir(parents=True, exist_ok=True)
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, stop)
     try:
-        main()
+        if sys.argv[2:3] == ['device-call']:
+            CHECK = 'device-call'
+            paired_test_call(device=sys.argv[3])
+        else:
+            main()
         if any(row['status'] == 'fail' for row in RECORDS.values()):
             sys.exit(1)
     except Stopped as stopped:
@@ -609,8 +650,6 @@ if __name__ == '__main__':
         result(CHECK, 'fail', f'Unexpected {type(error).__name__}: {error}')
         raise
     finally:
-        if CHECK == 'sim-call' and RECORDS.get(CHECK, {}).get('status') == 'fail':
-            result('app-line-call', 'fail', RECORDS[CHECK]['detail'], RECORDS[CHECK]['evidence'])
         report()
         if UDID:
             sim('terminate', UDID, BUNDLE, check=False)

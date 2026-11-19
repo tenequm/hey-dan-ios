@@ -32,8 +32,8 @@ struct CallVoiceTests {
         #expect(state.pendingDetails?.preview == URL(string: "https://example.invalid/w.mp3"))
     }
 
-    @Test func protocol4HasNoVoiceAttribute() {
-        #expect(VoiceProtocol.Names(version: 4)?.voiceAttribute == nil)
+    @Test func protocol4IsUnsupported() {
+        #expect(VoiceProtocol.Names(version: 4) == nil)
     }
 
     @Test func protocol6NamesVoiceAttribute() {
@@ -47,9 +47,9 @@ struct CallVoiceTests {
     private let activeAttribute = #"{"v":1,"active":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"gen":7}"#
 
     private func live() -> LiveVoice { LiveVoice(callID: id, state: CallVoiceState(active: initial)) }
-    private func reply(gen: Int = 7, ok: Bool = true, error: String? = nil) -> ReviewReply {
+    private func reply(gen: Int = 7, ok: Bool = true, error: String? = nil) -> WorkerReply {
         let errorField = error.map { ",\"error\":\"\($0)\"" } ?? ""
-        return ReviewReply(payload: "{\"gen\":\(gen),\"ok\":\(ok),\"seq\":12\(errorField)}")!
+        return WorkerReply(payload: "{\"gen\":\(gen),\"ok\":\(ok),\"seq\":12\(errorField)}")!
     }
 
     @Test func encodesOnlyVoiceFieldsExactly() throws {
@@ -170,7 +170,7 @@ struct CallVoiceTests {
 
     @Test func invalidReplyFixtureRetainsDraftAndActiveVoice() throws {
         let fixture = #"{"gen":7,"ok":false,"seq":12,"error":"tts_invalid"}"#
-        let refused = try #require(ReviewReply(payload: fixture))
+        let refused = try #require(WorkerReply(payload: fixture))
         var voice = live()
         voice.begin(choice, gen: 7, for: id)
         voice.apply(reply: refused, for: id)
@@ -258,14 +258,8 @@ struct CallVoiceTests {
     }
 
     @Test func voiceRepublishKeepsModeWakeAndPicks() throws {
-        var session = ReviewSession(pick: .auto)
-        session.startCall()
-        var transcript = Transcript()
         let json = #"{"seq":11,"mode":"auto","draft":null,"wake":{"on":true,"waiting":false,"pauseSends":false}}"#
-        let state = try JSONDecoder().decode(ReviewState.self, from: Data(json.utf8))
-        let first = session.receive(state, transcript: &transcript, micOn: true)
-        #expect(first == false)
-        let before = session.review
+        let state = try JSONDecoder().decode(WorkerTurnState.self, from: Data(json.utf8))
         let picks = SettingsPicks.defaults
         var commands = CommandSettings(picks: picks)
         if let wake = state.wake { commands.apply(wake) }
@@ -273,13 +267,8 @@ struct CallVoiceTests {
         var voice = live()
         voice.begin(choice, gen: 7, for: id)
         voice.apply(reply: reply(), for: id)
-        let republished = try JSONDecoder().decode(ReviewState.self, from: Data(json.replacingOccurrences(of: "11", with: "12").utf8))
-        let closesMic = session.receive(republished, transcript: &transcript, micOn: true)
+        let republished = try JSONDecoder().decode(WorkerTurnState.self, from: Data(json.replacingOccurrences(of: "11", with: "12").utf8))
         if let wake = republished.wake { commands.apply(wake) }
-        #expect(closesMic == false)
-        #expect(session.seq == 12)
-        #expect(session.review == before)
-        #expect(session.pick == .auto)
         #expect(commands == beforeCommands)
     }
 

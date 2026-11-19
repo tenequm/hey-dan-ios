@@ -94,6 +94,7 @@ struct ConversationList: View {
         }
         .foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)
+        .task(id: chat.host) { await Pairings.shared.refreshInactiveAgents() }
         .sheet(isPresented: $pairing) { PairingView() }
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }

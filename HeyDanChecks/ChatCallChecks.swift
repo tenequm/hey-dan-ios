@@ -11,18 +11,6 @@ import XCTest
         return (app, call)
     }
 
-    func testSavedLineOptionsOpenSettings() {
-        let app = XCUIApplication()
-        app.launchEnvironment["HEYDAN_PREVIEW_LINES"] = "Stan"
-        app.launchForChecks()
-        XCTAssertTrue(app.staticTexts["Stan"].waitForExistence(timeout: 10))
-        app.buttons["controls.options"].tap()
-        let settings = app.buttons["options.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.tap()
-        XCTAssertTrue(app.buttons["Pair a host"].waitForExistence(timeout: 5))
-    }
-
     func testFixtureCallRefusal() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_CALL_REFUSAL": "1"])
         XCTAssertFalse(call.isEnabled)
@@ -41,12 +29,10 @@ import XCTest
         host.tap()
         XCTAssertTrue(app.buttons["Unpair"].waitForExistence(timeout: 5))
         app.buttons["chat.settings.host.back"].tap()
-        let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Voice lines")).firstMatch
-        lines.tap()
-        XCTAssertTrue(app.staticTexts["Saved lines"].waitForExistence(timeout: 5))
-        XCTAssertFalse(host.exists)
-        XCTAssertFalse(lines.exists)
-        app.buttons["close"].tap()
+        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Default agent")).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Taylor")).firstMatch.tap()
         // One control per tap: a tap on Voice opens the picker and nothing else in its row.
         app.buttons["Voice: Taylor"].tap()
         XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 10))

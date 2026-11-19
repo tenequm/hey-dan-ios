@@ -237,58 +237,13 @@ public struct CatalogPage: Decodable, Sendable, Equatable {
     }
 }
 
-public enum TTSPatchError: Error, Sendable, Equatable {
-    case bodyTooLarge(bytes: Int)
-}
-
 public enum TTSServiceFailure: Error, Sendable, Equatable {
     case server(status: Int, code: String, message: String)
     /// Stopped on this phone before any request: the device key is locked or the host is unpaired.
     case local(code: String, message: String)
     case pairedTransport
     case invalid(field: String)
-    case providerUnavailable(provider: String)
-    case badRequest
-    case upstream
-    case forbidden
-    case noRoute
-    case unreachable
-    case transport(String)
     case malformed
-    case refused(status: Int, body: String)
-
-    public init(status: Int, body: Data) {
-        if let failure = try? JSONDecoder().decode(ServiceError.self, from: body) {
-            switch failure.error {
-            case "tts_invalid", "invalid":
-                self = .invalid(field: failure.field ?? "tts")
-                return
-            case "provider_unavailable":
-                self = .providerUnavailable(provider: failure.provider ?? "voice")
-                return
-            case "bad_request":
-                self = .badRequest
-                return
-            case "upstream":
-                self = .upstream
-                return
-            default: break
-            }
-        }
-        let text = String(decoding: body, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        switch status {
-        case 403: self = .forbidden
-        case 404: self = .noRoute
-        case 503 where text == "Voice is not running": self = .providerUnavailable(provider: "voice")
-        default: self = .refused(status: status, body: text)
-        }
-    }
-
-    public init(transportError error: any Error) {
-        if case .unreachable = CallFailure(transportError: error) { self = .unreachable } else {
-            self = .transport(error.localizedDescription)
-        }
-    }
 
     public var message: String {
         switch self {
@@ -297,74 +252,8 @@ public enum TTSServiceFailure: Error, Sendable, Equatable {
         case let .invalid(field) where ["provider", "model", "voice"].contains(field):
             "The selected \(field) is not valid. Choose another and try again."
         case .invalid: "The selected voice setting is not valid. Choose another and try again."
-        case .providerUnavailable: "That voice provider is not configured on the server. Choose another provider."
-        case .badRequest: "The voice line could not understand this request."
-        case .upstream: "The voice provider could not load the catalog. Try again."
-        case .forbidden: "Access lost. Check this line's call link in Settings."
-        case .noRoute: "This voice line does not support voice settings."
-        case .unreachable: "Can't reach the voice line. Check that Tailscale is connected, then try again."
-        case .transport: "Could not reach the voice line. Try again."
-        case .malformed: "The voice line answered with something this app does not understand."
-        case let .refused(status, _): "The voice line refused the request (HTTP \(status))."
+        case .malformed: "The host answered with something this app does not understand."
         }
     }
 
-    private struct ServiceError: Decodable {
-        let error: String
-        let field: String?
-        let provider: String?
-
-        private enum CodingKeys: String, CodingKey { case error, field, provider }
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            error = try container.decode(String.self, forKey: .error)
-            field = try? container.decode(String.self, forKey: .field)
-            provider = try? container.decode(String.self, forKey: .provider)
-        }
-    }
-}
-
-public extension VoiceLine {
-    var ttsRequest: URLRequest {
-        URLRequest(url: Self.escapingPlus(URLComponents(url: endpoint("tts"), resolvingAgainstBaseURL: false)!))
-    }
-
-    func ttsPatchRequest(_ patch: TTSPatch) throws(TTSPatchError) -> URLRequest {
-        let body = Data(rpcPayload(patch).utf8)
-        guard body.count <= 1024 else { throw .bodyTooLarge(bytes: body.count) }
-        var request = ttsRequest
-        request.httpMethod = "PATCH"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
-        return request
-    }
-
-    func voicesRequest(provider: String, q: String?, language: String?, gender: String? = nil, cursor: String?, limit: Int) -> URLRequest {
-        var components = URLComponents(url: endpoint("voices"), resolvingAgainstBaseURL: false)!
-        var query = components.queryItems ?? []
-        query.append(URLQueryItem(name: "provider", value: provider))
-        for (name, value) in [("q", q), ("language", language), ("gender", gender), ("cursor", cursor)] {
-            if let value {
-                var utf16Length = 0
-                let scalars = value.unicodeScalars.prefix { scalar in
-                    let length = scalar.value > 0xFFFF ? 2 : 1
-                    guard utf16Length + length <= 512 else { return false }
-                    utf16Length += length
-                    return true
-                }
-                query.append(URLQueryItem(name: name, value: String(String.UnicodeScalarView(scalars))))
-            }
-        }
-        query.append(URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))))
-        components.queryItems = query
-        return URLRequest(url: Self.escapingPlus(components))
-    }
-
-    /// URLComponents leaves a literal `+` raw, and the host's URLSearchParams reads a raw `+` as a space.
-    private static func escapingPlus(_ components: URLComponents) -> URL {
-        var components = components
-        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        return components.url!
-    }
 }
