@@ -62,7 +62,7 @@ import UIKit
             let host = FixtureAppService.host
             saved.entries[host.absoluteString] = Entry(host: host, pairing: FixtureAppService.pairing,
                 features: ["files", "calls", "push", "voice-picker"])
-            if FixtureContent.capturing {
+            if FixtureContent.capturing || FixtureAppService.hasSecondAgent {
                 let studio = URL(string: "https://studio.example.ts.net")!
                 let pairing = PairResponse(deviceId: "dev_studio", userName: "mac mini", agents: [Agent(id: "ag_juno", name: "Juno")], protocol: 1, serverTime: 0)
                 saved.entries[studio.absoluteString] = Entry(host: studio, pairing: pairing, features: ["voice-picker"])
@@ -131,16 +131,21 @@ import UIKit
         publish()
     }
     func add(_ pairing: PairResponse, host: URL, features: [String]) throws(AppError) {
+        if publishes, CallController.shared.isCallActive { throw .callActive }
         var next = saved
         next.entries[host.absoluteString] = Entry(host: host, pairing: pairing, features: features)
         next.active = host.absoluteString
         try commit(next)
     }
-    func refreshInactiveAgents() async {
+    func refreshInactiveAgents(clientFor: (Entry) -> any AppService = { SignedClient(host: $0.host, deviceId: $0.deviceId) }) async {
         guard !fixture else { return }
-        for entry in entries where entry.host != active?.host && entry.features.contains("calls") {
+        for entry in entries where entry.host != active?.host {
             guard !Task.isCancelled else { return }
-            let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
+            let client = clientFor(entry)
+            if let hello = try? await client.hello(), !Task.isCancelled, entry.host != active?.host,
+               saved.entries[entry.host.absoluteString]?.deviceId == entry.deviceId {
+                refreshFeatures(hello.features, host: entry.host)
+            }
             guard let list = try? await client.conversations(), !Task.isCancelled, entry.host != active?.host else { continue }
             refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
         }
@@ -166,6 +171,9 @@ import UIKit
     }
     func setActive(host: URL) throws(AppError) {
         guard saved.entries[host.absoluteString] != nil else { throw .notPaired }
+        if publishes, CallController.shared.isCallActive, host != CallController.shared.pairedCallTarget?.paired.host {
+            throw .callActive
+        }
         var next = saved
         next.active = host.absoluteString
         try commit(next)
@@ -183,6 +191,7 @@ import UIKit
         }
     }
     func pair(_ text: String, configuration: URLSessionConfiguration = .ephemeral) async throws {
+        if publishes, CallController.shared.isCallActive { throw AppError.callActive }
         #if DEBUG
         if fixture && FixtureContent.capturing {
             throw AppError.server(status: 403, body: ErrorBody(error: "invalid_code", message: "This link was already used. Ask Dan for a new one with /pair."))

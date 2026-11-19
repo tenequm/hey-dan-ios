@@ -15,7 +15,17 @@ final class CallController: NSObject {
     static let shared = CallController()
 
     private(set) var pairedCallTarget: CallTarget?
-    private(set) var captionOrder: Int64 = 0
+    private(set) var captionOrders: [Int: Int64] = [:]
+    private(set) var endingNotice: Ending?
+
+    func dismissEndingNotice(attemptId: String?) {
+        if pairedCallTarget?.attemptId == attemptId { endingNotice = nil }
+    }
+
+    func protectsChat(host: URL?, deviceId: String?, agentId: String) -> Bool {
+        guard isCallActive, let paired = pairedCallTarget?.paired else { return false }
+        return paired.host == host && paired.deviceId == deviceId && paired.conversation.agent.id == agentId
+    }
 
     func matches(_ target: PairedCallTarget) -> Bool {
         guard let paired = pairedCallTarget?.paired else { return false }
@@ -29,8 +39,7 @@ final class CallController: NSObject {
         if Pairings.shared.active?.host != paired.host {
             do { try Pairings.shared.setActive(host: paired.host) } catch { return false }
         }
-        ChatController.shared.openConversation(paired.conversation.id)
-        return true
+        return ChatController.shared.openConversation(paired.conversation.id)
     }
 
 
@@ -91,8 +100,6 @@ final class CallController: NSObject {
     /// Auto mode's spoken-command settings: nil unless this call's worker speaks the commands vocabulary this
     /// app knows (`Names.commandsAttribute` in `VoiceProtocol.commandsVersions`).
     private(set) var commands: CommandSettings?
-    /// The spoken commands hints quote: the ones this call's worker announced, else the built-in ones.
-    private(set) var commandWords = CommandWords.builtIn
     /// The caller's picks: where every call starts, changed by `updateSettings`.
     private(set) var settingsPicks = SettingsStore.load()
     private(set) var liveVoice: CallVoiceState?
@@ -201,6 +208,7 @@ final class CallController: NSObject {
         }
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
+        endingNotice = nil
         pairedCallTarget = target
         call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
@@ -208,10 +216,9 @@ final class CallController: NSObject {
         agentName = target.paired.conversation.agent.name
         phase = .connecting
         openActiveConversation()
-        captionOrder = ChatController.shared.thread.compactMap(\.order).max() ?? target.paired.conversation.readOrder
+        captionOrders = [:]
         transcript = Transcript()
         commands = nil
-        commandWords = .builtIn
         trace(.call, "claim paired=true")
         #if DEBUG
         // Tests end every call, one the App Intent started too, this many seconds after it was claimed.
@@ -225,7 +232,7 @@ final class CallController: NSObject {
         #if DEBUG && targetEnvironment(simulator)
         if fixtureCall {
             phase = .live(.speaking)
-            transcript.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now)
+            editTranscript { $0.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now) }
             return id
         }
         #endif
@@ -551,6 +558,7 @@ final class CallController: NSObject {
         isMuted = false
         lastEnded = (id, ending)
         phase = .ended(ending)
+        endingNotice = ending.cause == .caller ? nil : ending
     }
 
     @ObservationIgnored private var hostEnd: Task<Void, Never>?
@@ -717,7 +725,21 @@ extension CallController {
     private func editTranscript(_ edit: (inout Transcript) -> Void) {
         var next = transcript
         edit(&next)
-        if next != transcript { transcript = next }
+        guard next != transcript else { return }
+        let previousID = transcript.lines.last?.id ?? 0
+        if let last = next.lines.last, last.id > previousID, let paired = pairedCallTarget?.paired, let first = next.lines.first {
+            // Capture the call thread's order even while another chat is on screen.
+            let chat = ChatController.shared
+            let id = paired.conversation.id
+            let newest = chat.reducer.entities.values.lazy.compactMap(\.identity)
+                .filter { $0.conversationId == id }.map(\.order).max() ?? 0
+            let order = max(newest, chat.conversation(id)?.readOrder ?? paired.conversation.readOrder)
+            captionOrders = captionOrders.filter { $0.key >= first.id }
+            for line in next.lines.reversed().prefix(while: { $0.id > previousID }) {
+                captionOrders[line.id] = order
+            }
+        }
+        transcript = next
     }
 
     /// A caption whose final never comes (the transcription was cut off) stops reading as interim.
@@ -738,7 +760,6 @@ extension CallController {
         if !transcript.marksCommands {
             trace(.room, "command words announced send=\(announced.send.count) discard=\(announced.discard.count)", id, level: .info)
         }
-        if announced != commandWords { commandWords = announced }
         editTranscript { $0.commandsAnnounced() }
     }
 

@@ -35,12 +35,7 @@ struct PairedSettingsSection: View {
                     if !agentHosts.isEmpty {
                         SettingsSection {
                             NavigationLink {
-                                List {
-                                    ForEach(agentHosts, id: \.host) { entry in
-                                        HostAgentToggles(entry: entry).id(entry.deviceId)
-                                    }
-                                }
-                                .navigationTitle("Agents")
+                                AgentSettings()
                             } label: {
                                 SettingsRow(title: "Agents", icon: "person.2", navigates: true)
                             }
@@ -97,6 +92,35 @@ struct PairedSettingsSection: View {
     }
 }
 
+private struct AgentSettings: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                HStack {
+                    GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() }
+                        .accessibilityIdentifier("chat.settings.agents.back")
+                    Spacer()
+                }
+                Text("Agents").textRole(theme.type.body, theme.weight.bold).accessibilityAddTraits(.isHeader)
+            }
+            .padding(.horizontal, theme.space.s4).padding(.vertical, theme.space.s1_5)
+            ScrollView {
+                VStack(alignment: .leading, spacing: theme.space.s6) {
+                    ForEach(Pairings.shared.entries.filter { $0.features.contains("agents") }, id: \.host) { entry in
+                        HostAgentToggles(entry: entry).id(entry.deviceId)
+                    }
+                }
+                .padding(theme.space.s4)
+            }
+        }
+        .foregroundStyle(theme.color.textPrimary)
+        .background(theme.color.surface.ignoresSafeArea()).toolbarVisibility(.hidden, for: .navigationBar)
+    }
+}
+
 private struct HostAgentToggles: View {
     @Environment(\.theme) private var theme
     let entry: Pairings.Entry
@@ -107,7 +131,7 @@ private struct HostAgentToggles: View {
     private var chat: ChatController { .shared }
 
     var body: some View {
-        Section(entry.host.host() ?? "Host") {
+        SettingsSection(entry.host.host() ?? "Host") {
             if let candidates {
                 let duplicates = Dictionary(grouping: candidates, by: \.name)
                 ForEach(candidates) { agent in
@@ -115,6 +139,7 @@ private struct HostAgentToggles: View {
                         SettingsRow(title: agent.name, icon: "person",
                             subtitle: duplicates[agent.name, default: []].count > 1 ? agent.chat : nil)
                     }
+                    .padding(.trailing, theme.space.s4)
                     .disabled(pending[agent.id] != nil)
                     .tint(theme.color.accent)
                     .accessibilityIdentifier("chat.settings.agent.\(agent.id)")
@@ -143,6 +168,10 @@ private struct HostAgentToggles: View {
     }
 
     private func update(_ agent: AgentCandidate, shown: Bool) {
+        if !shown, CallController.shared.protectsChat(host: entry.host, deviceId: entry.deviceId, agentId: agent.id) {
+            error = AppError.callActive.message
+            return
+        }
         pending[agent.id] = shown
         error = nil
         let service = chat.service(for: entry)
@@ -150,6 +179,12 @@ private struct HostAgentToggles: View {
             defer { pending.removeValue(forKey: agent.id) }
             do {
                 let result = try await service.setAgent(id: agent.id, request: AgentVisibilityRequest(shown: shown))
+                if !result.agent.shown { await AppDelegate.clearHidden(host: entry.host, agentID: agent.id) }
+                if chat.host != entry.host {
+                    if let list = try? await service.conversations(), chat.host != entry.host {
+                        Pairings.shared.refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
+                    }
+                }
                 revision += 1
                 if let index = candidates?.firstIndex(where: { $0.id == agent.id }) { candidates?[index] = result.agent }
             } catch { self.error = AppError.map(error).message }
@@ -163,7 +198,7 @@ struct PairedHostSettingsRows: View {
     var body: some View {
         SettingsSection("Paired hosts") {
             ForEach(Pairings.shared.entries, id: \.host) { entry in
-                NavigationLink { HostDetail(entry: entry) } label: { PairedHostRow(entry: entry) }
+                NavigationLink { HostDetail(pairing: entry) } label: { PairedHostRow(entry: entry) }
                     .accessibilityIdentifier("chat.settings.host.\(entry.host.host() ?? "")")
             }
             Button { showsPairing = true } label: { SettingsRow(title: "Pair a host", icon: "plus") }

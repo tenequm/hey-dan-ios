@@ -4,7 +4,8 @@ import SwiftUI
 struct HostDetail: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
-    let entry: Pairings.Entry
+    let pairing: Pairings.Entry
+    private var entry: Pairings.Entry { Pairings.shared.entries.first { $0.host == pairing.host } ?? pairing }
     @State private var removing = false
     @State private var error: String?
     private var name: String { entry.host.host() ?? "Host" }

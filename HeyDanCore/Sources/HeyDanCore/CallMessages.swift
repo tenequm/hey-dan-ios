@@ -291,14 +291,6 @@ public struct CommandWords: Sendable, Equatable {
         let discard: [Word]?
     }
 
-    /// Short hints quote the flagged send words in order, or the first word if none are flagged.
-    public var sendHint: String {
-        let flagged = send.filter(\.hint)
-        let words = (flagged.isEmpty ? Array(send.prefix(1)) : flagged).map { "\"\($0.say)\"" }
-        guard let last = words.last else { return "" }
-        let rest = words.dropLast()
-        return rest.isEmpty ? last : "\(rest.joined(separator: ", ")) or \(last)"
-    }
 }
 
 /// What the next spoken line answers: caller turn `turn` (the worker's number), no turn (`unprompted`), or the

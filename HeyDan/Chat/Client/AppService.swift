@@ -73,7 +73,7 @@ extension AppError {
         switch self {
         case .pairing(let failure): failure.localizedDescription
         case .limit(let message): message
-        case .callActive: "End the call to this host first."
+        case .callActive: "End the current call first."
         case .server(_, let body): body.message
         case .keyUnavailable: "Unlock your device and try again."
         case .notPaired: "Pair this device to continue."

@@ -17,30 +17,68 @@ private final class FixtureBundle {}
     private let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
         agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
 
-    func testLiveCaptionYieldsToTheHostTurn() {
+    func testLaterTurnUsesItsOwnThreadOrderEvenWhenTheWordsRepeat() {
+        let now = Date(timeIntervalSince1970: 100)
+        for interim in ["other one", "No, the"] {
+            var transcript = Transcript()
+            transcript.caption(segment: "one", text: "No, the other one", isFinal: true, fromCaller: true, at: now)
+            transcript.apply(.status(.init(turn: 1, status: .sent, text: "No, the other one")), at: now)
+            var message = Message(kind: .message, id: "one", conversationId: conversation.id, order: 8, seq: 10,
+                                  role: .user, text: "No, the other one.", files: [], reactions: [], voice: .caller, createdAt: 500_000)
+            let first = transcript.lines[0].id
+            transcript.caption(segment: "two", text: interim, isFinal: false, fromCaller: true, at: now)
+            let orders: [Int: Int64] = [first: 7, transcript.lines[1].id: 8]
+            func visible() -> [String] { transcript.liveCaptions(in: [.entity(.message(message))], after: orders).map(\.text) }
+            XCTAssertEqual(visible(), [interim])
+            let final = interim + " please"
+            transcript.caption(segment: "two", text: final, isFinal: true, fromCaller: true, at: now)
+            message.order = 9
+            XCTAssertEqual(visible(), [final])
+            message.text = final
+            message.voice = .spoken
+            XCTAssertEqual(visible(), [final])
+            message.voice = .caller
+            message.createdAt = 1
+            XCTAssertEqual(visible(), [])
+        }
+    }
+
+    func testAllPiecesOfTheOpenReplyYieldToTheirMatchingMessage() {
         var transcript = Transcript()
-        let start = Date(timeIntervalSince1970: 100)
-        transcript.caption(segment: "one", text: "Ready", isFinal: false, fromCaller: true, at: start)
-        var message = Message(kind: .message, id: "first", conversationId: conversation.id, order: 8, seq: 10,
-                              role: .user, text: "Ready?", files: [], reactions: [], voice: .caller, createdAt: 100_001)
-        func visible() -> String? { transcript.liveCaption(in: [.entity(.message(message))], after: 7)?.text }
-        XCTAssertNil(visible())
-        message.order = 7
-        XCTAssertEqual(visible(), "Ready")
-        message.order = 8
-        message.voice = .spoken
-        XCTAssertEqual(visible(), "Ready")
-        message.createdAt = 99_900
-        transcript.caption(segment: "two", text: "Ready", isFinal: true, fromCaller: false, at: start)
-        XCTAssertNil(visible())
-        message.role = .agent
-        message.voice = nil
-        XCTAssertNil(visible())
-        message.text = "An unrelated update."
-        XCTAssertEqual(visible(), "Ready")
-        message.text = "Ready?"
-        transcript.caption(segment: "three", text: "Ready", isFinal: true, fromCaller: false, at: start.addingTimeInterval(2))
-        XCTAssertEqual(visible(), "Ready")
+        transcript.apply(ReplyInfo(reply: 1), at: .now)
+        transcript.caption(segment: "one", text: "All set", isFinal: true, fromCaller: false, at: .now)
+        transcript.caption(segment: "two", text: "See you", isFinal: true, fromCaller: false, at: .now)
+        let orders = Dictionary(uniqueKeysWithValues: transcript.lines.map { ($0.id, Int64(5)) })
+        var message = Message(kind: .message, id: "one", conversationId: conversation.id, order: 6, seq: 15,
+                              role: .agent, text: "An unrelated reply", files: [], reactions: [], createdAt: 0)
+        func visible() -> [String] { transcript.liveCaptions(in: [.entity(.message(message))], after: orders).map(\.text) }
+        XCTAssertEqual(visible(), ["All set", "See you"])
+        message.text = "All set!"
+        XCTAssertEqual(visible(), ["See you"])
+        message.text = "All set! See you."
+        XCTAssertEqual(visible(), [])
+    }
+
+    func testDeliveryMarkerLastsUntilTheNextTurn() {
+        for (event, expected) in [(TurnMessage.unheard, "Not heard"),
+                                  (.dropped(.init(.asleep, text: "Ready")), "Not heard"),
+                                  (.status(.init(turn: 1, status: .lost, reason: .timeout, text: "Ready")), "Delivery not confirmed")] {
+            var transcript = Transcript()
+            transcript.caption(segment: "one", text: "Ready", isFinal: true, fromCaller: true, at: .now)
+            transcript.apply(event, at: .now)
+            XCTAssertEqual(transcript.deliveryMarker, expected)
+            transcript.caption(segment: "two", text: "Again", isFinal: false, fromCaller: true, at: .now)
+            XCTAssertNil(transcript.deliveryMarker)
+        }
+    }
+
+    func testCallEndingFeedbackUsesConnectionHistory() {
+        let remote = CallController.Ending(cause: .remote, message: "Call ended.")
+        let live = CallController.Phase.live(.speaking)
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: live, liveSince: .now), .success)
+        XCTAssertEqual(HeyDanApp.callFeedback(from: live, to: .ended(remote), liveSince: .now), .impact(weight: .light))
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: .ended(.byCaller), liveSince: nil), .impact(weight: .light))
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: .ended(.failure(.microphoneDenied)), liveSince: nil), .error)
     }
 
     func testAgentRefreshReplacesSnapshotAndIgnoresAnOldDevice() async throws {
@@ -59,6 +97,22 @@ private final class FixtureBundle {}
         XCTAssertEqual(restored.active?.agents, [conversation.agent])
         restored.refreshAgents([], host: host, deviceId: "current")
         XCTAssertEqual(restored.active?.agents, [])
+    }
+
+    func testInactiveHostDiscoversAgentsWithoutSwitching() async throws {
+        let account = "test-inactive-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        let inactive = URL(string: "https://old.example.com")!
+        let active = URL(string: "https://active.example.com")!
+        for host in [inactive, active] {
+            try pairings.add(FixtureAppService.pairing, host: host, features: [])
+        }
+        await pairings.refreshInactiveAgents { _ in FixtureAppService() }
+        XCTAssertEqual(pairings.active?.host, active)
+        XCTAssertEqual(pairings.entries.first { $0.host == inactive }?.features.contains("agents"), true)
+        XCTAssertEqual(pairings.active?.features, [])
     }
 
     /// The signed start, end and cancel as the contract fixtures write them, and the fixture grant decoded.

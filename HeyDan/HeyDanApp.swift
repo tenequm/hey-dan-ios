@@ -14,6 +14,7 @@ import Security
 @main
 struct HeyDanApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @State private var wasBackgrounded = false
     @State private var pairedHost: Pairings.Entry?
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #if DEBUG
@@ -63,16 +64,15 @@ struct HeyDanApp: App {
                 .environment(\.pairingConfirmation, $pairedHost)
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     Self.removeLegacyLinks()
-                    if phase == .active { ChatController.shared.setActive(true) }
-                    if phase == .background { ChatController.shared.setActive(false) }
-                    if phase == .active, CallController.shared.openActiveConversation() { pairedHost = nil }
+                    ChatController.shared.setActive(phase != .background)
+                    if phase == .background { wasBackgrounded = true }
+                    if phase == .active, wasBackgrounded {
+                        wasBackgrounded = false
+                        if CallController.shared.openActiveConversation() { pairedHost = nil }
+                    }
                 }
                 .sensoryFeedback(trigger: CallController.shared.phase) { old, new in
-                    switch new {
-                    case .live where old == .connecting: .success
-                    case .ended(let ending): ending.cause == .caller ? .impact(weight: .light) : .error
-                    default: nil
-                    }
+                    Self.callFeedback(from: old, to: new, liveSince: CallController.shared.liveSince)
                 }
                 .environment(\.theme, Theme.dark)
                 .preferredColorScheme(.dark)
@@ -82,6 +82,14 @@ struct HeyDanApp: App {
                 .task { await Self.debugScript() }
                 .transaction { if uiTest { $0.disablesAnimations = true; $0.animation = nil } }
                 #endif
+        }
+    }
+
+    static func callFeedback(from old: CallController.Phase, to new: CallController.Phase, liveSince: Date?) -> SensoryFeedback? {
+        switch new {
+        case .live where old == .connecting: .success
+        case .ended(let ending): CallController.isFailure(ending, liveSince: liveSince) ? .error : .impact(weight: .light)
+        default: nil
         }
     }
 

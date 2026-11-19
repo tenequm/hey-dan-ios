@@ -229,6 +229,29 @@ struct MessageNotificationTests {
         #expect(AppDelegate.entry(for: data, in: entries) == nil)
     }
 
+    @Test func hiddenPushClearsOnlyItsHostAndRoutesBackToTheList() async throws {
+        let data = payload.hd
+        let host = try #require(URL(string: data.h))
+        #expect(AppDelegate.matchesHidden(data, host: host, conversations: [data.c], agentID: nil))
+        #expect(!AppDelegate.matchesHidden(data, host: URL(string: "https://other.example.com")!, conversations: [data.c], agentID: nil))
+        #expect(!AppDelegate.matchesHidden(data, host: host, conversations: ["other"], agentID: nil))
+        let service = FixtureAppService()
+        let chat = ChatController(service: service, store: SwiftDataThreadStore(inMemory: true), monitorsNetwork: false)
+        chat.setActive(false)
+        chat.selectPairing(FixtureAppService.pairing, host: host)
+        await chat.routeNotification(to: data.c)
+        #expect(chat.openConversationId == data.c)
+        await chat.routeNotification(to: "unknown")
+        #expect(chat.openConversationId == nil)
+        var hidden = try #require(chat.conversation(data.c))
+        hidden.seq += 1
+        hidden.hidden = true
+        chat.reducer.upsert(hidden)
+        chat.openConversation("other")
+        await chat.routeNotification(to: data.c)
+        #expect(chat.openConversationId == nil)
+    }
+
     @Test func deliveredNotificationsClearOnlyWhenReadOrderRises() {
         #expect(!AppDelegate.clearsDelivered(previous: nil, readOrder: 118))
         #expect(!AppDelegate.clearsDelivered(previous: 118, readOrder: 118))

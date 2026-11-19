@@ -55,45 +55,71 @@ private struct UserBubble: ViewModifier {
 }
 
 extension Transcript {
-    func liveCaption(in rows: [ThreadRow], after order: Int64) -> Line? {
-        guard let line = lines.last, line.kind == .caption, !line.unspoken, !line.wakeOnly,
-              line.mark == nil || line.mark == .sent else { return nil }
-        let speaker: Voice = line.speaker == .caller ? .caller : .spoken
-        // The chat and the room deliver independently, and a host message can contain several caption segments.
-        func words(_ text: String) -> String {
-            text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: " ").lowercased()
+    func liveCaptions(in rows: [ThreadRow], after orders: [Int: Int64]) -> [Line] {
+        let live = liveLineIDs
+        return lines.filter { line in
+            guard live.contains(line.id), line.kind == .caption, !line.unspoken, !line.wakeOnly,
+                  line.mark == nil || line.mark == .sent, let order = orders[line.id] else { return false }
+            let speaker: Voice = line.speaker == .caller ? .caller : .spoken
+            let caption = captionWords(line.command?.words ?? line.text)
+            for row in rows.reversed() {
+                guard case .entity(.message(let message)) = row else { continue }
+                if message.order <= order { break }
+                // A Jev agent's saved reply has no spoken tag.
+                guard message.voice == speaker || (line.speaker == .agent && message.role == .agent && message.voice == nil)
+                else { continue }
+                if !caption.isEmpty, (" " + captionWords(message.text) + " ").contains(" " + caption + " ") { return false }
+            }
+            return true
         }
-        let caption = words(line.text)
-        var matchingMessages = 0
-        for row in rows.reversed() {
-            guard case .entity(.message(let message)) = row, message.order > order else { continue }
-            let tagged = message.voice == speaker
-            // A Jev agent's saved reply has no spoken tag. Only its words can identify that reply.
-            guard tagged || (line.speaker == .agent && message.role == .agent && message.voice == nil) else { continue }
-            if tagged, Double(message.createdAt) / 1000 >= line.at.timeIntervalSince1970 { return nil }
-            if !caption.isEmpty, (" " + words(message.text) + " ").contains(" " + caption + " ") { matchingMessages += 1 }
+    }
+
+    var deliveryMarker: String? {
+        guard let last = lines.last else { return nil }
+        if last.kind == .unheard { return "Not heard" }
+        switch last.mark {
+        case .lost: return "Delivery not confirmed"
+        case .dropped: return "Not heard"
+        default: return nil
         }
-        if matchingMessages > 0 {
-            let occurrences = lines.filter { $0.speaker == line.speaker && words($0.text) == caption }.count
-            if matchingMessages >= occurrences { return nil }
-        }
-        return line
+    }
+
+    private func captionWords(_ text: String) -> String {
+        text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: " ").lowercased()
     }
 }
 
-struct LiveCaptionRow: View {
+struct LiveCaptionRows: View {
     @Environment(\.theme) private var theme
-    let line: Transcript.Line
+    let rows: [ThreadRow]
+
+    var body: some View {
+        let call = CallController.shared
+        let lines = call.transcript.liveCaptions(in: rows, after: call.captionOrders)
+        if let first = lines.first {
+            LiveCaptionRow(text: lines.map(\.text).joined(separator: " "), speaker: first.speaker)
+        }
+        if let marker = call.transcript.deliveryMarker {
+            Text(marker).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+}
+
+private struct LiveCaptionRow: View {
+    @Environment(\.theme) private var theme
+    let text: String
+    let speaker: Transcript.Line.Speaker
 
     var body: some View {
         Group {
-            if line.speaker == .caller {
-                Text(line.text).modifier(UserBubble())
+            if speaker == .caller {
+                Text(text).modifier(UserBubble())
                     .padding(.leading, theme.space.s10)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 VStack(alignment: .leading, spacing: theme.space.s1_5) {
-                    Text(line.text)
+                    Text(text)
                     Label("Speaking", systemImage: "speaker.wave.2").textRole(theme.type.caption)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -189,8 +189,12 @@ actor SwiftDataThreadStore: ThreadStore {
         do {
             if snapshot.replacesCache { try deleteRecords(deviceId: deviceId) }
             let encoder = JSONEncoder()
-            if let allowed = snapshot.allowedConversations.map(Array.init) {
+            if let listed = snapshot.allowedConversations {
                 let sequence = snapshot.listSequence
+                let newer = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
+                    $0.deviceId == deviceId && $0.kind == "conversation" && $0.seq > sequence
+                }))
+                let allowed = Array(listed.union(newer.map(\.conversationId)))
                 for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
                     $0.deviceId == deviceId && $0.seq <= sequence && !allowed.contains($0.conversationId)
                 })) { modelContext.delete(row) }
