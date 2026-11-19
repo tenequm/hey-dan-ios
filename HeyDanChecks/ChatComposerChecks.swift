@@ -68,7 +68,7 @@ final class ChatComposerChecks: XCTestCase {
         play.tap()
         XCTAssertTrue(play.wait(for: \.label, toEqual: "Pause voice message", timeout: 5))
         play.tap()
-        XCTAssertEqual(play.label, "Play voice message")
+        XCTAssertTrue(play.wait(for: \.label, toEqual: "Play voice message", timeout: 5))
         play.tap()
         XCTAssertTrue(play.wait(for: \.label, toEqual: "Pause voice message", timeout: 5))
     }
