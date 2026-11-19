@@ -209,6 +209,8 @@ final class CallController: NSObject {
     }
 
     private func place(_ id: UUID) async {
+        VoiceMessagePlayback.shared.recording?.finish(.interrupted)
+        VoiceMessagePlayback.shared.stop()
         await VoiceSample.stop()
         trace(.audio, "sample stop drained", id)
         guard call?.id == id else { return }

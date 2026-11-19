@@ -164,13 +164,12 @@ actor FixtureAppService: AppService {
         reached.seq = sequence
         reached.delivery = .reached
         if let index = reached.files.firstIndex(where: { $0.kind == .audio }) {
-            reached.text = "Recorded fixture message."
-            reached.files[index].transcript = .init(state: .done, text: reached.text)
+            reached.files[index].transcript = .init(state: .done, text: "Recorded fixture message.")
         }
         if let index = messages.firstIndex(where: { $0.id == reached.id }) { messages[index] = reached }
         try publish(event(.message, reached, id: sequence))
-        if reached.files.contains(where: { $0.kind == .audio }), conversation.lastMessage?.id == reached.id {
-            try publishPreview(reached, text: reached.text)
+        if let preview = reached.files.first(where: { $0.kind == .audio })?.transcript?.text, conversation.lastMessage?.id == reached.id {
+            try publishPreview(reached, text: preview)
         }
         sequence += 1
         let reply = Message(kind: .message, id: "msg_reply_" + stored.id, conversationId: stored.conversationId,
