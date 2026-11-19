@@ -73,9 +73,10 @@ enum FixtureContent {
         }
     }
 
-    static let voices = [VoiceLineCatalogVoice(id: "aria", name: "Aria", language: "en", description: "Warm, steady"),
-                         VoiceLineCatalogVoice(id: "roger", name: "Roger", language: "en", description: "Calm, low"),
-                         VoiceLineCatalogVoice(id: "sarah", name: "Sarah", language: "en", description: "Bright, quick")]
+    static let voices = [VoiceLineCatalogVoice(id: "aria", name: "Aria", language: "en", gender: "female", description: "Warm, steady"),
+                         VoiceLineCatalogVoice(id: "roger", name: "Roger", language: "en", gender: "male", description: "Calm, low",
+                                               preview: ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_SAMPLE"].map { URL(fileURLWithPath: $0) }),
+                         VoiceLineCatalogVoice(id: "sarah", name: "Sarah", language: "en", gender: "female", description: "Bright, quick")]
     static let voice: TTSView = {
         let details = ChoiceDetails(provider: "elevenlabs", providerName: "ElevenLabs", model: "eleven_v4", modelName: "Eleven v4",
                                     voice: "aria", voiceName: "Aria", language: "en", status: .resolved)

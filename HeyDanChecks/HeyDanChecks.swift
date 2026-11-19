@@ -53,8 +53,19 @@ final class HeyDanChecks: XCTestCase {
         app.launchForChecks()
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 15))
         let definitions = IntentDefinitions(bundleIdentifier: Self.appID)
-        let agents = definitions.entities["AgentEntity"]
-        let defaults = try await agents.entities(identifiers: [UUID(uuidString: "00000000-0000-0000-0000-000000000000")!])
+        let agents = definitions.entities["VoiceLineEntity"]
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let deadline = ContinuousClock.now + .seconds(15)
+        // After simctl install the app can already be open while iOS still registers its intent metadata.
+        let defaults = try await {
+            while true {
+                do { return try await agents.entities(identifiers: [id]) }
+                catch let error as NSError where error.domain == "AppIntentsServicesMetadataErrorDomain"
+                        && error.code == 400 && ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(250))
+                }
+            }
+        }()
         let suggested = try await agents.suggestedEntities()
         XCTAssertTrue(suggested.contains(try XCTUnwrap(defaults.first)))
         XCTAssertGreaterThan(suggested.count, 1)

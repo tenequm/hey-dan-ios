@@ -287,12 +287,53 @@ actor FixtureAppService: AppService {
     }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) {}
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) {}
+    private var voiceFault = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_VOICE_FAILURE"]
+    private var savedVoices: [String: TTSView] = [:]
+
     func voice(conversationId: String) async throws(AppError) -> TTSView {
-        if FixtureContent.capturing { return FixtureContent.voice }
-        throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Voice settings are unavailable in this preview."))
+        if voiceFault == "load" {
+            voiceFault = nil
+            throw .transport(.offline)
+        }
+        let view = savedVoices[conversationId] ?? FixtureContent.voice
+        if voiceFault == "names" {
+            voiceFault = nil
+            let unknown = ChoiceDetails(provider: view.saved.provider, status: .lookupFailed)
+            return TTSView(effective: view.effective, saved: view.saved, providers: view.providers,
+                           details: TTSDetails(saved: unknown, effective: unknown))
+        }
+        return view
     }
-    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView { try await voice(conversationId: conversationId) }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage { CatalogPage(provider: query.provider, voices: FixtureContent.capturing ? FixtureContent.voices : []) }
+
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView {
+        let initial = FixtureContent.voice
+        switch request {
+        case .reset: savedVoices[conversationId] = nil
+        case let .choice(choice):
+            guard let provider = initial.providers.first(where: { $0.id == choice.provider && $0.available }) else {
+                throw .server(status: 503, body: ErrorBody(error: "provider_unavailable", message: "Provider unavailable"))
+            }
+            let model = choice.model ?? provider.default.model
+            let id = choice.voice ?? provider.default.voice
+            let details = ChoiceDetails(provider: provider.id, providerName: provider.name, model: model, voice: id,
+                voiceName: FixtureContent.voices.first { $0.id == id }?.name, status: .resolved)
+            savedVoices[conversationId] = TTSView(effective: TTSChoice(provider: provider.id, model: model, voice: id),
+                saved: SavedTTSChoice(provider: provider.id, model: model, voice: id), providers: initial.providers,
+                details: TTSDetails(saved: details, effective: details))
+        }
+        if voiceFault == "lost-save" { throw .transport(.timeout) }
+        return try await voice(conversationId: conversationId)
+    }
+
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage {
+        if voiceFault == "catalog" { throw .transport(.offline) }
+        let voices = FixtureContent.voices.filter { voice in
+            (query.q.map { voice.name.localizedCaseInsensitiveContains($0) } ?? true)
+                && (query.gender == nil || query.gender == voice.gender)
+                && (query.language == nil || query.language == voice.language)
+        }
+        return CatalogPage(provider: query.provider, voices: query.provider == "elevenlabs" ? voices : [])
+    }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) {}
     func unpair() async throws(AppError) {}
 }

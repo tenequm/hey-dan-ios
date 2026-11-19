@@ -19,6 +19,19 @@ spec.loader.exec_module(harness)
 
 class SimulatorSelectionTests(unittest.TestCase):
 
+    def test_call_launch_forwards_drills_only_to_the_call(self):
+        hooks = {'HEYDAN_STEPS': '8:mute,9:unmute', 'HEYDAN_PAIR_CMD': 'unused', 'HEYDAN_PAIR_LINK': 'unused',
+                 'HEYDAN_CALL_RUN': 'wrong', 'HEYDAN_CALL_PAIR_CMD': 'unused'}
+        with patch.dict(os.environ, hooks):
+            for device, prefix in [(False, 'SIMCTL_CHILD_'), (True, 'DEVICECTL_CHILD_')]:
+                launched = harness.call_launch_environment('run', 'Test Agent', {}, device)
+                self.assertEqual(launched[prefix + 'HEYDAN_STEPS'], hooks['HEYDAN_STEPS'])
+                self.assertEqual(launched[prefix + 'HEYDAN_CALL_RUN'], 'run')
+                self.assertEqual(launched[prefix + 'HEYDAN_CALL_AGENT'], 'Test Agent')
+                self.assertFalse(any(key.endswith(('_CMD', '_LINK')) for key in launched))
+                cleanup = harness.call_launch_environment('run', 'Test Agent', {'HEYDAN_CALL_CLEANUP': '1'}, device)
+                self.assertNotIn(prefix + 'HEYDAN_STEPS', cleanup)
+
     def test_deadline_counts_only_enabled_tests_in_the_selection(self):
         inventory = ("Plan HeyDanSimulatorTests\n"
                      "\tHeyDanChecks/ChatCallChecks/testCover()\n"

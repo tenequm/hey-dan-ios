@@ -159,6 +159,32 @@ import XCTest
         app.buttons["keys.call"].tap()
     }
 
+    func testSavedCallShortcutUsesTheCurrentDefault() async throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-defaultCallAgent", "D74EE161-D39B-8676-8284-073F5027332F"]
+        app.launchEnvironment = ["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"]
+        app.launchForChecks()
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
+        let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
+        let definitions = IntentDefinitions(bundleIdentifier: bundle)
+        let entities = definitions.entities["VoiceLineEntity"]
+        for id in [UUID(uuidString: "00000000-0000-0000-0000-000000000000")!, UUID()] {
+            let matches = try await entities.entities(identifiers: [id])
+            let destination = try XCTUnwrap(matches.first)
+            let intent = definitions.intents["CallLineIntent"].makeIntent(destination: destination,
+                audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))
+            XCUIDevice.shared.press(.home)
+            try await intent.run()
+            app.activate()
+            let end = app.buttons["keys.call"]
+            XCTAssertTrue(end.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.scrollViews["chat.thread"].exists)
+            XCTAssertTrue(app.navigationBars["Alex"].exists)
+            end.tap()
+            XCTAssertTrue(app.buttons["chat.call"].waitForExistence(timeout: 5))
+        }
+    }
+
     func testBackgroundControlReachesPairedCallAdmission() async throws {
         let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "control-admission"])
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
@@ -179,6 +205,25 @@ import XCTest
             XCTAssertTrue(admission.label.contains("foreground call"))
             print("check: CallKit admitted the Control after foregrounding")
         }
+    }
+
+    func testBackgroundCallShortcutReachesPairedCallAdmission() async throws {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
+        let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
+        let definitions = IntentDefinitions(bundleIdentifier: bundle)
+        let agents = try await definitions.entities["VoiceLineEntity"].suggestedEntities()
+        let intent = definitions.intents["CallLineIntent"].makeIntent(destination: try XCTUnwrap(agents.first),
+            audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))
+        XCUIDevice.shared.press(.home)
+        do {
+            try await intent.run()
+            XCTFail("The fixture host refuses admission")
+        } catch {}
+        app.activate()
+        let reason = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "calls are unavailable in this preview"))
+        XCTAssertTrue(reason.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Call again"].exists)
     }
 
     func testFailureOffersCallAgainInThread() {

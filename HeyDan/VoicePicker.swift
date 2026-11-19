@@ -827,6 +827,7 @@ struct VoicePickerSheet: View {
                     if voice.id == model.draft?.voice { Image(systemName: "checkmark").accessibilityLabel("Selected") }
                 }
                 .frame(minHeight: theme.control.touchTarget)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if voice.preview != nil {
@@ -834,7 +835,7 @@ struct VoicePickerSheet: View {
                     if sample.playing == voice.id { VoiceSample.release(sample) } else { VoiceSample.play(voice, using: sample) }
                 } label: { Image(systemName: sample.playing == voice.id ? "stop.fill" : "play.fill").frame(width: theme.control.touchTarget, height: theme.control.touchTarget) }
                     .buttonStyle(.glass).disabled(samplesUnavailable || model.invalidated)
-                    .accessibilityLabel("Voice sample: \(voice.name)")
+                    .accessibilityLabel(sample.playing == voice.id ? "Stop sample: \(voice.name)" : "Voice sample: \(voice.name)")
                     .accessibilityHint(samplesUnavailable ? "Use for this call to hear it on the next reply" : "Sample does not demonstrate the selected model")
                     .accessibilityIdentifier(AXID.pickerSample(voice.id))
             }

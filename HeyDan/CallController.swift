@@ -229,8 +229,15 @@ final class CallController: NSObject {
             }
         }
         #endif
+        VoiceMessagePlayback.shared.recording?.finish(.interrupted)
+        VoiceMessagePlayback.shared.stop()
+        await VoiceSample.stop()
+        trace(.audio, "sample stop drained", id)
+        guard call?.id == id else { return id }
         #if DEBUG && targetEnvironment(simulator)
         if fixtureCall {
+            let view = FixtureContent.voice
+            liveVoice = CallVoiceState(active: view.effective, activeDetails: view.details?.effective)
             phase = .live(.speaking)
             editTranscript { $0.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now) }
             return id
@@ -241,11 +248,6 @@ final class CallController: NSObject {
     }
 
     private func place(_ id: UUID) async {
-        VoiceMessagePlayback.shared.recording?.finish(.interrupted)
-        VoiceMessagePlayback.shared.stop()
-        await VoiceSample.stop()
-        trace(.audio, "sample stop drained", id)
-        guard call?.id == id else { return }
         let granted = await AVAudioApplication.requestRecordPermission()
         trace(.audio, "mic permission granted=\(granted)", id)
         guard granted else { return finish(id, .failure(.microphoneDenied), endedBy: nil) }
@@ -1150,6 +1152,22 @@ extension CallController {
 
     func requestVoice(_ choice: TTSChoice, for id: UUID) async -> VoiceRequestOutcome {
         guard call?.id == id else { return .over }
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall, let active = liveVoice {
+            if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_VOICE_FAILURE"] == "live" { return .refused(reason: "tts_invalid") }
+            let gen = (active.gen ?? 0) + 1
+            let details = ChoiceDetails(provider: choice.provider, voice: choice.voice,
+                voiceName: FixtureContent.voices.first { $0.id == choice.voice }?.name, status: .resolved)
+            liveVoice = CallVoiceState(active: active.active, activeDetails: active.activeDetails,
+                                       pending: choice, pendingDetails: details, gen: gen)
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                guard call?.id == id, liveVoice?.gen == gen else { return }
+                liveVoice = CallVoiceState(active: choice, activeDetails: details, gen: gen)
+            }
+            return .queued(gen: gen)
+        }
+        #endif
         guard liveVoice != nil, let method = call?.names?.settingsMethod else { return .unsupported }
         guard call?.voice?.inFlight == false else {
             trace(.rpc, "voice request skipped: one in flight", id)
