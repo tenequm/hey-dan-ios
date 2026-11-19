@@ -240,3 +240,48 @@ private struct CheckFailure: Error { let label: String }
     let encoded = try JSONEncoder().encode(attachment.transcript?.state)
     #expect(try JSONDecoder().decode(String.self, from: encoded) == "unavailable")
 }
+
+@Test func agentSettingsWireFixtures() throws {
+    let fixtures = try coreFixtures()
+    let hello = try fixtureDecode(HelloResponse.self, #require(fixtures["hello"]))
+    #expect(hello.features.contains("agent-status") && hello.features.contains("agent-settings"))
+    let status = try fixtureDecode(AgentStatusResponse.self, #require(fixtures["agentStatusResponse"])).status
+    #expect(status.agent.model.id == nil)
+    #expect(status.agent.chipLabel == "Sonnet 5.5 - High")
+    #expect(status.agent.effort == nil && status.agent.effectiveEffort == "high")
+    #expect(status.session.contextTokens == nil)
+    let request = try fixtureDecode(AgentSettingsRequest.self, #require(fixtures["agentSettingsRequest"]))
+    let saved = try fixtureDecode(AgentSettingsResponse.self, #require(fixtures["agentSettingsResponse"])).agent
+    #expect(request.model == .value("opus"))
+    #expect(saved.model.id == "claude-opus-5")
+    #expect(saved.chipLabel == "Opus 5 - High")
+    let failures = try #require(fixtures["agentSettingsErrors"] as? [String: [String: Any]])
+    for (name, code) in [("invalidModel", "invalid_value"), ("invalidEffort", "invalid_value"),
+                         ("invalidSettings", "invalid_value"), ("forbidden", "forbidden"), ("notFound", "not_found")] {
+        let failure = try #require(failures[name])
+        #expect(try fixtureDecode(ErrorBody.self, #require(failure["body"])).error == code)
+    }
+    #expect(request.effort == .value(try #require(saved.effort)))
+    let patch = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: nil, effort: .value("low")))) as? [String: String]
+    #expect(patch == ["effort": "low"])
+    let reset = try fixtureDecode(AgentSettingsRequest.self, #require(fixtures["agentSettingsResetRequest"]))
+    #expect(reset.model == .inherited && reset.effort == .inherited)
+    let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(reset)) as? [String: NSNull]
+    #expect(encoded?.keys.sorted() == ["effort", "model"])
+    let partial = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: .inherited, effort: nil))) as? [String: NSNull]
+    #expect(partial?.keys.sorted() == ["model"])
+    #expect(AgentStatus.effortName("xhigh") == "Extra high")
+}
+
+@Test func contextUsageFormatting() {
+    func usage(_ used: Int?, _ window: Int?) -> AgentStatus.Session {
+        .init(contextTokens: used, contextWindow: window, turns: nil, outputTokens: nil, queueDepth: nil)
+    }
+    #expect(usage(nil, 165000).usageDescription() == nil)
+    #expect(usage(84000, 165000).usageDescription() == "84k of 165k used")
+    #expect(usage(84000, 165000).usageDescription(includingPercent: true) == "84k of 165k tokens used (51%)")
+    #expect(usage(0, 1000000).usageDescription(includingPercent: true) == "0 of 1M tokens used (0%)")
+    #expect(usage(432, 0).usageDescription() == "432 tokens used")
+    #expect(usage(99000, 165000).usageDescription(spoken: true) == "99 thousand of 165 thousand tokens, 60 percent")
+    #expect(usage(80000, 100000).usageDescription(spoken: true) == "80 thousand of 100 thousand tokens, 80 percent, nearly full")
+}

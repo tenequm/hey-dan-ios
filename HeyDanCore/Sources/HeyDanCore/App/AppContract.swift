@@ -189,6 +189,174 @@ nonisolated public struct AgentResponse: Sendable, Equatable, Codable {
     public init(agent: AgentCandidate) { self.agent = agent }
 }
 
+nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
+    public struct Model: Codable, Equatable, Sendable {
+        public let id: String?
+        public let label: String?
+        public var displayName: String { label ?? id ?? "Default" }
+
+        public init(id: String?, label: String?) {
+            self.id = id
+            self.label = label
+        }
+    }
+
+    public struct Settings: Codable, Equatable, Sendable {
+        public let id: String
+        public let name: String
+        public var model: Model
+        public let defaultModel: Model
+        public var effort: String?
+        /// The host's level for an agent without its own (`NANOCLAW_DEFAULT_EFFORT`).
+        public let defaultEffort: String?
+        public let provider: String?
+        public let canEdit: Bool
+        public var configUpdatedAt: String?
+
+        public var inheritedLabel: String {
+            defaultModel.id == nil ? "Provider default" : "Default - " + defaultModel.displayName
+        }
+
+        /// The level the agent runs at: its own, else the host default.
+        public var effectiveEffort: String? { effort ?? defaultEffort }
+
+        public var chipLabel: String {
+            let name = model.id == nil ? (defaultModel.id == nil ? inheritedLabel : defaultModel.displayName) : model.displayName
+            return [name, effectiveEffort.map(AgentStatus.effortName)].compactMap { $0 }.joined(separator: " - ")
+        }
+
+        public var spokenChipLabel: String {
+            let name = model.id == nil ? inheritedLabel : model.displayName
+            return "Model, " + name + (effectiveEffort.map { ", effort " + AgentStatus.effortName($0) } ?? "")
+        }
+
+        public init(id: String, name: String, model: Model, defaultModel: Model, effort: String?,
+                    defaultEffort: String? = nil, provider: String?, canEdit: Bool, configUpdatedAt: String?) {
+            self.id = id
+            self.name = name
+            self.model = model
+            self.defaultModel = defaultModel
+            self.effort = effort
+            self.defaultEffort = defaultEffort
+            self.provider = provider
+            self.canEdit = canEdit
+            self.configUpdatedAt = configUpdatedAt
+        }
+    }
+
+    public struct Session: Codable, Equatable, Sendable {
+        public let contextTokens: Int?
+        public let contextWindow: Int?
+        public let turns: Int?
+        public let outputTokens: Int?
+        public let queueDepth: Int?
+
+        public init(contextTokens: Int?, contextWindow: Int?, turns: Int?, outputTokens: Int?, queueDepth: Int?) {
+            self.contextTokens = contextTokens
+            self.contextWindow = contextWindow
+            self.turns = turns
+            self.outputTokens = outputTokens
+            self.queueDepth = queueDepth
+        }
+    }
+
+    public static func effortName(_ effort: String) -> String {
+        ["low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"][effort] ?? effort
+    }
+
+    public struct Options: Codable, Equatable, Sendable {
+        public let models: [Model]
+        public let efforts: [String]
+
+        public init(models: [Model], efforts: [String]) {
+            self.models = models
+            self.efforts = efforts
+        }
+    }
+
+    public var agent: Settings
+    public let session: Session
+    public let options: Options
+
+    public init(agent: Settings, session: Session, options: Options) {
+        self.agent = agent
+        self.session = session
+        self.options = options
+    }
+}
+
+extension AgentStatus.Session {
+    public var usageFraction: Double? {
+        guard let contextTokens, let contextWindow, contextWindow > 0 else { return nil }
+        return Double(max(0, contextTokens)) / Double(contextWindow)
+    }
+
+    public func usageDescription(includingPercent: Bool = false, spoken: Bool = false) -> String? {
+        guard let contextTokens else { return nil }
+        func abbreviated(_ tokens: Int) -> String {
+            let units = tokens >= 1_000_000 ? 1_000_000 : 1_000
+            guard tokens >= units else { return String(tokens) }
+            let value = (Double(tokens) / Double(units)).formatted(.number.precision(.fractionLength(0...1)))
+            if spoken { return value + (units == 1_000 ? " thousand" : " million") }
+            return value + (units == 1_000 ? "k" : "M")
+        }
+        guard let contextWindow, let fraction = usageFraction else { return "\(abbreviated(contextTokens)) tokens used" }
+        let counts = "\(abbreviated(contextTokens)) of \(abbreviated(contextWindow))"
+        if spoken {
+            let percent = (fraction * 100).rounded().formatted(.number.precision(.fractionLength(0)))
+            return "\(counts) tokens, \(percent) percent" + (fraction >= 0.8 ? ", nearly full" : "")
+        }
+        return includingPercent ? "\(counts) tokens used (\((fraction * 100).rounded().formatted(.number.precision(.fractionLength(0))))%)" : "\(counts) used"
+    }
+}
+
+nonisolated public struct AgentStatusResponse: Codable, Sendable {
+    public let status: AgentStatus
+    public init(status: AgentStatus) { self.status = status }
+}
+
+nonisolated public struct AgentSettingsRequest: Codable, Sendable {
+    public enum Field: Codable, Equatable, Sendable {
+        case inherited
+        case value(String)
+
+        public init(_ value: String?) {
+            self = value.map(Self.value) ?? .inherited
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            self = container.decodeNil() ? .inherited : .value(try container.decode(String.self))
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .inherited: try container.encodeNil()
+            case .value(let value): try container.encode(value)
+            }
+        }
+    }
+
+    public let model: Field?
+    public let effort: Field?
+    public init(model: Field?, effort: Field?) {
+        self.model = model
+        self.effort = effort
+    }
+
+    public init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        model = fields.contains(.model) ? try fields.decode(Field.self, forKey: .model) : nil
+        effort = fields.contains(.effort) ? try fields.decode(Field.self, forKey: .effort) : nil
+    }
+}
+
+nonisolated public struct AgentSettingsResponse: Codable, Sendable {
+    public let agent: AgentStatus.Settings
+    public init(agent: AgentStatus.Settings) { self.agent = agent }
+}
+
 nonisolated public struct AppVersion: Sendable, Equatable, Codable {
     public var `version`: String
     public var `build`: String

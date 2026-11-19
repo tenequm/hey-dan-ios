@@ -7,6 +7,12 @@ struct ThreadView: View {
     @Environment(ChatController.self) private var chat
     @Environment(\.scenePhase) private var scenePhase
     @State private var answerFailure: (questionID: String, message: String)?
+    @State private var agentStatus: AgentStatus?
+    @State private var statusFailure: String?
+    @State private var statusRequest = UUID()
+    @State private var refresh = 0
+    @State private var showsAgentSettings = false
+    private var supportsStatus: Bool { chat.features.contains("agent-status") }
     private var live: Conversation { chat.conversation(conversation.id) ?? conversation }
 
     private var call: CallController { .shared }
@@ -26,6 +32,7 @@ struct ThreadView: View {
         ThreadContent(
             rows: chat.rows,
             agentName: conversation.agent.name,
+            compactedThrough: chat.compactedThrough[conversation.id],
             status: activeTarget == nil ? chat.statuses[conversation.id] : nil,
             showsCaptions: activeTarget != nil,
             outboxStates: chat.outboxStates,
@@ -70,11 +77,14 @@ struct ThreadView: View {
                     .padding(.horizontal, theme.space.s3).padding(.bottom, theme.space.s1_5)
                 }
                 // Keep the draft and its staged files alive across a call.
-                ComposerView(send: { text, attachments in
+                ComposerView(features: chat.features, send: { text, attachments in
                     let sent = await chat.send(text: text, attachments: attachments)
                     if sent { call.dismissEndingNotice(attemptId: attemptId) }
                     return sent
-                }, failure: chat.sendFailure, isInCall: activeTarget != nil)
+                }, failure: chat.sendFailure, isInCall: activeTarget != nil,
+                   agentStatus: supportsStatus ? agentStatus : nil,
+                   openSettings: { showsAgentSettings = true },
+                   compact: { _ = await compact() })
                 .id(conversation.id)
             }
         }
@@ -93,31 +103,117 @@ struct ThreadView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(conversation.agent.name).textRole(theme.type.headline, theme.weight.semibold)
-                    if activeTarget != nil {
-                        HStack(spacing: 0) {
-                            Text("On call · ")
-                            CallElapsed(since: call.liveSince)
+                if supportsStatus {
+                    Menu {
+                        Button("Agent settings", systemImage: "slider.horizontal.3") { showsAgentSettings = true }
+                            .disabled(call.isCallActive)
+                    } label: {
+                        HStack(spacing: theme.space.s1) {
+                            threadTitle
+                            Image(systemName: "chevron.down").font(.caption2)
                         }
-                        .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
-                    } else if let host = chat.host?.host() {
-                        Text(host).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
                     }
-                }
-                .lineLimit(1)
+                    .accessibilityLabel(conversation.agent.name)
+                    .accessibilityValue(headerValue)
+                    .accessibilityIdentifier("chat.thread.menu")
+                } else { threadTitle }
             }
             ToolbarItemGroup(placement: .topBarTrailing) { ThreadCallButton(conversation: conversation) }
+        }
+        .onChange(of: call.isCallActive) { _, active in
+            if active { showsAgentSettings = false }
+        }
+        .onChange(of: chat.statuses[conversation.id]) { previous, current in
+            if let current, current.state == .idle,
+               previous?.state != .idle || previous?.rev != current.rev { refresh += 1 }
+        }
+        .task(id: supportsStatus ? refresh : nil) {
+            guard supportsStatus else { agentStatus = nil; statusFailure = nil; return }
+            await loadStatus()
+        }
+        .sheet(isPresented: $showsAgentSettings) {
+            if let agentStatus, supportsStatus {
+                AgentSettingsSheet(status: agentStatus,
+                    editable: chat.features.contains("agent-settings") && agentStatus.agent.canEdit,
+                    statusFailure: statusFailure, save: saveSettings, compact: compact)
+            } else {
+                VStack(spacing: theme.space.s3) {
+                    if let statusFailure {
+                        Text(statusFailure)
+                        Button("Retry") { refresh += 1 }
+                    } else if supportsStatus { ProgressView("Loading agent settings") }
+                    else { Text("Agent status is unavailable.") }
+                    Button("Close") { showsAgentSettings = false }
+                }
+                .presentationDetents([.medium, .large])
+            }
         }
         .tint(theme.color.accentText)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
+    private var headerValue: Text {
+        if call.isCallActive, callTarget != nil {
+            if let since = call.liveSince { return Text("On call, \(since, style: .timer)") }
+            return Text("On call, 0:00")
+        }
+        return Text(chat.host?.host() ?? "")
+    }
+
+    private var threadTitle: some View {
+        VStack(spacing: 0) {
+            Text(conversation.agent.name).textRole(theme.type.headline, theme.weight.semibold)
+            if call.isCallActive, callTarget != nil {
+                HStack(spacing: 0) {
+                    Text("On call · ")
+                    CallElapsed(since: call.liveSince)
+                }
+                .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+            } else if let host = chat.host?.host() {
+                Text(host).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private func loadStatus() async {
+        let request = UUID()
+        statusRequest = request
+        statusFailure = nil
+        do {
+            let response = try await chat.service.agentStatus(conversationId: conversation.id)
+            guard !Task.isCancelled, statusRequest == request else { return }
+            chat.observeContext(response.status.session, conversationID: conversation.id)
+            agentStatus = response.status
+        } catch {
+            guard !Task.isCancelled, statusRequest == request else { return }
+            statusFailure = error.message
+        }
+    }
+
+    private func saveSettings(_ request: AgentSettingsRequest) async throws(AppError) {
+        guard !call.isCallActive else { throw .callActive }
+        guard chat.openConversationId == conversation.id else { throw .transport(.cancelled) }
+        guard supportsStatus,
+              chat.features.contains("agent-settings"), agentStatus?.agent.canEdit == true else { throw .limit("Agent settings are read-only.") }
+        let generation = chat.generation
+        let response = try await chat.service.updateSettings(agentId: conversation.agent.id, request: request)
+        guard generation == chat.generation, chat.openConversationId == conversation.id else { return }
+        statusRequest = UUID()
+        agentStatus?.agent = response.agent
+    }
+
+    private func compact() async -> Bool {
+        guard chat.openConversationId == conversation.id, agentStatus?.agent.canEdit == true else { return false }
+        return await chat.send(text: "/compact")
+    }
+
 }
 
 struct ThreadContent: View {
     @Environment(\.theme) private var theme
     let rows: [ThreadRow]
     var agentName: String?
+    var compactedThrough: Int64?
     var status: Status?
     var showsCaptions = false
     var outboxStates: [String: Outbox.State] = [:]
@@ -154,7 +250,7 @@ struct ThreadContent: View {
                 ForEach(rows, id: \.presentationID) { row in
                     switch row {
                     case .entity(.message(let message)):
-                        MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
+                        MessageRow(message: message, compacted: compactedThrough.map { message.order <= $0 } ?? false, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
                             .id(row.presentationID)
                     case .entity(.question(let question)):
                         QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }

@@ -135,7 +135,16 @@ import XCTest
         field.tap()
         field.typeText("Also send me the backup log from last night, and tell Stan the key is rotated.")
         XCTAssertTrue(app.buttons["composer.send"].isEnabled)
-        capture("thread-composing", showing: field)
+        let chip = app.buttons["composer.model"]
+        capture("thread-composing", showing: chip)
+        chip.tap()
+        let model = app.buttons["Sonnet 5.5"]
+        XCTAssertTrue(model.wait(for: \.isHittable, toEqual: true, timeout: 10))
+        let compact = app.buttons["Compact now"]
+        for _ in 0..<3 where !compact.isHittable { app.swipeUp() }
+        XCTAssertTrue(app.buttons["Extra high"].isHittable)
+        XCTAssertTrue(compact.isHittable)
+        capture("agent-settings", showing: compact)
     }
 
     func testThreadCall() {

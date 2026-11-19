@@ -144,9 +144,26 @@ extension View {
     }
 }
 
+extension Message {
+    var isCompactCommand: Bool { role == .user && text == "/compact" && files.isEmpty }
+}
+
+private struct CompactRow: View {
+    @Environment(\.theme) private var theme
+    var completed = false
+
+    var body: some View {
+        Text(completed ? "Context compacted" : "Compacting context")
+            .textRole(theme.type.caption)
+            .foregroundStyle(theme.color.textSecondary)
+            .frame(maxWidth: .infinity)
+    }
+}
+
 struct MessageRow: View {
     @Environment(\.theme) private var theme
     let message: Message
+    var compacted = false
     var outboxState: Outbox.State?
     var retry: (String) -> Void = { _ in }
     var discard: (String) -> Void = { _ in }
@@ -162,7 +179,16 @@ struct MessageRow: View {
     var body: some View {
         // Not only a role filter: without this branch, a sent message that takes over its outbox row's ForEach id
         // never reaches UI checks with its own identifier and label (ChatComposerChecks.testTextSend).
-        if message.role == .user || message.role == .agent || message.role == .host {
+        if message.isCompactCommand {
+            VStack {
+                CompactRow(completed: compacted && message.delivery != .failed && message.delivery != .outcomeUnknown)
+                if message.delivery == .failed || message.delivery == .outcomeUnknown { delivery }
+            }
+            .accessibilityIdentifier(AXID.message(message.id))
+            .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
+                Button("Send again") { if let id = message.clientId { retry(id) } }
+            }
+        } else if message.role == .user || message.role == .agent || message.role == .host {
             let outgoing = message.role == .user
             VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
                 if outgoing {
@@ -318,8 +344,10 @@ struct OutboxRow: View {
     @State private var confirmsRetry = false
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: theme.space.s1_5) {
-            if !entry.request.text.isEmpty {
+        let isCompact = entry.request.text == "/compact" && entry.attachments.isEmpty
+        VStack(alignment: isCompact ? .center : .trailing, spacing: theme.space.s1_5) {
+            if isCompact { CompactRow() }
+            else if !entry.request.text.isEmpty {
                 Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(entry.request.text)
             }
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
@@ -352,8 +380,8 @@ struct OutboxRow: View {
         }
         .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)
-        .padding(.leading, theme.space.s10)
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, isCompact ? 0 : theme.space.s10)
+        .frame(maxWidth: .infinity, alignment: isCompact ? .center : .trailing)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("chat.outbox.\(entry.request.clientId)")
         .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {

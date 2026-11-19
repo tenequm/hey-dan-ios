@@ -22,6 +22,33 @@ struct ThreadStoreTests {
             readOrder: 0, canCall: false, createdAt: 0)
     }
 
+    @MainActor @Test func compactCompletesOnlyAfterUsageDropsOrClears() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chat = await paired(FixtureAppService(), files: OutboxFile(root: root))
+        let id = "conv_taylor01"
+        await chat.refresh()
+        chat.openConversation(id)
+        func observe(_ tokens: Int?) {
+            chat.observeContext(.init(contextTokens: tokens, contextWindow: 165000, turns: nil,
+                                      outputTokens: nil, queueDepth: nil), conversationID: id)
+        }
+        func addCommand(order: Int64) {
+            chat.reducer.upsert(.message(.init(kind: .message, id: "cmd_\(order)", conversationId: id,
+                order: order, seq: order, role: .user, text: "/compact", files: [], reactions: [], createdAt: 0)))
+        }
+        observe(99000)
+        addCommand(order: 12)
+        observe(99000)
+        #expect(chat.compactedThrough[id] == nil)
+        observe(18000)
+        #expect(chat.compactedThrough[id] == 12)
+        addCommand(order: 13)
+        observe(20000)
+        #expect(chat.compactedThrough[id] == 12)
+        observe(nil)
+        #expect(chat.compactedThrough[id] == 13)
+    }
+
     @Test func cursorAndEntitiesSurviveIncrementalSaves() async throws {
         let store = SwiftDataThreadStore(inMemory: true)
         try await store.save(ThreadSnapshot(cursor: 10, conversations: [conversation(seq: 10)]), host: host, deviceId: "device")
@@ -669,6 +696,12 @@ actor ScriptedAppService: AppService {
         if !scriptedPages.isEmpty { return scriptedPages.removeFirst() }
         return try await base.history(conversationId: conversationId, query: query) }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse { sentIDs.append(request.clientId); try check("send"); let result = try await base.send(conversationId: conversationId, request: request); try check("sendAfter"); return result }
+    func agentStatus(conversationId: String) async throws(AppError) -> AgentStatusResponse {
+        try await base.agentStatus(conversationId: conversationId)
+    }
+    func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse {
+        try await base.updateSettings(agentId: agentId, request: request)
+    }
     func agents() async throws(AppError) -> AgentsResponse {
         try check("agents"); return try await base.agents()
     }

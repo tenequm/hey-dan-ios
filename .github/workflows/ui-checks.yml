@@ -25,7 +25,7 @@ jobs:
       matrix:
         checks:
           - ChatChecks ChatThreadChecks ChatPairingChecks
-          - ChatComposerChecks ChatCallChecks
+          - ChatComposerChecks ChatCallChecks ChatAgentSettingsChecks
     env:
       CHECKS: ${{ matrix.checks }}
       # On the runner's Simulator the system photo picker shows no photo within this check's 10 s.

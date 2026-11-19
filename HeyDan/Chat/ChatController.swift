@@ -40,6 +40,23 @@ import UIKit
     }
     var thread: [ThreadEntity] { openConversationId.map { visibleThread($0) } ?? [] }
     var rows: [ThreadRow] { openConversationId.map { visibleRows($0) } ?? [] }
+    private(set) var compactedThrough: [String: Int64] = [:]
+    private var previousContextTokens: [String: Int] = [:]
+
+    func observeContext(_ session: AgentStatus.Session, conversationID: String) {
+        guard openConversationId == conversationID else { return }
+        let previous = previousContextTokens[conversationID]
+        previousContextTokens[conversationID] = session.contextTokens
+        if let tokens = session.contextTokens {
+            guard let previous, tokens < previous else { return }
+        }
+        let latest = thread.compactMap { entity -> Int64? in
+            guard case .message(let message) = entity, message.isCompactCommand else { return nil }
+            return message.order
+        }.max()
+        if let latest { compactedThrough[conversationID] = max(compactedThrough[conversationID] ?? 0, latest) }
+    }
+
     var historyFloors: [String: Int64] = [:]
     private func visibleThread(_ id: String) -> [ThreadEntity] {
         reducer.thread(conversationId: id).filter { ($0.order ?? 0) >= (historyFloors[id] ?? 0) }
@@ -149,6 +166,8 @@ import UIKit
         flushRead()
         let pendingOpen = self.host == nil || self.host == host ? openConversationId : nil
         generation = UUID()
+        previousContextTokens.removeAll()
+        compactedThrough.removeAll()
         loadTask?.cancel(); streamTask?.cancel(); runner?.cancel(); readTask?.cancel()
         runner = nil; streamTask = nil; loadTask = nil
         loadRetry?.cancel(); loadAttempts = 0
