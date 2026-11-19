@@ -38,13 +38,16 @@ extension ChatController {
                     let moved = candidate.cursor != reducer.cursor || !changed.isEmpty
                     if moved {
                         try await store.save(ThreadSnapshot(cursor: candidate.cursor,
-                            conversations: changed.compactMap { candidate.conversations[$0] },
+                            conversations: changed.compactMap { candidate.conversationRecord($0) },
                             entities: changed.compactMap { candidate.entities[$0] }), host: host, deviceId: pairing.deviceId)
                     }
                     guard token == generation, !Task.isCancelled else { return }
                     // Applied again to the live reducer, not swapped in: a history page, read or send that landed
                     // during the save would be lost with the copy. Upserts keep the higher seq, so this is idempotent.
-                    if moved { Self.apply(batch, to: &reducer, logs: false) }
+                    if moved {
+                        Self.apply(batch, to: &reducer, logs: false)
+                        if let id = openConversationId, reducer.hiddenConversations[id] != nil { closeConversation() }
+                    }
                     for id in changed {
                         if case .message(let message) = reducer.entities[id] { outbox.reconcile(message) }
                     }
@@ -87,7 +90,7 @@ extension ChatController {
             catch {
                 if logs { CallLog.log(.stream, "decode_skip seq=\(event.id ?? 0)") }
                 reducer = ThreadReducer(cursor: max(reducer.cursor, event.id ?? reducer.cursor),
-                    conversations: reducer.conversations, entities: reducer.entities,
+                    conversations: reducer.conversations, hiddenConversations: reducer.hiddenConversations, entities: reducer.entities,
                     statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
             }
         }

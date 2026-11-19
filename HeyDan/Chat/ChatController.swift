@@ -188,7 +188,7 @@ import UIKit
         }
     }
     func openConversation(_ id: String) {
-        guard openConversationId != id else { return }
+        guard openConversationId != id, reducer.hiddenConversations[id] == nil else { return }
         flushRead()
         openConversationId = id
         sendFailure = nil
@@ -250,6 +250,7 @@ import UIKit
         let allowed = Set(list.conversations.map(\.id))
         var snapshot = ThreadSnapshot(cursor: cursor, conversations: list.conversations)
         snapshot.allowedConversations = allowed
+        snapshot.listSequence = list.seq
         snapshot.historyFloors = restored ? [:] : historyFloors
         snapshot.replacesCache = restored
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
@@ -259,13 +260,16 @@ import UIKit
             historyFloors.removeAll()
             historyStale = openConversationId != nil
         }
-        reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
+        reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: reducer.conversations.filter {
+            allowed.contains($0.key) || $0.value.seq > list.seq
+        }, hiddenConversations: reducer.hiddenConversations, entities: reducer.entities.filter {
             switch $0.value { case .message(let m): allowed.contains(m.conversationId); case .question(let q): allowed.contains(q.conversationId); case .unknown: false }
         },
             statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
         for value in list.conversations { reducer.upsert(value) }
         for value in list.statuses { reducer.upsert(value) }
         reducer.upsert(list.badge)
+        if let id = openConversationId, reducer.conversations[id] == nil { closeConversation() }
         hasCursor = true
     }
     func loadHistory(before: Int64? = nil, newest: Bool = false) async {
@@ -310,6 +314,7 @@ import UIKit
         guard let id = openConversationId, readOrder > 0 else { return }
         let order = readOrder, token = generation
         readOrder = 0
+        guard reducer.hiddenConversations[id] == nil else { return }
         let client = service
         readFlushTask = Task { await sendRead(id: id, order: order, token: token, client: client) }
     }
@@ -321,6 +326,30 @@ import UIKit
             try await persist(reducer.upsert(response.conversation))
         } catch { if !Task.isCancelled { await handle(error, token: token) } }
     }
+    func toggleRead(_ conversation: Conversation) async throws {
+        let token = generation
+        let client = service
+        // A thread closed just before the swipe can still have a final read in flight.
+        await readFlushTask?.value
+        guard token == generation else { return }
+        let response: ReadResponse
+        if conversation.unread == 0 {
+            response = try await client.markUnread(conversationId: conversation.id)
+        } else {
+            let page = try await client.history(conversationId: conversation.id, query: HistoryQuery(limit: 1))
+            guard token == generation, let order = page.items.compactMap(\.order).max() else { return }
+            response = try await client.markRead(conversationId: conversation.id, request: ReadRequest(order: order))
+        }
+        guard token == generation else { return }
+        reducer.upsert(response.badge)
+        try await persist(reducer.upsert(response.conversation))
+    }
+
+    func service(for entry: Pairings.Entry) -> any AppService {
+        if host == entry.host, pairing?.deviceId == entry.deviceId { return service }
+        return SignedClient(host: entry.host, deviceId: entry.deviceId)
+    }
+
     func markRead(order: Int64) async {
         guard let id = openConversationId, order > max(readOrder, reducer.conversations[id]?.readOrder ?? 0) else { return }
         readOrder = max(readOrder, order)
@@ -387,7 +416,7 @@ import UIKit
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }
-        var snapshot = ThreadSnapshot(conversations: changed.compactMap { reducer.conversations[$0] },
+        var snapshot = ThreadSnapshot(conversations: changed.compactMap { reducer.conversationRecord($0) },
             entities: changed.compactMap { reducer.entities[$0] })
         snapshot.historyFloors = historyFloors
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)

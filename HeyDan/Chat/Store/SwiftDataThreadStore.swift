@@ -63,7 +63,7 @@ nonisolated enum StoreLocation {
 }
 
 actor SwiftDataThreadStore: ThreadStore {
-    static let schemaVersion = 2
+    static let schemaVersion = 3
     private let root: URL
     private let version: Int
     private let inMemory: Bool
@@ -180,8 +180,9 @@ actor SwiftDataThreadStore: ThreadStore {
             if snapshot.replacesCache { try deleteRecords(deviceId: deviceId) }
             let encoder = JSONEncoder()
             if let allowed = snapshot.allowedConversations.map(Array.init) {
+                let sequence = snapshot.listSequence
                 for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
-                    $0.deviceId == deviceId && !allowed.contains($0.conversationId)
+                    $0.deviceId == deviceId && $0.seq <= sequence && !allowed.contains($0.conversationId)
                 })) { modelContext.delete(row) }
             }
             typealias Row = (id: String, conversationId: String, kind: String, order: Int64, seq: Int64, value: any Encodable)

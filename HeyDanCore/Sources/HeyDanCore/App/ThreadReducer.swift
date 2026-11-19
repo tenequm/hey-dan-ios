@@ -7,14 +7,19 @@ public enum ThreadRow: Sendable, Equatable {
 public struct ThreadReducer: Sendable {
     public private(set) var cursor: Int64 = 0
     public private(set) var conversations: [String: Conversation] = [:]
+    public private(set) var hiddenConversations: [String: Conversation] = [:]
+    public func conversationRecord(_ id: String) -> Conversation? {
+        conversations[id] ?? hiddenConversations[id]
+    }
     public private(set) var entities: [String: ThreadEntity] = [:]
     public private(set) var statuses: [String: Status] = [:]
     public private(set) var badge: Badge?
     public private(set) var hasMoreBefore: [String: Bool] = [:]
     public init(cursor: Int64 = 0, conversations: [String: Conversation] = [:],
-                entities: [String: ThreadEntity] = [:], statuses: [String: Status] = [:],
+                hiddenConversations: [String: Conversation] = [:], entities: [String: ThreadEntity] = [:], statuses: [String: Status] = [:],
                 badge: Badge? = nil, hasMoreBefore: [String: Bool] = [:]) {
         self.cursor = cursor; self.conversations = conversations; self.entities = entities
+        self.hiddenConversations = hiddenConversations
         self.statuses = statuses; self.badge = badge; self.hasMoreBefore = hasMoreBefore
     }
 
@@ -42,8 +47,15 @@ public struct ThreadReducer: Sendable {
         return [key.id]
     }
     @discardableResult public mutating func upsert(_ conversation: Conversation) -> Set<String> {
-        guard conversation.seq > (conversations[conversation.id]?.seq ?? -1) else { return [] }
-        conversations[conversation.id] = conversation
+        guard conversation.seq > (conversationRecord(conversation.id)?.seq ?? -1) else { return [] }
+        if conversation.hidden == true {
+            hiddenConversations[conversation.id] = conversation
+            conversations.removeValue(forKey: conversation.id)
+            statuses.removeValue(forKey: conversation.id)
+        } else {
+            hiddenConversations.removeValue(forKey: conversation.id)
+            conversations[conversation.id] = conversation
+        }
         return [conversation.id]
     }
     @discardableResult public mutating func upsert(_ status: Status) -> Set<String> {

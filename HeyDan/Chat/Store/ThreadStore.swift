@@ -6,6 +6,7 @@ struct ThreadSnapshot: Sendable {
     var cursor: Int64 = 0
     var hasCursor = false
     var replacesCache = false
+    var listSequence: Int64 = .max
     var allowedConversations: Set<String>?
     var historyFloors: [String: Int64] = [:]
     init(cursor: Int64? = nil, conversations: [Conversation] = [], entities: [ThreadEntity] = []) {

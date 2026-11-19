@@ -7,6 +7,8 @@ struct ConversationList: View {
     @State private var tab = Tab.chats
     @State private var query = ""
     @State private var pairing = false
+    @State private var hiddenNotice = false
+    @State private var actionError: String?
 
     private enum Tab { case chats, settings, search }
 
@@ -52,35 +54,75 @@ struct ConversationList: View {
                         if conversations.isEmpty {
                             emptyState
                         } else {
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 0) {
-                                    HStack {
-                                        Text(chat.host?.host() ?? "Host").textRole(theme.type.label, theme.weight.medium)
-                                        Rectangle().fill(theme.color.border).frame(height: 1)
+                            List {
+                                HStack {
+                                    Text(chat.host?.host() ?? "Host").textRole(theme.type.label, theme.weight.medium)
+                                    Rectangle().fill(theme.color.border).frame(height: 1)
+                                }
+                                .foregroundStyle(theme.color.textTertiary)
+                                .padding(.horizontal, theme.space.s5)
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                                ForEach(conversations, id: \.id) { conversation in
+                                    Button { chat.openConversation(conversation.id) } label: {
+                                        ConversationRow(conversation: conversation, status: chat.statuses[conversation.id])
                                     }
-                                    .foregroundStyle(theme.color.textTertiary)
-                                    .padding(.horizontal, theme.space.s5)
-                                    .padding(.top, theme.space.s4)
-                                    .padding(.bottom, theme.space.s1_5)
-                                    ForEach(conversations, id: \.id) { conversation in
-                                        Button { chat.openConversation(conversation.id) } label: {
-                                            ConversationRow(conversation: conversation, status: chat.statuses[conversation.id])
+                                    .buttonStyle(.plain)
+                                    .opacity(chat.connectionState == .reconnecting ? 0.55 : 1)
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparatorTint(theme.color.borderSubtle)
+                                    .swipeActions(edge: .leading) {
+                                        if conversation.unread > 0 || chat.features.contains("unread") {
+                                            Button {
+                                                Task {
+                                                    do { try await chat.toggleRead(conversation) }
+                                                    catch { actionError = AppError.map(error).message }
+                                                }
+                                            } label: {
+                                                if conversation.unread > 0 { Label("Read", systemImage: "envelope.open") }
+                                                else { Label("Unread", systemImage: "envelope.badge") }
+                                            }
+                                            .tint(theme.color.accent)
                                         }
-                                        .buttonStyle(.plain)
-                                        .opacity(chat.connectionState == .reconnecting ? 0.55 : 1)
-                                        if conversation.id != conversations.last?.id {
-                                            Rectangle().fill(theme.color.borderSubtle).frame(height: 1)
-                                                .padding(.leading, theme.space.s5)
+                                    }
+                                    .swipeActions(edge: .trailing) {
+                                        if chat.features.contains("agents") {
+                                            Button {
+                                                let service = chat.service
+                                                Task {
+                                                    do {
+                                                        _ = try await service.setAgent(id: conversation.agent.id,
+                                                            request: AgentVisibilityRequest(shown: false))
+                                                        hiddenNotice = true
+                                                    } catch { actionError = AppError.map(error).message }
+                                                }
+                                            } label: { Label("Hide", systemImage: "eye.slash") }
                                         }
                                     }
                                 }
                             }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
                             .refreshable { await chat.refresh() }
                         }
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { tabBar }
+            .safeAreaInset(edge: .bottom) {
+                VStack {
+                    if hiddenNotice {
+                        Text("Hidden. Show it again in Settings > Agents.")
+                            .textRole(theme.type.footnote).padding(theme.space.s2)
+                            .task {
+                                try? await Task.sleep(for: .seconds(3))
+                                if !Task.isCancelled { hiddenNotice = false }
+                            }
+                    }
+                    tabBar
+                }
+            }
             .background(theme.color.surface.ignoresSafeArea())
             .toolbarVisibility(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in
@@ -94,6 +136,9 @@ struct ConversationList: View {
         }
         .foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)
+        .alert("Chat", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            Button("OK") { actionError = nil }
+        } message: { Text(actionError ?? "") }
         .sheet(isPresented: $pairing) { PairingView() }
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
@@ -125,7 +170,9 @@ struct ConversationList: View {
             VStack(spacing: theme.space.s2) {
                 Text(query.isEmpty || tab != .search ? "No agents yet" : "No matching chats")
                     .textRole(theme.type.title, theme.weight.bold)
-                if query.isEmpty || tab != .search {
+                if (query.isEmpty || tab != .search) && chat.features.contains("agents") {
+                    Button("Choose agents in Settings") { tab = .settings }
+                } else if query.isEmpty || tab != .search {
                     Text("Pair this phone with a host to chat with its agents. Ask Dan for a pairing link with /pair.")
                         .textRole(theme.type.body).foregroundStyle(theme.color.textSecondary)
                     Button("Pair a host") { pairing = true }

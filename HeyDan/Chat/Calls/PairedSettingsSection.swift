@@ -22,6 +22,21 @@ struct PairedSettingsSection: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
                     PairedHostSettingsRows()
+                    let agentHosts = pairings.entries.filter { $0.features.contains("agents") }
+                    if !agentHosts.isEmpty {
+                        SettingsSection {
+                            NavigationLink {
+                                List {
+                                    ForEach(agentHosts, id: \.host) { entry in
+                                        HostAgentToggles(entry: entry).id(entry.deviceId)
+                                    }
+                                }
+                                .navigationTitle("Agents")
+                            } label: {
+                                SettingsRow(title: "Agents", icon: "person.2", navigates: true)
+                            }
+                        }
+                    }
                     if pairings.entries.contains(where: { $0.features.contains("push") }) {
                         SettingsSection("Notifications") {
                             Toggle(isOn: Binding(get: { notifications }, set: { _ in
@@ -70,6 +85,66 @@ struct PairedSettingsSection: View {
                 let settings = await UNUserNotificationCenter.current().notificationSettings()
                 notifications = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
             }
+        }
+    }
+}
+
+private struct HostAgentToggles: View {
+    @Environment(\.theme) private var theme
+    let entry: Pairings.Entry
+    @State private var candidates: [AgentCandidate]?
+    @State private var pending: [String: Bool] = [:]
+    @State private var error: String?
+    @State private var revision = 0
+    private var chat: ChatController { .shared }
+
+    var body: some View {
+        Section(entry.host.host() ?? "Host") {
+            if let candidates {
+                let duplicates = Dictionary(grouping: candidates, by: \.name)
+                ForEach(candidates) { agent in
+                    Toggle(isOn: Binding(get: { pending[agent.id] ?? agent.shown }, set: { update(agent, shown: $0) })) {
+                        SettingsRow(title: agent.name, icon: "person",
+                            subtitle: duplicates[agent.name, default: []].count > 1 ? agent.chat : nil)
+                    }
+                    .disabled(pending[agent.id] != nil)
+                    .tint(theme.color.accent)
+                    .accessibilityIdentifier("chat.settings.agent.\(agent.id)")
+                }
+                if candidates.isEmpty { Text("No agents available") }
+            } else if error == nil {
+                ProgressView()
+            } else {
+                Button("Retry") { Task { await load() } }
+            }
+            if let error { Text(error).foregroundStyle(theme.color.danger) }
+        }
+        .task(id: chat.host == entry.host ? Set(chat.conversations.map { $0.agent.id }) : []) { await load() }
+    }
+
+    private func load() async {
+        let started = revision
+        do {
+            let result = try await chat.service(for: entry).agents()
+            guard !Task.isCancelled, started == revision else { return }
+            candidates = result.agents
+            error = nil
+        } catch {
+            if !Task.isCancelled { self.error = error.message }
+        }
+    }
+
+    private func update(_ agent: AgentCandidate, shown: Bool) {
+        pending[agent.id] = shown
+        error = nil
+        let service = chat.service(for: entry)
+        Task {
+            defer { pending.removeValue(forKey: agent.id) }
+            do {
+                let result = try await service.setAgent(id: agent.id, request: AgentVisibilityRequest(shown: shown))
+                revision += 1
+                if let index = candidates?.firstIndex(where: { $0.id == agent.id }) { candidates?[index] = result.agent }
+            } catch { self.error = AppError.map(error).message }
         }
     }
 }

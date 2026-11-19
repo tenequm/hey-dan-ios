@@ -129,6 +129,24 @@ struct ThreadStoreTests {
         restored.setActive(false)
     }
 
+    @MainActor @Test func hidingAnAgentUpdatesAnOpenStreamAndItsOfflineCache() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hostService = FixtureAppService()
+        let store = SwiftDataThreadStore(inMemory: true)
+        let files = OutboxFile(root: root)
+        let chat = await paired(hostService, store: store, files: files, active: true)
+        defer { chat.setActive(false) }
+        try await waitUntil { chat.connectionState == .connected }
+        let conversation = try #require(chat.conversations.first)
+        chat.openConversation(conversation.id)
+        _ = try await hostService.setAgent(id: conversation.agent.id, request: .init(shown: false))
+        try await waitUntil { chat.conversations.isEmpty && chat.openConversationId == nil && chat.badge?.unreadTotal == 0 }
+        let offline = await paired(hostService, store: store, files: files)
+        #expect(offline.conversations.isEmpty)
+        _ = try await hostService.setAgent(id: conversation.agent.id, request: .init(shown: true))
+        try await waitUntil { chat.conversations.first?.id == conversation.id && chat.badge?.unreadTotal == conversation.unread }
+    }
+
     @MainActor @Test func readAndAnswerKeepServerState() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = await paired(FixtureAppService(), files: OutboxFile(root: root))
@@ -559,6 +577,15 @@ private actor ScriptedAppService: AppService {
         if !scriptedPages.isEmpty { return scriptedPages.removeFirst() }
         return try await base.history(conversationId: conversationId, query: query) }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse { sentIDs.append(request.clientId); try check("send"); let result = try await base.send(conversationId: conversationId, request: request); try check("sendAfter"); return result }
+    func agents() async throws(AppError) -> AgentsResponse {
+        try check("agents"); return try await base.agents()
+    }
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse {
+        try check("setAgent"); return try await base.setAgent(id: id, request: request)
+    }
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse {
+        try check("markUnread"); return try await base.markUnread(conversationId: conversationId)
+    }
     func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse { try check("markRead"); return try await base.markRead(conversationId: conversationId, request: request) }
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse { try check("answer"); return try await base.answer(questionId: questionId, request: request) }
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> { cursors.append(query.after); try check("events")

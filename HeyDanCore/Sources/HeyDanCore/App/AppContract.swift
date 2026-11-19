@@ -158,6 +158,35 @@ nonisolated public struct Agent: Sendable, Equatable, Codable {
     }
 }
 
+nonisolated public struct AgentCandidate: Sendable, Equatable, Codable, Identifiable {
+    public let id: String
+    public let name: String
+    public let chat: String?
+    public var shown: Bool
+
+    public init(id: String, name: String, chat: String?, shown: Bool) {
+        self.id = id
+        self.name = name
+        self.chat = chat
+        self.shown = shown
+    }
+}
+
+nonisolated public struct AgentsResponse: Sendable, Equatable, Codable {
+    public var agents: [AgentCandidate]
+    public init(agents: [AgentCandidate]) { self.agents = agents }
+}
+
+nonisolated public struct AgentVisibilityRequest: Sendable, Equatable, Codable {
+    public var shown: Bool
+    public init(shown: Bool) { self.shown = shown }
+}
+
+nonisolated public struct AgentResponse: Sendable, Equatable, Codable {
+    public var agent: AgentCandidate
+    public init(agent: AgentCandidate) { self.agent = agent }
+}
+
 nonisolated public struct AppVersion: Sendable, Equatable, Codable {
     public var `version`: String
     public var `build`: String
@@ -243,6 +272,7 @@ nonisolated public struct Conversation: Sendable, Equatable, Codable {
     public var `id`: String
     public var `seq`: Int64
     public var `agent`: Agent
+    public var hidden: Bool?
     public var `lastMessage`: LastMessage?
     public var `unread`: Int
     public var `readOrder`: Int64
