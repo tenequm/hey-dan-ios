@@ -12,6 +12,14 @@ extension ChatController {
         if queued, tappedActive { keepDeliveringInBackground() }
         return queued
     }
+    func enqueueReply(_ text: String, conversationId: String, entry: Pairings.Entry) async -> Bool {
+        if !ready { await loadTask?.value }
+        guard host == entry.host, pairing?.deviceId == entry.deviceId else { return false }
+        let queued = await enqueue(text: text, attachments: [], conversationId: conversationId)
+        if queued { keepDeliveringInBackground() }
+        return queued
+    }
+
     private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async -> Bool {
         guard ready, let host, let pairing else { sendFailure = AppError.transport(.unavailable).message; return false }
         guard text.utf8.count <= Outbox.maximumTextBytes, attachments.count <= Outbox.maximumFiles else {
@@ -20,7 +28,7 @@ extension ChatController {
         }
         let token = generation
         do {
-            let copied = try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
+            let copied = attachments.isEmpty ? [] : try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
             let entry = Outbox.Entry(host: host, conversationId: conversationId,
                 request: SendRequest(clientId: UUID().uuidString, text: text, fileIds: []), attachments: copied)
             guard token == generation else {
@@ -96,7 +104,7 @@ extension ChatController {
     }
     /// Only for sends that can go out now: a backoff or a held entry waits for the foreground.
     func keepDeliveringInBackground() {
-        guard !active, backgroundDelivery == .invalid, ready, !paused,
+        guard !active, networkAvailable, backgroundDelivery == .invalid, ready, !paused,
               outbox.entries.contains(where: { durableIDs.contains($0.request.clientId) && Self.deliverable($0) }) else { return }
         backgroundDelivery = UIApplication.shared.beginBackgroundTask(withName: "Chat delivery") { [weak self] in
             self?.runner?.cancel()

@@ -24,6 +24,57 @@ struct MessageNotificationTests {
             agents: [payload.hd.a], protocol: 1, serverTime: 0), features: ["push"])
     }
 
+    @Test func messageCategoryOffersBackgroundReplyAndRead() async throws {
+        let categories = await UNUserNotificationCenter.current().notificationCategories()
+        let category = try #require(categories.first { $0.identifier == "message" })
+        #expect(category.actions.map(\.title) == ["Reply", "Mark as Read"])
+        let reply = try #require(category.actions.first as? UNTextInputNotificationAction)
+        #expect(reply.identifier == AppDelegate.replyAction)
+        #expect(category.actions.last?.identifier == AppDelegate.readAction)
+        #expect(category.actions.allSatisfy { !$0.options.contains(.foreground) })
+    }
+
+    @Test func backgroundReplyQueuesForTheNotifiedHostAndThread() async throws {
+        let account = "test-reply-" + UUID().uuidString
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer {
+            try? IdentityKeychain.remove(account: account)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        let target = entry(payload.hd.h), other = entry("https://other.example.com")
+        for entry in [target, other] {
+            try pairings.add(entry.pairing, host: entry.host, features: entry.features)
+        }
+        let files = OutboxFile(root: root)
+        let service = FixtureAppService()
+        let chat = ChatController(service: service, store: SwiftDataThreadStore(inMemory: true),
+                                  files: files, monitorsNetwork: false)
+        chat.setActive(false)
+        chat.networkAvailable = false
+        chat.selectPairing(other.pairing, host: other.host)
+        chat.openConversation("another-thread")
+        await AppDelegate().handleResponse(action: AppDelegate.replyAction, text: "Reply from notification",
+                                           data: payload.hd, pairings: pairings, chat: chat)
+        let entries = try await files.load(host: target.host, deviceId: target.deviceId)
+        #expect(entries.count == 1)
+        let queued = try #require(entries.first)
+        #expect(queued.host == target.host)
+        #expect(queued.conversationId == payload.hd.c)
+        #expect(queued.request.text == "Reply from notification")
+        #expect(try await files.load(host: other.host, deviceId: other.deviceId).isEmpty)
+        chat.networkAvailable = true
+        chat.setActive(true)
+        await chat.runner?.value
+        let history = try await service.history(conversationId: payload.hd.c, query: HistoryQuery())
+        #expect(history.items.contains {
+            guard case .message(let message) = $0 else { return false }
+            return message.clientId == queued.request.clientId && message.conversationId == payload.hd.c
+        })
+        chat.setActive(false)
+    }
+
     @Test func environmentMapping() {
         #expect(AppDelegate.environment("development") == "sandbox")
         #expect(AppDelegate.environment("production") == "production")

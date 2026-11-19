@@ -18,6 +18,8 @@ struct ComposerView: View {
     @State private var importURLs: [URL] = []
     @State private var staging = false
     @State private var sending = false
+    @State private var sentCount = 0
+    @State private var failedCount = 0
     @State private var importFailure: String?
     private static let unreadable = "Could not read the selected attachment. Try selecting it again."
     @FocusState private var textFocused: Bool
@@ -83,7 +85,8 @@ struct ComposerView: View {
                     sending = true
                     Task {
                         defer { sending = false }
-                        guard await send(text, attachments) else { return }
+                        guard await send(text, attachments) else { failedCount += 1; return }
+                        sentCount += 1
                         text = ""
                         for attachment in attachments { AttachmentStaging.remove(attachment) }
                         attachments = []
@@ -104,6 +107,8 @@ struct ComposerView: View {
             .padding(.vertical, theme.space.s0_5)
         }
         .disabled(sending)
+        .sensoryFeedback(.impact(weight: .light), trigger: sentCount)
+        .sensoryFeedback(.error, trigger: failedCount)
         .tint(theme.color.accentText)
         .background(theme.color.composer, in: RoundedRectangle(cornerRadius: theme.radius.composer))
         .overlay { RoundedRectangle(cornerRadius: theme.radius.composer).strokeBorder(theme.color.composerBorder).allowsHitTesting(false) }

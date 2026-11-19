@@ -97,10 +97,6 @@ struct MessageRow: View {
                     if message.editedAt != nil { Text("Edited") }
                     if !outgoing {
                         Text(Date(timeIntervalSince1970: Double(message.createdAt) / 1000), style: .time)
-                        if !message.text.isEmpty {
-                            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
-                                .labelStyle(.iconOnly)
-                        }
                     }
                 }
                 .textRole(theme.type.caption).foregroundStyle(theme.color.textTertiary)
@@ -110,6 +106,13 @@ struct MessageRow: View {
             .foregroundStyle(theme.color.textPrimary)
             .padding(.leading, outgoing ? theme.space.s10 : 0)
             .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                if !message.text.isEmpty {
+                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+                    ShareLink(item: message.text)
+                }
+            }
             .accessibilityElement(children: visibleCard == nil ? .combine : .contain)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
