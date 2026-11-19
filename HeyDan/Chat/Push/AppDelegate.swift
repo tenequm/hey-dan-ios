@@ -22,7 +22,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     private var token: String?
     private var uploaded: [String: String] = [:]
     private var pendingTap: PushData?
-    private var pendingReply: Task<Void, Never>?
+    var clientFor: (Pairings.Entry) -> any AppService = { SignedClient(host: $0.host, deviceId: $0.deviceId, requestTimeout: 4) }
+    var deliveredMessages: () async -> [(String, PushData)] = {
+        await UNUserNotificationCenter.current().deliveredNotifications().compactMap { notification in
+            MessageNotification.payload(from: notification.request.content.userInfo).map { (notification.request.identifier, $0.hd) }
+        }
+    }
+    var removeDelivered: ([String]) -> Void = { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: $0) }
+    var postFailure: (UNNotificationRequest) async throws -> Void = { try await UNUserNotificationCenter.current().add($0) }
     private var reads: [String: Int64] = [:]
     private var lastBadge: Badge?
     private var lastPairing: String?
@@ -169,67 +176,120 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return options
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
-        let data = MessageNotification.payload(from: response.notification.request.content.userInfo)?.hd
+        let info = response.notification.request.content.userInfo
+        let data = MessageNotification.payload(from: info)?.hd ?? (info["replyFailure"] as? Data).flatMap { try? JSONDecoder().decode(PushData.self, from: $0) }
         let action = response.actionIdentifier
         let text = (response as? UNTextInputNotificationResponse)?.userText
         Task { @MainActor in
-            await handleResponse(action: action, text: text, data: data)
-            // UIKit updates state restoration from this completion on the main thread.
-            completionHandler()
-        }
-    }
-    func handleResponse(action: String, text: String?, data: PushData?, pairings: Pairings = .shared,
-                        chat: ChatController = .shared) async {
-        if action == UNNotificationDefaultActionIdentifier { receiveTap(data); return }
-        pairings.loadIfNeeded()
-        guard let data, let entry = Self.entry(for: data, in: pairings.entries) else { return }
-        do {
-            switch action {
-            case Self.replyAction:
-                guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                let previous = pendingReply
-                pendingReply = Task {
-                    await previous?.value
-                    guard pairings.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else { return }
-                    do {
-                        // The selected host owns the durable outbox and resumes its sends on reconnect.
-                        if pairings.active?.host != entry.host { try pairings.setActive(host: entry.host) }
-                        chat.selectPairing(entry.pairing, host: entry.host)
-                        if UIApplication.shared.applicationState == .background { chat.setActive(false) }
-                        if !(await chat.enqueueReply(text, conversationId: data.c, entry: entry)) {
-                            CallLog.log(.store, "push reply_not_queued")
-                        }
-                    } catch { CallLog.log(.net, "push reply_failed \(AppError.map(error).logName)") }
-                }
-                await pendingReply?.value
-            case Self.readAction:
-                try await markRead(data, entry: entry, pairings: pairings, chat: chat)
-            default: break
+            if action == UNNotificationDefaultActionIdentifier {
+                receiveTap(data)
+                completionHandler()
+                return
             }
-        } catch { CallLog.log(.net, "push action_failed \(AppError.map(error).logName)") }
+            NotificationActionTask().run {
+                await self.handleResponse(action: action, text: text, data: data)
+            } completion: { completionHandler() }
+        }
     }
 
-    private func markRead(_ data: PushData, entry: Pairings.Entry, pairings: Pairings, chat: ChatController) async throws {
-        let center = UNUserNotificationCenter.current()
-        let delivered = await center.deliveredNotifications().compactMap { notification -> String? in
-            guard let item = MessageNotification.payload(from: notification.request.content.userInfo)?.hd,
-                  item.c == data.c, PairedHost.key(item.h) == PairedHost.key(entry.host) else { return nil }
-            return notification.request.identifier
+    func handleResponse(action: String, text: String?, data: PushData?, pairings: Pairings = .shared,
+                        files: OutboxFile = .shared, chat: @autoclosure () -> ChatController = ChatController.shared) async {
+        guard let data else { return }
+        let entry = Self.entry(for: data, in: pairings.notificationEntries())
+        switch action {
+        case Self.replyAction:
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard let entry, text.utf8.count <= Outbox.maximumTextBytes else { await replyFailed(data); return }
+            let reply = Outbox.Entry(host: entry.host, conversationId: data.c,
+                request: SendRequest(clientId: UUID().uuidString, text: text, fileIds: []))
+            do { try await files.update(from: [], to: [reply], host: entry.host, deviceId: entry.deviceId) }
+            catch { await replyFailed(data); return }
+            guard Self.entry(for: data, in: pairings.notificationEntries())?.deviceId == entry.deviceId else {
+                try? await files.update(from: [reply], to: [], host: entry.host, deviceId: entry.deviceId)
+                await replyFailed(data)
+                return
+            }
+            do {
+                try Task.checkCancellation()
+                _ = try await clientFor(entry).send(conversationId: data.c, request: reply.request)
+                try await files.update(from: [reply], to: [], host: entry.host, deviceId: entry.deviceId)
+            } catch {
+                await files.deferReply(reply, deviceId: entry.deviceId)
+                CallLog.log(.store, "push reply_deferred")
+            }
+        case Self.readAction:
+            guard let entry else { return }
+            let client = clientFor(entry)
+            for attempt in 0...1 {
+                do {
+                    try Task.checkCancellation()
+                    try await markRead(data, entry: entry, pairings: pairings, chat: chat(), client: client)
+                    return
+                } catch {
+                    if Task.isCancelled { return }
+                    if attempt == 1 { CallLog.log(.net, "push read_failed \(AppError.map(error).logName)") }
+                }
+            }
+        default: break
         }
+    }
+
+    private func replyFailed(_ data: PushData) async {
+        let content = UNMutableNotificationContent()
+        content.title = "Reply not sent"
+        content.threadIdentifier = data.c
+        content.userInfo["replyFailure"] = try? JSONEncoder().encode(data)
+        do { try await postFailure(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) }
+        catch { CallLog.log(.store, "push reply_notice_failed") }
+    }
+
+    private func markRead(_ data: PushData, entry: Pairings.Entry, pairings: Pairings, chat: ChatController,
+                          client: any AppService) async throws {
         let samePairing = { chat.host == entry.host && chat.pairing?.deviceId == entry.deviceId }
-        let client: any AppService = samePairing() ? chat.service : SignedClient(host: entry.host, deviceId: entry.deviceId)
-        // Protocol 1 pushes carry an item id but no order. A newest-page read covers the delivered snapshot.
-        let page = try await client.history(conversationId: data.c, query: HistoryQuery(limit: 1))
-        guard let order = page.items.compactMap(\.order).max() else { return }
+        var orders: [String: Int64] = [:]
+        func remember(_ entities: some Sequence<ThreadEntity>) {
+            for entity in entities {
+                if let item = entity.identity, item.conversationId == data.c { orders[item.id] = item.order }
+            }
+        }
+        func lookUpCachedOrders(_ ids: [String]) async {
+            if samePairing() { remember(ids.compactMap { chat.reducer.entities[$0] }) }
+            let missing = ids.filter { orders[$0] == nil }
+            if !missing.isEmpty, let cached = try? await chat.store.itemOrders(missing, conversationId: data.c, host: entry.host, deviceId: entry.deviceId) {
+                orders.merge(cached) { known, _ in known }
+            }
+        }
+        await lookUpCachedOrders([data.m])
+        var before: Int64?
+        var more = true
+        func fetchPage() async throws {
+            try Task.checkCancellation()
+            let page = try await client.history(conversationId: data.c, query: HistoryQuery(before: before, limit: 100))
+            remember(page.items)
+            let oldest = page.items.compactMap(\.order).min()
+            more = page.hasMoreBefore && oldest.map { $0 < (before ?? .max) } == true
+            before = oldest
+        }
+        while orders[data.m] == nil && more { try await fetchPage() }
+        guard let order = orders[data.m] else { return }
+        try Task.checkCancellation()
         let read = try await client.markRead(conversationId: data.c, request: ReadRequest(order: order))
-        center.removeDeliveredNotifications(withIdentifiers: delivered)
-        guard pairings.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else { return }
+        let delivered = await deliveredMessages().filter { _, item in
+            item.c == data.c && PairedHost.key(item.h) == PairedHost.key(entry.host)
+        }
+        await lookUpCachedOrders(delivered.map { $0.1.m })
+        do {
+            while more && delivered.contains(where: { orders[$0.1.m] == nil }) { try await fetchPage() }
+        } catch { CallLog.log(.net, "push delivered_lookup_failed") }
+        try Task.checkCancellation()
+        guard Self.entry(for: data, in: pairings.notificationEntries())?.deviceId == entry.deviceId else { return }
+        removeDelivered(delivered.compactMap { id, item in orders[item.m].map { $0 <= order } == true ? id : nil })
         if samePairing() {
             chat.reducer.upsert(read.badge)
             try await chat.persist(chat.reducer.upsert(read.conversation))
         }
         if let total = try HostBadges.shared?.update(host: PairedHost.key(entry.host), count: read.badge.unreadTotal) {
-            try await center.setBadgeCount(total)
+            try await UNUserNotificationCenter.current().setBadgeCount(total)
         }
     }
 
@@ -330,4 +390,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         } catch { CallLog.log(.net, "push debug_failed \(CallLog.describe(error))") }
     }
     #endif
+}
+
+@MainActor
+final class NotificationActionTask {
+    private var background = UIBackgroundTaskIdentifier.invalid
+    private var work: Task<Void, Never>?
+    private var timer: Task<Void, Never>?
+    private var completion: (() -> Void)?
+
+    func run(timeout: Duration = .seconds(18), operation: @escaping @MainActor () async -> Void,
+             completion: @escaping () -> Void) {
+        self.completion = completion
+        background = UIApplication.shared.beginBackgroundTask(withName: "Message notification") { self.finish() }
+        work = Task { await operation(); finish() }
+        timer = Task {
+            do { try await Task.sleep(for: timeout) } catch { return }
+            finish()
+        }
+    }
+
+    private func finish() {
+        guard let completion else { return }
+        self.completion = nil
+        work?.cancel()
+        timer?.cancel()
+        if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+        completion()
+    }
 }

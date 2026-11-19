@@ -13,7 +13,12 @@ actor FixtureAppService: AppService {
     init(scenario: String? = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]) {
         self.scenario = scenario
         let preview = ThreadPreviewValues.self
-        if scenario == "outbox" {
+        if scenario == "message-menus" {
+            previewOutbox = [Outbox.State.queued, .failed].map { state in
+                Outbox.Entry(host: Self.host, conversationId: "conv_taylor01",
+                    request: SendRequest(clientId: state == .queued ? "queued" : "failed", text: "Example", fileIds: []), state: state)
+            }
+        } else if scenario == "outbox" {
             previewOutbox = [Outbox.State.queued, .waiting, .held].map { state in
                 Outbox.Entry(host: Self.host, conversationId: "conv_taylor01",
                     request: SendRequest(clientId: UUID().uuidString, text: "Please check the report.", fileIds: []),
@@ -21,6 +26,9 @@ actor FixtureAppService: AppService {
             }
         } else { previewOutbox = [] }
         switch scenario {
+        case "message-menus":
+            messages = [Message(kind: .message, id: "msg_5", conversationId: "conv_taylor01", order: 6, seq: 6,
+                role: .user, text: "Example", files: [], reactions: [], delivery: .reached, createdAt: 0)]
         case "outbox":
             messages = [Delivery.stored, .routed].enumerated().map { offset, delivery in
                 let order = Int64(5 + offset)

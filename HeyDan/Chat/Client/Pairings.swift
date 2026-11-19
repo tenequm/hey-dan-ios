@@ -89,6 +89,13 @@ import UIKit
         if state == .unreadable { reload() }
     }
 
+    func notificationEntries() -> [Entry] {
+        guard state == .unreadable else { return entries }
+        guard let data = try? IdentityKeychain.load(account: account),
+              let stored = try? JSONDecoder().decode(Saved.self, from: data) else { return [] }
+        return Array(stored.entries.values)
+    }
+
     private func reload() {
         let data: Data?
         do { data = try IdentityKeychain.load(account: account) }

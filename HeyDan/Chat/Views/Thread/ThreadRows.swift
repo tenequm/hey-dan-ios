@@ -54,6 +54,19 @@ private struct UserBubble: ViewModifier {
     }
 }
 
+extension View {
+    func messageMenu(_ text: String) -> some View {
+        contextMenu {
+            if !text.isEmpty {
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+                    .accessibilityIdentifier("chat.menu.copy")
+                ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("chat.menu.share")
+            }
+        }
+    }
+}
+
 struct MessageRow: View {
     @Environment(\.theme) private var theme
     let message: Message
@@ -77,14 +90,15 @@ struct MessageRow: View {
             VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
                 if outgoing {
                     if !message.text.isEmpty && !message.files.contains(where: { $0.kind == .audio && ($0.transcript?.text == message.text || $0.transcript == nil) }) {
-                        Text(message.text).textSelection(.enabled).modifier(UserBubble())
+                        Text(message.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(message.text)
                     }
                 } else if let card = visibleCard {
                     RichCard(card: card)
+                        .messageMenu(message.text)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier(AXID.card(message.id))
                 } else if !message.text.isEmpty {
-                    MessageBody(text: message.text)
+                    MessageBody(text: message.text, offersMessageActions: true)
                 }
                 ForEach(message.files, id: \.id) { file in
                     if outgoing, file.kind == .audio {
@@ -104,6 +118,11 @@ struct MessageRow: View {
                     if message.editedAt != nil { Text("Edited") }
                     if !outgoing {
                         Text(Date(timeIntervalSince1970: Double(message.createdAt) / 1000), style: .time)
+                        if !message.text.isEmpty {
+                            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+                                .labelStyle(.iconOnly)
+                                .accessibilityIdentifier("chat.copy.\(message.id)")
+                        }
                     }
                 }
                 .textRole(theme.type.caption).foregroundStyle(theme.color.textTertiary)
@@ -113,14 +132,8 @@ struct MessageRow: View {
             .foregroundStyle(theme.color.textPrimary)
             .padding(.leading, outgoing ? theme.space.s10 : 0)
             .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
-            .contentShape(Rectangle())
-            .contextMenu {
-                if !message.text.isEmpty {
-                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
-                    ShareLink(item: message.text)
-                }
-            }
-            .accessibilityElement(children: visibleCard != nil || message.files.contains(where: { $0.kind == .audio }) ? .contain : .combine)
+            .accessibilityElement(children: !outgoing || message.files.contains(where: { $0.kind == .audio }) ? .contain : .combine)
+            .accessibilityLabel(message.text, isEnabled: !outgoing && !message.text.isEmpty)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
                 Button("Send again") { if let id = message.clientId { retry(id) } }
@@ -229,7 +242,9 @@ struct OutboxRow: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: theme.space.s1_5) {
-            if !entry.request.text.isEmpty { Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()) }
+            if !entry.request.text.isEmpty {
+                Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(entry.request.text)
+            }
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
                 if let duration = attachment.durationMs {
                     VoiceMessageView(durationMs: duration).modifier(UserBubble())
@@ -263,6 +278,7 @@ struct OutboxRow: View {
         .padding(.leading, theme.space.s10)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.outbox.\(entry.request.clientId)")
         .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
             Button("Send again") { retry(entry.request.clientId) }
         }

@@ -101,13 +101,14 @@ struct VoiceMessageView: View {
         VStack(alignment: .leading, spacing: theme.space.s1) {
             switch file?.transcript?.state {
             case .done:
-                Text(file?.transcript?.text ?? messageText).textSelection(.enabled)
+                let transcript = file?.transcript?.text ?? messageText
+                Text(transcript).textSelection(.enabled).messageMenu(transcript)
             case .failed:
                 Text("Couldn't transcribe. The agent got the audio.").foregroundStyle(theme.color.textTertiary)
             case .pending:
                 Text("Transcribing...").foregroundStyle(theme.color.textTertiary)
             case nil:
-                Text(messageText.isEmpty ? "Voice message" : messageText)
+                Text(messageText.isEmpty ? "Voice message" : messageText).messageMenu(messageText)
             }
             Button {
                 if let file { playback.toggle(file) }
