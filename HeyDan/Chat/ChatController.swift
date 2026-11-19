@@ -254,6 +254,7 @@ import UIKit
         snapshot.replacesCache = restored
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
         guard token == generation, !Task.isCancelled else { return }
+        Pairings.shared.refreshAgents(list.conversations, host: host, deviceId: pairing.deviceId)
         if restored {
             reducer = ThreadReducer()
             historyFloors.removeAll()
@@ -336,7 +337,9 @@ import UIKit
     func pairedConversation(agentId: String, entry: Pairings.Entry) async throws(AppError) -> (conversation: Conversation?, service: any AppService) {
         guard host == entry.host, pairing?.deviceId == entry.deviceId else {
             let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
-            return (try await client.conversations().conversations.first { $0.agent.id == agentId }, client)
+            let list = try await client.conversations()
+            Pairings.shared.refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
+            return (list.conversations.first { $0.agent.id == agentId }, client)
         }
         let client = service
         await loadTask?.value
@@ -354,7 +357,7 @@ import UIKit
     @discardableResult func unpair(host: URL, localOnly: Bool = false) async -> AppError? {
         guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return nil }
         // The call's hangup is signed with this host's key, which unpairing deletes.
-        if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired?.host == host {
+        if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired.host == host {
             error = .callActive
             return .callActive
         }

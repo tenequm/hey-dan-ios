@@ -37,6 +37,24 @@ private final class FixtureBundle {}
         XCTAssertEqual(visible(), "Ready")
     }
 
+    func testAgentRefreshReplacesSnapshotAndIgnoresAnOldDevice() async throws {
+        let account = "test-agents-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        while pairings.state == .unreadable { await Task.yield() }
+        let host = URL(string: "https://example.com")!
+        let old = Agent(id: "former", name: "Former")
+        try pairings.add(PairResponse(deviceId: "current", userName: "Tester", agents: [old], protocol: 1, serverTime: 0),
+                         host: host, features: ["calls"])
+        pairings.refreshAgents([conversation, conversation], host: host, deviceId: "current")
+        pairings.refreshAgents([], host: host, deviceId: "replaced")
+        let restored = Pairings(account: account, publishes: false)
+        while restored.state == .unreadable { await Task.yield() }
+        XCTAssertEqual(restored.active?.agents, [conversation.agent])
+        restored.refreshAgents([], host: host, deviceId: "current")
+        XCTAssertEqual(restored.active?.agents, [])
+    }
+
     /// The signed start, end and cancel as the contract fixtures write them, and the fixture grant decoded.
     func testPairedRequestsMatchTheContract() async throws {
         let grantBody = try fixture("callGrant")
@@ -53,13 +71,11 @@ private final class FixtureBundle {}
             configuration: configuration, signer: { data, _ in try key.signature(for: data).derRepresentation })
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service, attemptId: expectedStart.attemptId)
-        let http = URLSession(configuration: .ephemeral)
-        defer { http.invalidateAndCancel() }
-        let grant = try await target.grant(over: http)
+        let grant = try await target.grant()
         XCTAssertEqual(grant.callId, "call_5tGh2")
         XCTAssertEqual(grant.agent, "Taylor")
         XCTAssertEqual(grant.names.version, 6)
-        try await target.end(callId: grant.callId, reason: nil, over: http)
+        try await target.end(callId: grant.callId, reason: nil)
         try await target.cancel()
         let requests = seen.withLock { $0 }
         XCTAssertEqual(requests.map { $0.url!.path }, ["/app/calls", "/app/calls/call_5tGh2/end", "/app/calls/attempts/\(expectedStart.attemptId)/cancel"])
@@ -75,41 +91,12 @@ private final class FixtureBundle {}
         }
     }
 
-    /// The saved line's requests, written out rather than rebuilt by the builders the call path uses.
-    func testSavedLineRequestsRemainUnchanged() async throws {
-        let line = try XCTUnwrap(VoiceLine(callLink: "https://example.invalid/voice?t=fixture"))
-        let seen = Mutex<[URLRequest]>([])
-        Stub.handler.withLock { $0 = { request in
-            seen.withLock { $0.append(request) }
-            return (200, request.url!.path.hasSuffix("token")
-                ? Data(#"{"protocol":6,"url":"wss://example.invalid","token":"fixture","callId":"call_fixture"}"#.utf8)
-                : Data())
-        } }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [Stub.self]
-        let http = URLSession(configuration: configuration)
-        defer { http.invalidateAndCancel() }
-        let target = CallTarget(line: line)
-        let grant = try await target.grant(over: http)
-        try await target.end(callId: grant.callId, reason: .noAgent, over: http)
-        let requests = seen.withLock { $0 }
-        XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests[0].url?.absoluteString, "https://example.invalid/voice/livekit/token?t=fixture&v=6")
-        XCTAssertEqual(requests[0].httpMethod, "POST")
-        XCTAssertNil(requests[0].value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(requests[1].url?.absoluteString, "https://example.invalid/voice/livekit/end?t=fixture")
-        XCTAssertEqual(requests[1].httpMethod, "POST")
-        XCTAssertFalse(target.usesRelay)
-    }
-
     func testCancelWhileGrantIsPendingUsesTheSameAttempt() async throws {
         let service = CallServiceSpy()
         service.delaysGrant = true
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service)
-        let http = URLSession(configuration: .ephemeral)
-        defer { http.invalidateAndCancel() }
-        let pending = Task { try await target.grant(over: http) }
+        let pending = Task { try await target.grant() }
         let deadline = ContinuousClock.now + .seconds(2)
         while service.pendingGrant == nil, ContinuousClock.now < deadline { await Task.yield() }
         let continuation = try XCTUnwrap(service.pendingGrant)
@@ -118,7 +105,7 @@ private final class FixtureBundle {}
         continuation.resume()
         service.pendingGrant = nil
         let grant = try await pending.value
-        try await target.end(callId: grant.callId, reason: nil, over: http)
+        try await target.end(callId: grant.callId, reason: nil)
         XCTAssertEqual(service.ends.first?.0, grant.callId)
     }
 
@@ -128,10 +115,8 @@ private final class FixtureBundle {}
         service.grantAttempt = "another-attempt"
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.com")!, deviceId: "dev_test",
             conversation: conversation), service: service)
-        let http = URLSession(configuration: .ephemeral)
-        defer { http.invalidateAndCancel() }
         do {
-            _ = try await target.grant(over: http)
+            _ = try await target.grant()
             XCTFail("a mismatched attempt must not be joined")
         } catch { XCTAssertEqual(error, .malformedGrant) }
         XCTAssertEqual(service.starts.first?.voiceProtocol, VoiceProtocol.requestedVersion)
@@ -139,7 +124,7 @@ private final class FixtureBundle {}
         XCTAssertEqual(service.ends.first?.0, "call_test")
         XCTAssertEqual(service.ends.first?.1.reason, "updating")
         XCTAssertEqual(service.cancels.first?.0, target.attemptId)
-        XCTAssertNotEqual(CallTarget(paired: target.paired!, service: service).attemptId, target.attemptId)
+        XCTAssertNotEqual(CallTarget(paired: target.paired, service: service).attemptId, target.attemptId)
     }
 
     func testPairedFailuresKeepTheirMeaning() {

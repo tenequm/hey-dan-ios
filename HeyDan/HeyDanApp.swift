@@ -9,6 +9,7 @@ import os
 import ObjectiveC.runtime
 #endif
 import SwiftUI
+import Security
 
 @main
 struct HeyDanApp: App {
@@ -32,6 +33,18 @@ struct HeyDanApp: App {
         CallLog.log(.call, "launch")
     }
 
+    private static func removeLegacyLinks() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "removedLegacyCallLinks") else { return }
+        for account in ["voice-lines", "call-link"] {
+            let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Bundle.main.bundleIdentifier ?? "HeyDan", kSecAttrAccount as String: account]
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { return }
+        }
+        defaults.set(true, forKey: "removedLegacyCallLinks")
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -49,6 +62,7 @@ struct HeyDanApp: App {
             }
                 .environment(\.pairingConfirmation, $pairedHost)
                 .onChange(of: scenePhase, initial: true) { _, phase in
+                    Self.removeLegacyLinks()
                     ChatController.shared.setActive(phase != .background)
                     if phase == .active, CallController.shared.openActiveConversation() { pairedHost = nil }
                 }
@@ -119,8 +133,6 @@ extension HeyDanApp {
         let launched = ContinuousClock.now
         // Read here, not in App.init: before a scene connects the content size category is still unspecified.
         CallLog.log(.call, "a11y reduceMotion=\(UIAccessibility.isReduceMotionEnabled) contentSize=\(UIApplication.shared.preferredContentSizeCategory.rawValue)")
-        if env["HEYDAN_START_ON_SAMPLE"] == "1" { VoiceDebug.installSampleStart() }
-        if let patch = env["HEYDAN_TTS_PATCH"], !patch.isEmpty { await VoiceDebug.patch(patch) }
         if let steps = env["HEYDAN_VOICE_STEPS"], !steps.isEmpty { VoiceDebug.schedule(steps, launched: launched) }
         #endif
         if env["HEYDAN_AUDIO_METER"] == "1" { AudioManager.shared.add(remoteAudioRenderer: AudioMeter.playout) }
@@ -179,12 +191,6 @@ extension HeyDanApp {
         }
         let pairedFeed = env["HEYDAN_CHAT_CHECKS"] == "1" && env["HEYDAN_PAIRED_FEED"] == "1"
         guard pairedFeed || env["HEYDAN_AUTOCALL"] == "1" else { return }
-        if !pairedFeed, let link = env["HEYDAN_CALL_LINK"] {
-            guard let requested = VoiceLine(callLink: link), CallController.shared.line == requested else {
-                CallLog.log(.call, "debug autocall refused: supplied line invalid or not selected", level: .error)
-                return
-            }
-        }
         if let steps = env["HEYDAN_STEPS"], !steps.isEmpty { DebugStep.schedule(steps) }
         var feed: Task<Void, Never>?
         defer { feed?.cancel() }
@@ -225,24 +231,41 @@ extension HeyDanApp {
             }
             return
         }
-        #if targetEnvironment(simulator)
-        if env["HEYDAN_START_ON_SAMPLE"] == "1" {
-            while CallController.shared.callID == nil, !Task.isCancelled {
-                if case .ended = CallController.shared.phase { return }
-                try? await Task.sleep(for: .milliseconds(50))
+        guard let run = IdentityKeychain.callTestRun else { return }
+        do {
+            try await IntentCall.readyPairings()
+            if let link = env["HEYDAN_CALL_PAIR_LINK"] {
+                guard Pairings.shared.entries.isEmpty else { throw AppError.callActive }
+                try await Pairings.shared.pair(link)
             }
-        } else { await CallController.shared.start() }
-        #else
-        await CallController.shared.start()
-        #endif
-        while CallController.shared.isCallActive, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let entry = Pairings.shared.active else { throw AppError.notPaired }
+            CallLog.log(.net, "test pair run=\(run) device=\(entry.deviceId)")
+            if env["HEYDAN_CALL_CLEANUP"] != "1" {
+                guard entry.agents.count == 1, let agent = entry.agents.first,
+                      agent.name.caseInsensitiveCompare("Stan") == .orderedSame else { throw AppError.notPaired }
+                if env["HEYDAN_CALL_SEED"] == "1" {
+                    CallLog.log(.net, "test intent ready run=\(run)")
+                    return
+                }
+                let target = try await IntentCall.pairedTarget(id: PairedAgentID.make(host: entry.host, agentId: agent.id))
+                _ = await CallController.shared.start(target: target)
+                while CallController.shared.isCallActive { try await Task.sleep(for: .milliseconds(100)) }
+                await CallController.shared.waitForHostEnd()
+            }
+        } catch { CallLog.log(.call, "debug autocall refused") }
+        if let entry = Pairings.shared.active {
+            let failure = await ChatController.shared.unpair(host: entry.host)
+            CallLog.log(.net, "test unpair run=\(run) ok=\(failure == nil)")
+        } else if env["HEYDAN_CALL_CLEANUP"] == "1", Pairings.shared.state == .none {
+            CallLog.log(.net, "test unpair run=\(run) ok=true")
+        }
     }
 }
 
 /// A key the caller presses mid-call. `mute` and `unmute` go through the key's own path, a CXSetMutedCallAction
 /// requested from CXCallController that the app did not mark as its own: exactly what the lock screen and AirPods send.
 private enum DebugStep: String {
-    case mute, unmute, manual, handsfree, talk, done, send, discard
+    case mute, unmute
 
     /// Steps press keys on the first call they find on, and only while it is on: one due after it ended would
     /// otherwise make its switch the next call's pick, or start a next call's recording.
@@ -275,12 +298,6 @@ private enum DebugStep: String {
         switch self {
         case .mute: controller.setMuted(true)
         case .unmute: controller.setMuted(false)
-        case .manual: await controller.setTurnMode(.review)
-        case .handsfree: await controller.setTurnMode(.auto)
-        case .talk: await controller.talk()
-        case .done: await controller.done()
-        case .send: await controller.send()
-        case .discard: await controller.discard()
         }
     }
 }
@@ -290,101 +307,16 @@ private enum DebugStep: String {
 @MainActor
 enum VoiceDebug {
     nonisolated static let feedDeadline = OSAllocatedUnfairLock<ContinuousClock.Instant?>(initialState: nil)
-    static var sampleDrained = false
-    private static var starts: [Task<UUID?, Never>] = []
-    private static var returned = 0
-    private static var refused = 0
-    private static var sampleOwner: UUID?
-    private static var released = false
-    private static var barrier: CheckedContinuation<Void, Never>?
     private static var firstVoiceOutcome: VoiceRequestOutcome?
     private static var feedGated = false
     private static var feedTriggered = false
     private static var voiceSteps: Task<Void, Never>?
     private static var feedTimer: Task<Void, Never>?
     private static var voiceFeedTimer: Task<Void, Never>?
-    private static var patched = false
-
-    static func installSampleStart() {
-        VoiceSample.activationBarrier = {
-            guard !released else { return }
-            await withCheckedContinuation { barrier = $0 }
-        }
-        VoiceSample.onActivationStarted = {
-            VoiceSample.onActivationStarted = nil
-            for _ in 0..<2 {
-                starts.append(Task {
-                    let id = await CallController.shared.start(lineID: nil)
-                    returned += 1
-                    if id == nil { refused += 1 }
-                    return id
-                })
-            }
-            Task {
-                let deadline = ContinuousClock.now + .seconds(2)
-                while !(sampleOwner != nil && refused > 0) && returned < 2 {
-                    guard ContinuousClock.now < deadline else {
-                        CallLog.log(.audio, "sample barrier released at deadline", level: .error)
-                        break
-                    }
-                    await Task.yield()
-                }
-                released = true
-                barrier?.resume()
-                barrier = nil
-                VoiceSample.activationBarrier = nil
-            }
-        }
-    }
-
-    static func callClaimed(_ id: UUID) {
-        sampleDrained = false
-        if !starts.isEmpty, !released { sampleOwner = id }
-    }
-
     static func callEnded(_ id: UUID) {
         voiceSteps?.cancel()
         feedTimer?.cancel()
         voiceFeedTimer?.cancel()
-        guard sampleOwner == id else { return }
-        Task {
-            var acceptedStarts = 0
-            var refusedStarts = 0
-            for start in starts {
-                if await start.value == nil { refusedStarts += 1 } else { acceptedStarts += 1 }
-            }
-            CallController.shared.trace(.audio, "sample start accepted=\(acceptedStarts) refused=\(refusedStarts) drained=\(sampleDrained) late=\(VoiceSample.deactivationsAfterHandoff)", id)
-            starts.removeAll()
-        }
-    }
-
-    static func patch(_ json: String) async {
-        guard !patched else { return }
-        patched = true
-        struct Input: Decodable {
-            let reset: Bool?
-            let provider: String?
-            let model: String?
-            let voice: String?
-        }
-        guard let line = CallController.shared.line else {
-            return CallLog.log(.net, "tts patch status=0")
-        }
-        guard let input = try? JSONDecoder().decode(Input.self, from: Data(json.utf8)), input.reset == true || input.provider != nil else {
-            return CallLog.log(.net, "tts patch status=0")
-        }
-        let patch: TTSPatch = input.reset == true ? .reset : .choice(TTSChoice(provider: input.provider ?? "", model: input.model, voice: input.voice))
-        let request: URLRequest
-        do { request = try line.ttsPatchRequest(patch) } catch {
-            return CallLog.log(.net, "tts patch skipped bodyTooLarge")
-        }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 10
-        configuration.timeoutIntervalForResource = 15
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let response = try? await session.data(for: request).1
-        CallLog.log(.net, "tts patch status=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
     }
 
     static func schedule(_ script: String, launched: ContinuousClock.Instant) {
@@ -623,20 +555,20 @@ private enum AudioFeed {
 /// plain intent's start from the background fails CallKit's user-intent check, and one from the app in front passes.
 struct StartConversationIntent: AppIntent {
     static let title: LocalizedStringResource = "Start conversation"
-    static let description = IntentDescription("Opens Hey Dan and calls a NanoClaw agent on its voice line.")
+    static let description = IntentDescription("Opens Hey Dan and calls a NanoClaw agent in its chat.")
     static let supportedModes: IntentModes = .foreground(.immediate)
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
-    @Parameter(title: "Line", description: "The agent to call. Empty calls the line picked in Hey Dan's settings.")
-    var line: VoiceLineEntity?
+    @Parameter(title: "Agent", description: "Choose a paired agent or use the default from Settings.")
+    var agent: AgentEntity?
 
-    static var parameterSummary: some ParameterSummary { Summary("Call \(\.$line)") }
+    static var parameterSummary: some ParameterSummary { Summary("Call \(\.$agent)") }
 
     init() {}
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        try await IntentCall.run(lineID: line?.id, inBackground: false)
+        try await IntentCall.run(agentID: agent?.id, inBackground: false)
         return .result()
     }
 }
@@ -659,14 +591,13 @@ struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         let mode = systemContext.currentMode == .background ? "background" : "foreground"
         CallLog.log(.intent, "intent call-agent start mode=\(mode) unlocked=\(UIApplication.shared.isProtectedDataAvailable)")
-        let lineID: UUID? = if case let .line(line) = destination { line.id } else { nil }
-        try await IntentCall.run(lineID: lineID, inBackground: true)
+        let agentID: UUID? = if case let .agent(agent) = destination { agent.id } else { nil }
+        try await IntentCall.run(agentID: agentID, inBackground: true)
         return .result()
     }
 }
 
-/// Starting a call from an intent: stays until the call is up or failed, so a failure (the tailnet down, most often)
-/// shows where it was asked.
+/// Keep the intent alive until CallKit has started the call or the caller can be shown the failure.
 @MainActor
 enum IntentCall {
     static let backgroundRefused = "iOS did not let Hey Dan start the call from the background. Use Start conversation, "
@@ -678,39 +609,16 @@ enum IntentCall {
     }
 
     /// `inBackground`: run with no app on screen, so nothing but the thrown error can tell the caller what went wrong.
-    static func run(lineID: UUID?, inBackground: Bool) async throws {
+    static func run(agentID: UUID?, inBackground: Bool) async throws {
         let began = ContinuousClock.now
         let controller = CallController.shared
-        // A process launched before the first unlock after a restart could not read the lines; unlocked, it can.
-        controller.readLinesIfNeeded()
-        // Only when a paired agent could answer: the picked saved line calls without waiting on the pairings' keychain.
-        let savedLine = lineID.map { id in controller.lines.entries.contains { $0.id == id } } ?? !controller.lines.entries.isEmpty
-        if !savedLine { try await readyPairings() }
-        CallLog.log(.intent, "start line=\(lineID.map(CallController.short) ?? "picked") lines=\(controller.lines.entries.count)")
-        if controller.lines.entries.isEmpty && Pairings.shared.entries.isEmpty {
-            CallLog.log(.intent, "no line: \(inBackground ? "failed" : "the app shows its settings")")
-            if inBackground { throw CallNotStarted(message: CallFailure.noLine.message) }
-            return
-        }
-        // Before resolving a paired agent, which can switch the app's active pairing.
+        try await readyPairings()
         if controller.isCallActive {
             CallLog.log(.intent, "a call is on already: not started")
             return
         }
-        let started: UUID?
-        if let target = try await pairedTarget(id: lineID) {
-            started = await controller.start(target: target)
-        } else {
-            if let lineID, !controller.lines.entries.contains(where: { $0.id == lineID }) {
-                throw CallNotStarted(message: "This agent is no longer saved. Choose an agent again.")
-            }
-            started = await controller.start(lineID: lineID)
-        }
-        guard let id = started else {
-            if case let .ended(ending) = controller.phase, ending.cause == .failure { throw notStarted(ending, inBackground) }
-            CallLog.log(.intent, "a call is on already: not started")
-            return
-        }
+        let target = try await pairedTarget(id: agentID)
+        guard let id = await controller.start(target: target) else { return }
         let deadline = ContinuousClock.now + CallController.setupBound
         while controller.isConnecting(id), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(250))
@@ -720,20 +628,6 @@ enum IntentCall {
             .intent, "wait done phase=\(controller.phase.logName) ms=\(CallLog.ms(since: began))", level: failed == nil ? .default : .error
         )
         if let failed { throw notStarted(failed, inBackground) }
-    }
-
-    static func run(agentID: UUID?, inBackground: Bool) async throws {
-        if CallController.shared.openActiveConversation() { return }
-        try await readyPairings()
-        let pairings = Pairings.shared
-        let preferred = agentID ?? UserDefaults.standard.string(forKey: "defaultCallAgent").flatMap(UUID.init(uuidString:))
-        let automatic = pairings.active.flatMap { entry in
-            entry.agents.first.map { PairedAgentID.make(host: entry.host, agentId: $0.id) }
-        }
-        guard let id = preferred ?? automatic, pairings.entries.contains(where: { entry in
-            entry.features.contains("calls") && entry.agents.contains { PairedAgentID.make(host: entry.host, agentId: $0.id) == id }
-        }) else { throw CallNotStarted(message: "Choose an available paired agent in Settings or Shortcuts.") }
-        try await run(lineID: id, inBackground: inBackground)
     }
 
     static func readyPairings() async throws {
@@ -746,16 +640,23 @@ enum IntentCall {
         }
     }
 
-    static func pairedTarget(id: UUID?) async throws -> CallTarget? {
-        let pairings = Pairings.shared
-        let selected = pairings.entries.lazy.filter { $0.features.contains("calls") }
-            .compactMap { entry -> (Pairings.Entry, HeyDanCore.Agent)? in
-                guard let agent = entry.agents.first(where: {
-                    PairedAgentID.make(host: entry.host, agentId: $0.id) == id
-                }) else { return nil }
-                return (entry, agent)
-            }.first
-        guard let (entry, agent) = selected ?? (id == nil ? defaultPairedAgent() : nil) else { return nil }
+    static func pairedTarget(id: UUID?) async throws -> CallTarget {
+        let entries = Pairings.shared.entries.filter { $0.features.contains("calls") }
+        var preference = UserDefaults.standard.string(forKey: "defaultCallAgent").flatMap(UUID.init(uuidString:))
+        #if DEBUG
+        if IdentityKeychain.callTestRun != nil { preference = nil }
+        #endif
+        let wanted = (id == nil || id == AgentEntity.defaultID) ? preference : id
+        let picked = entries.lazy.compactMap { entry in
+            entry.agents.first { PairedAgentID.make(host: entry.host, agentId: $0.id) == wanted }.map { (entry, $0) }
+        }.first
+        let active = Pairings.shared.active
+        let automatic = active.flatMap { entry in
+            entry.features.contains("calls") ? entry.agents.first.map { (entry, $0) } : nil
+        }
+        guard let (entry, agent) = wanted == nil ? automatic : picked else {
+            throw CallNotStarted(message: "Choose an available paired agent in Settings or Shortcuts.")
+        }
         let found: (conversation: Conversation?, service: any AppService)
         do { found = try await ChatController.shared.pairedConversation(agentId: agent.id, entry: entry) }
         catch { throw CallNotStarted(message: error.message) }
@@ -765,19 +666,14 @@ enum IntentCall {
         guard conversation.canCall else {
             throw CallNotStarted(message: conversation.callRefusal?.message ?? "Calling is unavailable.")
         }
+        guard Pairings.shared.entries.contains(where: { $0.host == entry.host && $0.deviceId == entry.deviceId }) else {
+            throw CallNotStarted(message: "This host is no longer paired.")
+        }
         return CallTarget(paired: PairedCallTarget(host: entry.host, deviceId: entry.deviceId,
             conversation: conversation), service: found.service)
     }
 
-    /// An empty destination keeps calling the saved line picked in the app; only a phone with no saved line calls
-    /// the active host's first agent.
-    static func defaultPairedAgent() -> (Pairings.Entry, HeyDanCore.Agent)? {
-        guard CallController.shared.lines.entries.isEmpty, let entry = Pairings.shared.active,
-              entry.features.contains("calls"), let agent = entry.agents.first else { return nil }
-        return (entry, agent)
-    }
 
-    /// A CallKit refusal in the background is no fault of the line: the caller needs the way that works, not a retry.
     private static func notStarted(_ ending: CallController.Ending, _ inBackground: Bool) -> CallNotStarted {
         if inBackground, case .callKitRefused = ending.failure { return CallNotStarted(message: backgroundRefused) }
         return CallNotStarted(message: ending.message)
@@ -786,7 +682,7 @@ enum IntentCall {
 
 @UnionValue
 enum CallDestination {
-    case line(VoiceLineEntity)
+    case agent(AgentEntity)
 }
 
 @AppEnum(schema: .phone.audioVisualMode)
@@ -797,16 +693,16 @@ enum CallAVMode: String {
     static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [.audio: "Audio", .video: "Video"]
 }
 
-/// A saved voice line as Shortcuts and Siri see it: the agent's name and an id that is not the link, which stays secret.
 @AppEntity(schema: .phone.phonePerson)
-struct VoiceLineEntity {
-    static let defaultQuery = VoiceLineQuery()
+struct AgentEntity {
+    static let defaultQuery = AgentQuery()
+    static let defaultID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    static var defaultAgent: Self { Self(id: defaultID, agent: "Default agent", source: "Hey Dan Settings") }
 
     let id: UUID
     let agent: String
     var person: IntentPerson
 
-    /// A paired agent and a saved line for the same agent read alike: the subtitle tells them apart.
     let source: String
     var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(agent)", subtitle: "\(source)") }
 
@@ -818,46 +714,32 @@ struct VoiceLineEntity {
     }
 }
 
-struct VoiceLineQuery: EntityStringQuery {
-    func suggestedEntities() async -> [VoiceLineEntity] {
+struct AgentQuery: EntityStringQuery {
+    func suggestedEntities() async -> [AgentEntity] {
         try? await IntentCall.readyPairings()
         return await MainActor.run {
-            CallController.shared.lines.entries.map { VoiceLineEntity(line: $0) }
-                + Pairings.shared.entries.filter { $0.features.contains("calls") }.flatMap { entry in
-                    entry.agents.map { VoiceLineEntity(entry: entry, agent: $0) }
+            [AgentEntity.defaultAgent] + Pairings.shared.entries.filter { $0.features.contains("calls") }.flatMap { entry in
+                    entry.agents.map { AgentEntity(entry: entry, agent: $0) }
                 }
         }
     }
 
-    func entities(for identifiers: [UUID]) async -> [VoiceLineEntity] {
+    func entities(for identifiers: [UUID]) async -> [AgentEntity] {
         await suggestedEntities().filter { identifiers.contains($0.id) }
     }
 
-    func entities(matching string: String) async -> [VoiceLineEntity] {
+    func entities(matching string: String) async -> [AgentEntity] {
         await suggestedEntities().filter { $0.agent.localizedStandardContains(string) }
     }
 
-    /// The line picked in the app, so a new shortcut starts with it filled in.
-    func defaultResult() async -> VoiceLineEntity? {
-        try? await IntentCall.readyPairings()
-        return await MainActor.run {
-            if let line = CallController.shared.lines.selected { return VoiceLineEntity(line: line) }
-            return IntentCall.defaultPairedAgent().map { VoiceLineEntity(entry: $0.0, agent: $0.1) }
-        }
-    }
+    func defaultResult() async -> AgentEntity? { .defaultAgent }
 }
 
-private extension VoiceLineEntity {
-    init(line: VoiceLines.Entry) { self.init(id: line.id, agent: line.name.capitalizedFirst, source: "Call link") }
+extension AgentEntity {
     init(entry: Pairings.Entry, agent: HeyDanCore.Agent) {
         self.init(id: PairedAgentID.make(host: entry.host, agentId: agent.id), agent: agent.name,
             source: entry.host.host() ?? "Paired host")
     }
-}
-
-private extension String {
-    /// "your agent" heads a list as "Your agent"; a host's name stays as it wrote it.
-    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
 
 struct HeyDanShortcuts: AppShortcutsProvider {
@@ -867,8 +749,8 @@ struct HeyDanShortcuts: AppShortcutsProvider {
             phrases: [
                 "Talk to \(.applicationName)",
                 "Start a conversation with \(.applicationName)",
-                "Call \(\.$line) with \(.applicationName)",
-                "Talk to \(\.$line) with \(.applicationName)",
+                "Call \(\.$agent) with \(.applicationName)",
+                "Talk to \(\.$agent) with \(.applicationName)",
             ],
             shortTitle: "Start conversation",
             systemImageName: "waveform"

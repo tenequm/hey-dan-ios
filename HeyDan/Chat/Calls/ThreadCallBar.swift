@@ -64,6 +64,7 @@ struct ThreadCallBar: View {
         .shadow(color: theme.color.shadow, radius: theme.space.s3_5, y: theme.space.s1_5)
         .padding(.horizontal, theme.space.s3)
         .padding(.bottom, theme.space.s1_5)
+        .onAppear { call.trace(.call, "thread call bar shown") }
         .sheet(isPresented: $presentsCallOptions, onDismiss: {
             voiceTarget = pendingVoice
             pendingVoice = nil

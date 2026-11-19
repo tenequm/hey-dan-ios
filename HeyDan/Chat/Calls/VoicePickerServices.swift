@@ -2,59 +2,19 @@ import Foundation
 import HeyDanCore
 
 enum VoicePickerIdentity: Hashable, Sendable {
-    case line(origin: URL, credential: String)
     case paired(host: URL, deviceId: String, conversationId: String)
 }
 
 protocol VoicePickerService: Sendable {
     var identity: VoicePickerIdentity { get }
-    var line: VoiceLine? { get }
     func voice() async throws(TTSServiceFailure) -> TTSView
     func updateVoice(_ request: TTSPatch) async throws(TTSServiceFailure) -> TTSView
     func voices(_ query: VoiceCatalogQuery) async throws(TTSServiceFailure) -> CatalogPage
 }
 
-struct LineVoicePickerService: VoicePickerService {
-    let savedLine: VoiceLine
-    let session: URLSession
-    var line: VoiceLine? { savedLine }
-    var identity: VoicePickerIdentity { .line(origin: savedLine.origin, credential: savedLine.token) }
-
-    func voice() async throws(TTSServiceFailure) -> TTSView {
-        try await fetch(savedLine.ttsRequest)
-    }
-
-    func updateVoice(_ patch: TTSPatch) async throws(TTSServiceFailure) -> TTSView {
-        let request: URLRequest
-        do { request = try savedLine.ttsPatchRequest(patch) }
-        catch { throw .invalid(field: "voice") }
-        return try await fetch(request)
-    }
-
-    func voices(_ query: VoiceCatalogQuery) async throws(TTSServiceFailure) -> CatalogPage {
-        try await fetch(savedLine.voicesRequest(provider: query.provider, q: query.q, language: query.language,
-            gender: query.gender, cursor: query.cursor, limit: query.limit ?? 50))
-    }
-
-    private func fetch<Value: Decodable>(_ input: URLRequest) async throws(TTSServiceFailure) -> Value {
-        var request = input
-        request.timeoutInterval = 12
-        let data: Data
-        let response: URLResponse
-        do { (data, response) = try await session.data(for: request) }
-        catch { throw TTSServiceFailure(transportError: error) }
-        guard let response = response as? HTTPURLResponse else { throw .malformed }
-        CallLog.log(.net, "picker method=\(request.httpMethod ?? "GET") status=\(response.statusCode)")
-        guard (200..<300).contains(response.statusCode) else { throw TTSServiceFailure(status: response.statusCode, body: data) }
-        do { return try JSONDecoder().decode(Value.self, from: data) }
-        catch { throw .malformed }
-    }
-}
-
 struct PairedVoicePickerService: VoicePickerService {
     let target: PairedCallTarget
     let service: any AppService
-    var line: VoiceLine? { nil }
     var identity: VoicePickerIdentity {
         .paired(host: target.host, deviceId: target.deviceId, conversationId: target.conversation.id)
     }

@@ -88,7 +88,7 @@ public struct LiveVoice: Sendable, Equatable {
     }
 
     @discardableResult
-    public mutating func apply(reply: ReviewReply, for id: UUID) -> Bool {
+    public mutating func apply(reply: WorkerReply, for id: UUID) -> Bool {
         guard id == callID, let request, reply.gen == request.gen, inFlight else { return false }
         inFlight = false
         if reply.ok {

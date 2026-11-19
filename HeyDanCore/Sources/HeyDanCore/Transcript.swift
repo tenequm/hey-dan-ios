@@ -2,8 +2,7 @@ import Foundation
 
 /// A call's live transcript: caption segments, turn statuses, dropped words and reply labels folded into
 /// ordered lines the way nanoclaw's browser call page folds them (`livekit-call.ts`: the captions effect,
-/// `applyTurn`, `applyDropped`, `showUnspoken`, the wake marks). A review draft shows here only once it is sent;
-/// the words of a recording are `ReviewSession`'s.
+/// `applyTurn`, `applyDropped`, `showUnspoken` and the wake marks).
 public struct Transcript: Sendable, Equatable {
     public struct Line: Sendable, Equatable, Identifiable {
         public enum Speaker: Sendable, Equatable {
@@ -46,8 +45,6 @@ public struct Transcript: Sendable, Equatable {
     }
 
     public enum Mark: Sendable, Equatable {
-        /// A sent review draft on its way, before the host answers.
-        case sending
         case sent
         case lost(TurnStatus.Reason?)
         case dropped(DroppedSpeech.Kind)
@@ -164,16 +161,7 @@ public struct Transcript: Sendable, Equatable {
             let shown = shownTurns[status.turn] ?? (shownTurns.count + 1)
             shownTurns[status.turn] = shown
             switch status.status {
-            // An auto turn shows no mark while it goes out; a sent review draft enters the history here, once, with
-            // exactly the text the caller approved.
-            case .sending:
-                guard status.draft != nil, let text = status.text, !text.isEmpty else { return }
-                var line = Line(id: takeID(), speaker: .caller, kind: .caption, text: text, at: now, isFinal: true)
-                line.mark = .sending
-                line.turn = shown
-                covered.insert(line.id)
-                append(line)
-            case .working: return
+            case .sending, .working: return
             case .sent: applyTurn(.sent, text: status.text, wordless: false, shown: shown, at: now)
             case .lost:
                 let said = Self.norm(status.text ?? "")
@@ -223,23 +211,6 @@ public struct Transcript: Sendable, Equatable {
     /// The worker announced its command words: from now on it marks every caption that holds one.
     public mutating func commandsAnnounced() {
         marksCommands = true
-    }
-
-    /// Whether caption segment `segment` already has a line (or had one, since dropped at the cap or taken back).
-    public func knows(segment: String) -> Bool {
-        segmentLine[segment] != nil
-    }
-
-    /// Takes the open caller lines out: the words of an auto turn switched to review, which become its draft and were
-    /// never sent. Returns each line's segment and text, oldest first.
-    public mutating func takeOpenCallerLines() -> [(segment: String, text: String)] {
-        let open = openCallerLines
-        guard !open.isEmpty else { return [] }
-        let ids = Set(open.map(\.id))
-        let segments = Dictionary(segmentLine.filter { ids.contains($0.value) }.map { ($0.value, $0.key) }) { first, _ in first }
-        lines.removeAll { ids.contains($0.id) }
-        if let streamingLineID, ids.contains(streamingLineID) { self.streamingLineID = nil }
-        return open.compactMap { line in segments[line.id].map { (segment: $0, text: line.text) } }
     }
 
     /// Interim caller lines unchanged for `interimStale` stop reading as unsettled; true when one did.
