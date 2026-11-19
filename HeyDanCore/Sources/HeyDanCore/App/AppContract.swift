@@ -270,13 +270,11 @@ nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
 
     public var agent: Settings
     public let session: Session
-    public let taskCount: Int?
     public let options: Options
 
-    public init(agent: Settings, session: Session, taskCount: Int?, options: Options) {
+    public init(agent: Settings, session: Session, options: Options) {
         self.agent = agent
         self.session = session
-        self.taskCount = taskCount
         self.options = options
     }
 }

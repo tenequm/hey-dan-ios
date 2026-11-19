@@ -129,7 +129,7 @@ actor FixtureAppService: AppService {
         return .init(status: .init(agent: settings(for: agent),
             session: .init(contextTokens: compacted.contains(conversationId) ? nil : 99000,
                            contextWindow: 165000, turns: 8, outputTokens: 2400, queueDepth: 0),
-            taskCount: 0, options: .init(models: Self.modelOptions, efforts: Self.efforts)))
+            options: .init(models: Self.modelOptions, efforts: Self.efforts)))
     }
 
     func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse {

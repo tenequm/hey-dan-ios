@@ -269,12 +269,6 @@ private struct CheckFailure: Error { let label: String }
     #expect(encoded?.keys.sorted() == ["effort", "model"])
     let partial = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: .inherited, effort: nil))) as? [String: NSNull]
     #expect(partial?.keys.sorted() == ["model"])
-    let response = try #require(fixtures["agentStatusResponse"] as? [String: Any])
-    var raw = try #require(response["status"] as? [String: Any])
-    for count: Any? in [NSNull(), nil] {
-        raw["taskCount"] = count
-        #expect(try fixtureDecode(AgentStatus.self, raw).taskCount == nil)
-    }
     #expect(AgentStatus.effortName("xhigh") == "Extra high")
 }
 
