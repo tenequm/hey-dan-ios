@@ -66,8 +66,11 @@ extension Transcript {
         let caption = words(line.text)
         var matchingMessages = 0
         for row in rows.reversed() {
-            guard case .entity(.message(let message)) = row, message.order > order, message.voice == speaker else { continue }
-            if Double(message.createdAt) / 1000 >= line.at.timeIntervalSince1970 { return nil }
+            guard case .entity(.message(let message)) = row, message.order > order else { continue }
+            let tagged = message.voice == speaker
+            // A Jev agent's saved reply has no spoken tag. Only its words can identify that reply.
+            guard tagged || (line.speaker == .agent && message.role == .agent && message.voice == nil) else { continue }
+            if tagged, Double(message.createdAt) / 1000 >= line.at.timeIntervalSince1970 { return nil }
             if !caption.isEmpty, (" " + words(message.text) + " ").contains(" " + caption + " ") { matchingMessages += 1 }
         }
         if matchingMessages > 0 {

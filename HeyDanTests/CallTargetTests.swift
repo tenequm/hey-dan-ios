@@ -33,6 +33,12 @@ private final class FixtureBundle {}
         message.createdAt = 99_900
         transcript.caption(segment: "two", text: "Ready", isFinal: true, fromCaller: false, at: start)
         XCTAssertNil(visible())
+        message.role = .agent
+        message.voice = nil
+        XCTAssertNil(visible())
+        message.text = "An unrelated update."
+        XCTAssertEqual(visible(), "Ready")
+        message.text = "Ready?"
         transcript.caption(segment: "three", text: "Ready", isFinal: true, fromCaller: false, at: start.addingTimeInterval(2))
         XCTAssertEqual(visible(), "Ready")
     }
