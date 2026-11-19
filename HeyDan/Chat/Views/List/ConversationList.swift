@@ -129,6 +129,7 @@ struct ConversationList: View {
             .navigationDestination(for: String.self) { id in
                 if let conversation = chat.conversation(id) {
                     ThreadView(conversation: conversation)
+                        .id(chat.generation.uuidString + conversation.id)
                 }
             }
             .task(id: chat.openConversationId) {

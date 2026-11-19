@@ -10,6 +10,9 @@ struct ComposerView: View {
     /// Why the last send did not queue.
     var failure: String? = nil
     var isInCall = false
+    var agentStatus: AgentStatus?
+    var openSettings: () -> Void = {}
+    var compact: () async -> Void = {}
     @State var text = ""
     @State var attachments: [StagedAttachment] = []
     @State private var draftFiles = AttachmentDraftFiles()
@@ -112,71 +115,130 @@ struct ComposerView: View {
         }
     }
 
+    private var expanded: Bool {
+        availableFeatures.contains("agent-status") && (textFocused || !text.isEmpty || !attachments.isEmpty)
+    }
+
     private var composerControls: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            if availableFeatures.contains("files") {
-                Menu {
-                    Button("Photos", systemImage: "photo") { pickingPhotos = true }
-                        .accessibilityIdentifier(AXID.composerPhotos)
-                    Button("Files", systemImage: "folder") { importing = true }
-                } label: {
-                    Image(systemName: "plus").foregroundStyle(theme.color.icon)
-                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .bottom, spacing: 0) {
+                if !expanded { attachmentMenu }
+                messageField
+                if !expanded {
+                    agentControls
+                    sendControls
                 }
-                .accessibilityLabel("Attach")
-                .accessibilityIdentifier(AXID.composerAttach)
-                .disabled(staging)
             }
-            TextField("Message", text: $text, prompt: Text("Message").foregroundStyle(theme.color.placeholder), axis: .vertical)
-                .lineLimit(1...6)
-                .focused($textFocused)
-                .onChange(of: text) { showsDictationHint = false }
-                .onChange(of: textFocused) { if !textFocused { showsDictationHint = false } }
-                .textRole(theme.type.body)
-                .foregroundStyle(theme.color.textPrimary)
-                .padding(.horizontal, theme.space.s1).padding(.vertical, theme.space.s2_5)
-                .accessibilityIdentifier(AXID.composerText)
-            if staging { ProgressView() }
-            if availableFeatures.contains("voice-messages"), text.isEmpty, attachments.isEmpty, !staging {
-                Button {
-                    textFocused = false
-                    importFailure = nil
-                    recording = true
-                } label: {
-                    Image(systemName: "mic").foregroundStyle(theme.color.icon)
-                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+            if expanded {
+                HStack(spacing: 0) {
+                    attachmentMenu
+                    agentControls
+                    sendControls
                 }
-                .buttonStyle(.plain).accessibilityLabel("Record voice message")
-                .accessibilityIdentifier("composer.record")
-                .disabled(CallController.shared.isCallActive)
-            } else {
-                if !availableFeatures.contains("voice-messages") {
-                    Button {
-                        textFocused = true
-                        showsDictationHint = true
-                    } label: {
-                        Image(systemName: "mic")
-                            .foregroundStyle(theme.color.icon)
-                            .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Use keyboard dictation")
-                    .accessibilityIdentifier(AXID.composerDictation)
-                }
-                Button { queueMessage() } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: theme.type.body.size, weight: theme.weight.bold))
-                        .foregroundStyle(canSend ? theme.color.onAccent : theme.color.disabledIcon)
-                        .frame(width: theme.type.display.size, height: theme.type.display.size)
-                        .background(canSend ? theme.color.accent : theme.color.disabledFill, in: Circle())
-                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
-                }
-                .buttonStyle(.plain).accessibilityLabel("Send")
-                .disabled(!canSend)
-                .accessibilityIdentifier(AXID.composerSend)
             }
         }
         .padding(.vertical, theme.space.s0_5)
+    }
+
+    @ViewBuilder private var agentControls: some View {
+        if availableFeatures.contains("agent-status") {
+            let label = agentStatus?.agent.chipLabel ?? "Agent settings"
+            Button(action: openSettings) {
+                HStack(spacing: theme.space.s1) {
+                    Image(systemName: "cpu")
+                    if expanded { Text(label).lineLimit(1) }
+                }
+                .textRole(theme.type.footnote, theme.weight.medium)
+                .padding(.horizontal, theme.space.s2)
+                .frame(minWidth: theme.control.touchTarget, minHeight: theme.control.touchTarget)
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel(label)
+            .accessibilityHint("Opens agent settings")
+            .accessibilityIdentifier("composer.model")
+            if expanded { Spacer(minLength: 0) }
+            if let agentStatus, let usage = agentStatus.session.usageDescription(includingPercent: true) {
+                Menu {
+                    Text(usage)
+                    Button("Compact now") { Task { await compact() } }
+                } label: {
+                    ContextRing(session: agentStatus.session)
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                }
+                .accessibilityLabel(usage)
+                .accessibilityIdentifier("composer.context")
+            }
+        }
+    }
+
+    @ViewBuilder private var attachmentMenu: some View {
+        if availableFeatures.contains("files") {
+            Menu {
+                Button("Photos", systemImage: "photo") { pickingPhotos = true }
+                    .accessibilityIdentifier(AXID.composerPhotos)
+                Button("Files", systemImage: "folder") { importing = true }
+            } label: {
+                Image(systemName: "plus").foregroundStyle(theme.color.icon)
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+            }
+            .accessibilityLabel("Attach")
+            .accessibilityIdentifier(AXID.composerAttach)
+            .disabled(staging)
+        }
+    }
+
+    @ViewBuilder private var messageField: some View {
+        TextField("Message", text: $text, prompt: Text("Message").foregroundStyle(theme.color.placeholder), axis: .vertical)
+            .lineLimit(1...6)
+            .focused($textFocused)
+            .onChange(of: text) { showsDictationHint = false }
+            .onChange(of: textFocused) { if !textFocused { showsDictationHint = false } }
+            .textRole(theme.type.body)
+            .foregroundStyle(theme.color.textPrimary)
+            .padding(.horizontal, expanded ? theme.space.s3_5 : theme.space.s1).padding(.vertical, theme.space.s2_5)
+            .accessibilityIdentifier(AXID.composerText)
+    }
+
+    @ViewBuilder private var sendControls: some View {
+        if staging { ProgressView() }
+        if availableFeatures.contains("voice-messages"), text.isEmpty, attachments.isEmpty, !staging {
+            Button {
+                textFocused = false
+                importFailure = nil
+                recording = true
+            } label: {
+                Image(systemName: "mic").foregroundStyle(theme.color.icon)
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+            }
+            .buttonStyle(.plain).accessibilityLabel("Record voice message")
+            .accessibilityIdentifier("composer.record")
+            .disabled(CallController.shared.isCallActive)
+        } else {
+            if !availableFeatures.contains("voice-messages") {
+                Button {
+                    textFocused = true
+                    showsDictationHint = true
+                } label: {
+                    Image(systemName: "mic")
+                        .foregroundStyle(theme.color.icon)
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Use keyboard dictation")
+                .accessibilityIdentifier(AXID.composerDictation)
+            }
+            Button { queueMessage() } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: theme.type.body.size, weight: theme.weight.bold))
+                    .foregroundStyle(canSend ? theme.color.onAccent : theme.color.disabledIcon)
+                    .frame(width: theme.type.display.size, height: theme.type.display.size)
+                    .background(canSend ? theme.color.accent : theme.color.disabledFill, in: Circle())
+                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+            }
+            .buttonStyle(.plain).accessibilityLabel("Send")
+            .disabled(!canSend)
+            .accessibilityIdentifier(AXID.composerSend)
+        }
     }
 
     private func queueMessage() {

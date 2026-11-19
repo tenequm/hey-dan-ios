@@ -103,9 +103,59 @@ actor FixtureAppService: AppService {
                 ])], actions: [.init(label: "Open report", url: "https://example.org/report", style: "primary")]),
             files: [], reactions: [], createdAt: 0)
     ]
+    private static let modelOptions: [AgentStatus.Model] = [
+        .init(id: "claude-sonnet-5-5", label: "Sonnet 5.5"), .init(id: "claude-sonnet-5", label: "Sonnet 5"),
+        .init(id: "claude-opus-5", label: "Opus 5"), .init(id: "claude-opus-5-5", label: "Opus 5.5"),
+        .init(id: "claude-fable-5", label: "Fable 5"), .init(id: "claude-fable-5-2", label: "Fable 5.2")
+    ]
+    private static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    private var settings: [String: AgentStatus.Settings] = [:]
+    private var compacted: Set<String> = []
+    private var currentState: State = .working
+    private var statusRev: Int64 = 1
+
+    private func settings(for agent: Agent) -> AgentStatus.Settings {
+        settings[agent.id] ?? .init(id: agent.id, name: agent.name, model: .init(id: nil, label: nil),
+            defaultModel: Self.modelOptions[0], effort: "high", provider: "claude",
+            canEdit: scenario != "read-only", configUpdatedAt: nil)
+    }
+
+    func agentStatus(conversationId: String) async throws(AppError) -> AgentStatusResponse {
+        let list = try await conversations()
+        guard let agent = list.conversations.first(where: { $0.id == conversationId })?.agent else {
+            throw .server(status: 404, body: .init(error: "not_found", message: "Conversation unavailable."))
+        }
+        return .init(status: .init(agent: settings(for: agent),
+            session: .init(contextTokens: compacted.contains(conversationId) ? 18000 : 99000,
+                           contextWindow: 165000, turns: 8, outputTokens: 2400, queueDepth: 0),
+            taskCount: 0, options: .init(models: Self.modelOptions, efforts: Self.efforts)))
+    }
+
+    func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse {
+        let list = try await conversations()
+        guard let agent = list.conversations.first(where: { $0.agent.id == agentId })?.agent else {
+            throw .server(status: 404, body: .init(error: "not_found", message: "Agent unavailable."))
+        }
+        var next = settings(for: agent)
+        guard next.canEdit else { throw .server(status: 403, body: .init(error: "forbidden", message: "Read only.")) }
+        if let model = request.model {
+            if let option = Self.modelOptions.first(where: { $0.id == model }) { next.model = option }
+            else { throw .server(status: 400, body: .init(error: "invalid_value", message: "Unknown model.")) }
+        }
+        if let effort = request.effort {
+            guard Self.efforts.contains(effort) else {
+                throw .server(status: 400, body: .init(error: "invalid_value", message: "Unknown effort."))
+            }
+            next.effort = effort
+        }
+        next.configUpdatedAt = Date.now.ISO8601Format()
+        settings[agentId] = next
+        return .init(agent: next)
+    }
+
     private var status: Status {
         if scenario == "messages" { return ThreadPreviewValues.statuswaiting }
-        return Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0)
+        return Status(kind: .status, conversationId: conversation.id, rev: statusRev, state: currentState, label: currentState == .idle ? "Idle" : "Working", at: 0)
     }
     private var includesQuestion: Bool { !FixtureContent.capturing || scenario == "question" || scenario == "full" }
     private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.hidden == true ? 0 : conversation.unread) }
@@ -118,7 +168,7 @@ actor FixtureAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse {
         HelloResponse(protocol: 1, minProtocol: 1, voiceProtocol: 6,
-            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker", "agents", "unread", "voice-messages"], serverTime: 0)
+            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker", "agents", "unread", "voice-messages", "agent-status", "agent-settings"], serverTime: 0)
     }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { Self.pairing }
     private var candidate: AgentCandidate {
@@ -159,6 +209,11 @@ actor FixtureAppService: AppService {
             clientId: request.clientId, delivery: .stored, createdAt: 0)
         messages.append(stored)
         try publish(event(.message, stored, id: sequence))
+        if stored.text == "/compact", currentState != .working {
+            currentState = .working
+            statusRev += 1
+            try publish(event(.status, status))
+        }
         let voice = stored.files.contains { $0.kind == .audio }
         if voice { try publishPreview(stored, text: "Voice message") }
         Task {
@@ -186,6 +241,12 @@ actor FixtureAppService: AppService {
         try publish(event(.message, reached, id: sequence))
         if let preview = reached.files.first(where: { $0.kind == .audio })?.transcript?.text, conversation.lastMessage?.id == reached.id {
             try publishPreview(reached, text: preview)
+        }
+        if stored.text == "/compact" {
+            compacted.insert(stored.conversationId)
+            currentState = .idle
+            statusRev += 1
+            try publish(event(.status, status))
         }
         sequence += 1
         let reply = Message(kind: .message, id: "msg_reply_" + stored.id, conversationId: stored.conversationId,

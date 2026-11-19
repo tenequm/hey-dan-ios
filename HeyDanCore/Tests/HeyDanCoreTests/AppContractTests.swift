@@ -240,3 +240,39 @@ private struct CheckFailure: Error { let label: String }
     let encoded = try JSONEncoder().encode(attachment.transcript?.state)
     #expect(try JSONDecoder().decode(String.self, from: encoded) == "unavailable")
 }
+
+@Test func agentSettingsWireFixtures() throws {
+    let fixtures = try coreFixtures()
+    let hello = try fixtureDecode(HelloResponse.self, #require(fixtures["hello"]))
+    #expect(hello.features.contains("agent-status") && hello.features.contains("agent-settings"))
+    let status = try fixtureDecode(AgentStatusResponse.self, #require(fixtures["agentStatusResponse"])).status
+    #expect(status.agent.model.id == nil)
+    #expect(status.agent.chipLabel == "Default - Sonnet 5.5")
+    #expect(status.session.contextTokens == nil)
+    let request = try fixtureDecode(AgentSettingsRequest.self, #require(fixtures["agentSettingsRequest"]))
+    let saved = try fixtureDecode(AgentSettingsResponse.self, #require(fixtures["agentSettingsResponse"])).agent
+    #expect(request.model == "opus")
+    #expect(saved.model.id == "claude-opus-5")
+    #expect(saved.chipLabel == "Opus 5 - High")
+    let failures = try #require(fixtures["agentSettingsErrors"] as? [String: [String: Any]])
+    for (name, code) in [("invalidModel", "invalid_value"), ("invalidEffort", "invalid_value"),
+                         ("invalidSettings", "invalid_value"), ("forbidden", "forbidden"), ("notFound", "not_found")] {
+        let failure = try #require(failures[name])
+        #expect(try fixtureDecode(ErrorBody.self, #require(failure["body"])).error == code)
+    }
+    #expect(saved.effort == request.effort)
+    let patch = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: nil, effort: "low"))) as? [String: String]
+    #expect(patch == ["effort": "low"])
+}
+
+@Test func contextUsageFormatting() {
+    func usage(_ used: Int?, _ window: Int?) -> AgentStatus.Session {
+        .init(contextTokens: used, contextWindow: window, turns: nil, outputTokens: nil, queueDepth: nil)
+    }
+    #expect(usage(nil, 165000).usageDescription() == nil)
+    #expect(usage(84000, 165000).usageDescription() == "84k of 165k used")
+    #expect(usage(84000, 165000).usageDescription(includingPercent: true) == "84k of 165k tokens used (51%)")
+    #expect(usage(0, 1000000).usageDescription(includingPercent: true) == "0 of 1M tokens used (0%)")
+    #expect(usage(432, 0).usageDescription() == "432 tokens used")
+    #expect(usage(80000, 100000).usageFraction == 0.8)
+}

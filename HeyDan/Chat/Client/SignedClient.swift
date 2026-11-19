@@ -214,6 +214,12 @@ final class SignedClient: AppService {
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse {
         return try await json("POST", ["conversations", conversationId, "messages"], body: encode(request))
     }
+    func agentStatus(conversationId: String) async throws(AppError) -> AgentStatusResponse {
+        try await json("GET", ["conversations", conversationId, "status"])
+    }
+    func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse {
+        try await json("PUT", ["agents", agentId, "settings"], body: encode(request))
+    }
     func agents() async throws(AppError) -> AgentsResponse {
         try await json("GET", ["agents"])
     }

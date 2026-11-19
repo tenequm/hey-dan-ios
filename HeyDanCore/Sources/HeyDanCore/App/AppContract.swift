@@ -189,6 +189,128 @@ nonisolated public struct AgentResponse: Sendable, Equatable, Codable {
     public init(agent: AgentCandidate) { self.agent = agent }
 }
 
+nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
+    public struct Model: Codable, Equatable, Sendable {
+        public let id: String?
+        public let label: String?
+        public var displayName: String { label ?? id ?? "Default" }
+
+        public init(id: String?, label: String?) {
+            self.id = id
+            self.label = label
+        }
+    }
+
+    public struct Settings: Codable, Equatable, Sendable {
+        public let id: String
+        public let name: String
+        public var model: Model
+        public let defaultModel: Model
+        public var effort: String?
+        public let provider: String?
+        public let canEdit: Bool
+        public var configUpdatedAt: String?
+
+        public var inheritedLabel: String {
+            defaultModel.id == nil ? "Provider default" : "Default - " + defaultModel.displayName
+        }
+
+        public var chipLabel: String {
+            if model.id == nil { return inheritedLabel }
+            return [model.displayName, effort?.capitalized].compactMap { $0 }.joined(separator: " - ")
+        }
+
+        public init(id: String, name: String, model: Model, defaultModel: Model, effort: String?,
+                    provider: String?, canEdit: Bool, configUpdatedAt: String?) {
+            self.id = id
+            self.name = name
+            self.model = model
+            self.defaultModel = defaultModel
+            self.effort = effort
+            self.provider = provider
+            self.canEdit = canEdit
+            self.configUpdatedAt = configUpdatedAt
+        }
+    }
+
+    public struct Session: Codable, Equatable, Sendable {
+        public let contextTokens: Int?
+        public let contextWindow: Int?
+        public let turns: Int?
+        public let outputTokens: Int?
+        public let queueDepth: Int?
+
+        public init(contextTokens: Int?, contextWindow: Int?, turns: Int?, outputTokens: Int?, queueDepth: Int?) {
+            self.contextTokens = contextTokens
+            self.contextWindow = contextWindow
+            self.turns = turns
+            self.outputTokens = outputTokens
+            self.queueDepth = queueDepth
+        }
+    }
+
+    public struct Options: Codable, Equatable, Sendable {
+        public let models: [Model]
+        public let efforts: [String]
+
+        public init(models: [Model], efforts: [String]) {
+            self.models = models
+            self.efforts = efforts
+        }
+    }
+
+    public var agent: Settings
+    public let session: Session
+    public let taskCount: Int?
+    public let options: Options
+
+    public init(agent: Settings, session: Session, taskCount: Int?, options: Options) {
+        self.agent = agent
+        self.session = session
+        self.taskCount = taskCount
+        self.options = options
+    }
+}
+
+extension AgentStatus.Session {
+    public var usageFraction: Double? {
+        guard let contextTokens, let contextWindow, contextWindow > 0 else { return nil }
+        return Double(max(0, contextTokens)) / Double(contextWindow)
+    }
+
+    public func usageDescription(includingPercent: Bool = false) -> String? {
+        guard let contextTokens else { return nil }
+        func abbreviated(_ tokens: Int) -> String {
+            let units = tokens >= 1_000_000 ? 1_000_000 : 1_000
+            guard tokens >= units else { return String(tokens) }
+            let value = (Double(tokens) / Double(units)).formatted(.number.precision(.fractionLength(0...1)))
+            return value + (units == 1_000 ? "k" : "M")
+        }
+        guard let contextWindow, let fraction = usageFraction else { return "\(abbreviated(contextTokens)) tokens used" }
+        let counts = "\(abbreviated(contextTokens)) of \(abbreviated(contextWindow))"
+        return includingPercent ? "\(counts) tokens used (\((fraction * 100).rounded().formatted(.number.precision(.fractionLength(0))))%)" : "\(counts) used"
+    }
+}
+
+nonisolated public struct AgentStatusResponse: Codable, Sendable {
+    public let status: AgentStatus
+    public init(status: AgentStatus) { self.status = status }
+}
+
+nonisolated public struct AgentSettingsRequest: Codable, Sendable {
+    public let model: String?
+    public let effort: String?
+    public init(model: String?, effort: String?) {
+        self.model = model
+        self.effort = effort
+    }
+}
+
+nonisolated public struct AgentSettingsResponse: Codable, Sendable {
+    public let agent: AgentStatus.Settings
+    public init(agent: AgentStatus.Settings) { self.agent = agent }
+}
+
 nonisolated public struct AppVersion: Sendable, Equatable, Codable {
     public var `version`: String
     public var `build`: String

@@ -19,6 +19,8 @@ protocol AppService: Sendable {
     func conversations() async throws(AppError) -> ConversationsResponse
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse
+    func agentStatus(conversationId: String) async throws(AppError) -> AgentStatusResponse
+    func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse
     func agents() async throws(AppError) -> AgentsResponse
     func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse
     func markUnread(conversationId: String) async throws(AppError) -> ReadResponse

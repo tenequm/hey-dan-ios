@@ -669,6 +669,12 @@ actor ScriptedAppService: AppService {
         if !scriptedPages.isEmpty { return scriptedPages.removeFirst() }
         return try await base.history(conversationId: conversationId, query: query) }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse { sentIDs.append(request.clientId); try check("send"); let result = try await base.send(conversationId: conversationId, request: request); try check("sendAfter"); return result }
+    func agentStatus(conversationId: String) async throws(AppError) -> AgentStatusResponse {
+        try await base.agentStatus(conversationId: conversationId)
+    }
+    func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse {
+        try await base.updateSettings(agentId: agentId, request: request)
+    }
     func agents() async throws(AppError) -> AgentsResponse {
         try check("agents"); return try await base.agents()
     }

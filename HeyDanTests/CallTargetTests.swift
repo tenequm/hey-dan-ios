@@ -266,6 +266,12 @@ private final class FixtureBundle {}
     func conversations() async throws(AppError) -> ConversationsResponse { throw .transport(.unavailable) }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage { throw .transport(.unavailable) }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse { throw .transport(.unavailable) }
+    func agentStatus(conversationId: String) async throws(AppError) -> AgentStatusResponse {
+        throw .transport(.unavailable)
+    }
+    func updateSettings(agentId: String, request: AgentSettingsRequest) async throws(AppError) -> AgentSettingsResponse {
+        throw .transport(.unavailable)
+    }
     func agents() async throws(AppError) -> AgentsResponse {
         throw .transport(.unavailable)
     }
