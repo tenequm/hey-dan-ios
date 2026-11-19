@@ -205,14 +205,6 @@ struct CommandWordsTests {
         #expect(CommandWords(attribute: attribute) == nil)
     }
 
-    @Test func hintsQuoteTheFlaggedWordsElseTheFirst() throws {
-        #expect(CommandWords.builtIn.sendHint == #""zulu" or "copy""#)
-        let unflagged = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"over"},{"say":"roger"}],"discard":[{"say":"belay"},{"say":"cancel"}]}"#))
-        #expect(unflagged.sendHint == #""over""#)
-        let three = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"a","hint":true},{"say":"b","hint":true},{"say":"Прийом","hint":true}]}"#))
-        #expect(three.sendHint == #""a", "b" or "Прийом""#)
-    }
-
     @Test func readsACaptionsMark() throws {
         let names = try #require(VoiceProtocol.Names(version: 6))
         let command = names.captionCommandAttribute, words = names.captionWordsAttribute

@@ -138,11 +138,14 @@ struct ThreadStoreTests {
         defer { chat.setActive(false) }
         try await waitUntil { chat.connectionState == .connected }
         let conversation = try #require(chat.conversations.first)
-        chat.openConversation(conversation.id)
+        #expect(chat.openConversation(conversation.id))
+        #expect(chat.openConversation(conversation.id))
         _ = try await hostService.setAgent(id: conversation.agent.id, request: .init(shown: false))
         try await waitUntil { chat.conversations.isEmpty && chat.openConversationId == nil && chat.badge?.unreadTotal == 0 }
         let offline = await paired(hostService, store: store, files: files)
         #expect(offline.conversations.isEmpty)
+        #expect(!offline.openConversation(conversation.id))
+        #expect(offline.openConversationId == nil)
         _ = try await hostService.setAgent(id: conversation.agent.id, request: .init(shown: true))
         try await waitUntil { chat.conversations.first?.id == conversation.id && chat.badge?.unreadTotal == conversation.unread }
     }

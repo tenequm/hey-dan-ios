@@ -80,6 +80,10 @@ import XCTest
         XCTAssertTrue(feed.descendants(matching: .any)["chat.call.caption"].firstMatch.exists)
         XCTAssertFalse(call.exists)
         XCTAssertFalse(composer.exists)
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["Pair a host"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
         shot("thread-call-mode")
         app.buttons["controls.mute"].tap()
         XCTAssertEqual(app.buttons["controls.mute"].label, "Unmute")
@@ -94,6 +98,11 @@ import XCTest
         let activeRow = app.buttons["chat.conversation.conv_taylor01"]
         XCTAssertTrue(activeRow.waitForExistence(timeout: 5))
         XCTAssertTrue(activeRow.label.contains("On call"))
+        activeRow.swipeLeft()
+        app.buttons["Hide"].tap()
+        XCTAssertTrue(app.alerts.staticTexts["End the current call first."].waitForExistence(timeout: 5))
+        app.alerts.buttons["OK"].tap()
+        XCTAssertTrue(activeRow.exists)
         app.buttons["chat.conversation.conv_second"].tap()
         XCTAssertTrue(call.waitForExistence(timeout: 5))
         XCTAssertFalse(call.isEnabled)
@@ -105,6 +114,32 @@ import XCTest
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         XCTAssertTrue(call.exists)
         XCTAssertFalse(app.buttons["Call again"].exists)
+    }
+
+    func testSettingsProtectsTheCallHostAndAgent() {
+        let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"])
+        call.tap()
+        XCTAssertTrue(app.buttons["keys.call"].waitForExistence(timeout: 5))
+        app.buttons["Settings"].tap()
+        let refusal = app.staticTexts["End the current call first."]
+        app.buttons["chat.settings.host.studio.example.ts.net"].tap()
+        app.switches.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(refusal.waitForExistence(timeout: 5))
+        app.buttons["chat.settings.host.back"].tap()
+
+        app.buttons["Agents"].tap()
+        let agent = app.switches["chat.settings.agent.ag_taylor"]
+        agent.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(refusal.waitForExistence(timeout: 5))
+        XCTAssertEqual(agent.value as? String, "1")
+        app.buttons["chat.settings.agents.back"].tap()
+
+        seedPasteboard("https://example.invalid/app/pair#fixture")
+        app.buttons["Pair a host"].tap()
+        app.buttons["pairing.paste"].tap()
+        allowPaste(in: app)
+        app.buttons["pairing.submit"].tap()
+        XCTAssertTrue(refusal.waitForExistence(timeout: 5))
     }
 
     func testDefaultAgentControlOpensItsThread() async throws {
@@ -125,18 +160,25 @@ import XCTest
     }
 
     func testBackgroundControlReachesPairedCallAdmission() async throws {
-        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "control-admission"])
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)
         let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
         do {
             try await IntentDefinitions(bundleIdentifier: bundle).intents["CallDefaultAgentIntent"].makeIntent().run()
             XCTFail("The fixture host refuses admission")
         } catch {}
         app.activate()
-        let reason = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "calls are unavailable in this preview"))
-        XCTAssertTrue(reason.firstMatch.waitForExistence(timeout: 10))
+        let admission = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "CallKit admitted the")).firstMatch
+        XCTAssertTrue(admission.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Call again"].exists)
+        if admission.label.contains("background call") {
+            print("check: CallKit admitted the background Control")
+        } else {
+            XCTAssertTrue(admission.label.contains("foreground call"))
+            print("check: CallKit admitted the Control after foregrounding")
+        }
     }
 
     func testFailureOffersCallAgainInThread() {
@@ -149,5 +191,15 @@ import XCTest
         XCTAssertTrue(app.scrollViews["chat.thread"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["composer.text"].firstMatch.exists)
         XCTAssertTrue(retry.isEnabled)
+        app.navigationBars["Taylor"].buttons.element(boundBy: 0).tap()
+        app.buttons["chat.conversation.conv_taylor01"].tap()
+        XCTAssertFalse(retry.exists)
+        call.tap()
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        let field = app.textFields["composer.text"]
+        field.tap()
+        field.typeText("Ready")
+        app.buttons["composer.send"].tap()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 5))
     }
 }

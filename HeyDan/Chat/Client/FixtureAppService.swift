@@ -1,5 +1,5 @@
 #if DEBUG
-import CoreGraphics
+import UIKit
 import Foundation
 import HeyDanCore
 
@@ -269,7 +269,14 @@ actor FixtureAppService: AppService {
         }
         return Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     }
-    func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Calls are unavailable in this preview.")) }
+    func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant {
+        var reason = "Calls are unavailable in this preview."
+        if scenario == "control-admission" {
+            let background = await MainActor.run { UIApplication.shared.applicationState == .background }
+            reason = background ? "CallKit admitted the background call." : "CallKit admitted the foreground call."
+        }
+        throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: reason))
+    }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) {}
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) {}
     func voice(conversationId: String) async throws(AppError) -> TTSView {

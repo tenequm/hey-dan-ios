@@ -200,12 +200,14 @@ import UIKit
             }
         }
     }
-    func openConversation(_ id: String) {
-        guard openConversationId != id, reducer.hiddenConversations[id] == nil else { return }
+    @discardableResult func openConversation(_ id: String) -> Bool {
+        guard pendingHides[id] == nil, reducer.hiddenConversations[id] == nil else { return false }
+        guard openConversationId != id else { return true }
         flushRead()
         openConversationId = id
         sendFailure = nil
         Task { await loadHistory(newest: true) }
+        return true
     }
     func closeConversation() { flushRead(); openConversationId = nil; sendFailure = nil }
     func showNotificationList() {
@@ -382,6 +384,8 @@ import UIKit
         } catch { if !Task.isCancelled { await handle(error, token: token) } }
     }
     func hide(_ conversation: Conversation) async throws {
+        guard !CallController.shared.protectsChat(host: host, deviceId: pairing?.deviceId, agentId: conversation.agent.id)
+        else { throw AppError.callActive }
         let id = conversation.id, mutation = UUID()
         guard pendingHides[id] == nil else { return }
         pendingHides[id] = .sending(mutation)

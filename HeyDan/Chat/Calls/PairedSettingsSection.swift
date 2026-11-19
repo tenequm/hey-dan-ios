@@ -168,6 +168,10 @@ private struct HostAgentToggles: View {
     }
 
     private func update(_ agent: AgentCandidate, shown: Bool) {
+        if !shown, CallController.shared.protectsChat(host: entry.host, deviceId: entry.deviceId, agentId: agent.id) {
+            error = AppError.callActive.message
+            return
+        }
         pending[agent.id] = shown
         error = nil
         let service = chat.service(for: entry)
