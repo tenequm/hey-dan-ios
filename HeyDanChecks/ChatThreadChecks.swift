@@ -1,6 +1,70 @@
 import XCTest
 
 final class ChatThreadChecks: XCTestCase {
+    @MainActor func testCopyMessage() throws {
+        seedPasteboard("Before Copy")
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 15))
+        conversation.tap()
+        let thread = app.scrollViews["chat.thread"]
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        thread.swipeDown()
+        let message = app.descendants(matching: .any)["chat.message.msg_2101"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        let footer = app.buttons["chat.copy.msg_2101"]
+        XCTAssertTrue(footer.exists)
+        // "Hello" is the first word of the markdown heading.
+        message.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 20, dy: 14)).press(forDuration: 1)
+        let copy = app.descendants(matching: .any)["chat.menu.copy"].firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["Selection"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["Share"].firstMatch.exists)
+        copy.tap()
+        XCTAssertTrue(copy.waitForNonExistence(timeout: 5))
+        let composer = app.descendants(matching: .any)["composer.text"].firstMatch
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.tap()
+        let paste = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Paste")).firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let pasted = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND value == %@", "composer.text",
+            "## Hello\n\nThis is **Taylor**.\n\n- One\n- Two\n\n```swift\nprint(42)\n```")).firstMatch
+        XCTAssertTrue(pasted.waitForExistence(timeout: 5))
+    }
+
+    @MainActor func testOwnMessageMenus() throws {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "message-menus"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 15))
+        conversation.tap()
+        for id in ["chat.message.msg_5", "chat.outbox.queued", "chat.outbox.failed"] {
+            let row = app.descendants(matching: .any)[id].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 8))
+            // The one-word bubble is trailing aligned, above its delivery status.
+            row.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0)).withOffset(CGVector(dx: -32, dy: 17)).press(forDuration: 1)
+            let share = app.descendants(matching: .any)["chat.menu.share"].firstMatch
+            XCTAssertTrue(share.waitForExistence(timeout: 5))
+            let copy = app.buttons["chat.menu.copy"].firstMatch
+            XCTAssertTrue(copy.exists)
+            copy.tap()
+            XCTAssertTrue(share.waitForNonExistence(timeout: 5))
+        }
+    }
+
+    @MainActor func testUnloadedAttachmentHasNoMessageMenu() throws {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 15))
+        conversation.tap()
+        let file = app.buttons.matching(identifier: "attachment.open").matching(NSPredicate(format: "label CONTAINS %@", "Document.pdf")).firstMatch
+        XCTAssertTrue(file.waitForExistence(timeout: 10))
+        file.press(forDuration: 1)
+        XCTAssertFalse(app.descendants(matching: .any)["chat.menu.copy"].firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["Selection"].firstMatch.exists)
+    }
+
     @MainActor func testFixtureThread() throws {
         let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
         let conversation = app.buttons["chat.conversation.conv_taylor01"]

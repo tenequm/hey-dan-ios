@@ -178,21 +178,27 @@ final class ChatChecks: XCTestCase {
     }
 
     func testPairedIntent() async throws {
-        try stack()
-        launch(["HEYDAN_HANGUP_AFTER": "30", "HEYDAN_PAIRED_ICE": "all"])
+        guard let run = env["HEYDAN_CALL_RUN"], UUID(uuidString: run) != nil else { throw XCTSkip("Requires a test pairing") }
+        let expected = try XCTUnwrap(env["HEYDAN_CALL_AGENT"])
+        launch(["HEYDAN_CALL_RUN": run, "HEYDAN_CALL_AGENT": expected, "HEYDAN_HANGUP_AFTER": "30"])
         XCTAssertTrue(conversation().waitForExistence(timeout: 20))
         let bundle = String(Bundle(for: ChatChecks.self).bundleIdentifier!.dropLast(".Checks".count))
         let definitions = IntentDefinitions(bundleIdentifier: bundle)
-        let id = try XCTUnwrap(env["HEYDAN_CHAT_INTENT_ID"].flatMap(UUID.init(uuidString:)))
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
         let matches = try await definitions.entities["VoiceLineEntity"].entities(identifiers: [id])
         let agent = try XCTUnwrap(matches.first)
         let suggestions = try await definitions.entities["VoiceLineEntity"].suggestedEntities()
         XCTAssertTrue(suggestions.contains(agent))
         let intent = definitions.intents["CallLineIntent"].makeIntent(
             destination: agent, audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))
+        XCUIDevice.shared.press(.home)
         try await intent.run()
-        try await Task.sleep(for: .seconds(40))
         app.activate()
+        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
+        let end = app.buttons["keys.call"]
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        end.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["composer.text"].firstMatch.waitForExistence(timeout: 10))
     }
 
     func testUnpair() throws {
@@ -208,23 +214,6 @@ final class ChatChecks: XCTestCase {
         confirm.tap()
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForNonExistence(timeout: 20))
         XCTAssertFalse(conversation().exists)
-    }
-
-    func testPairedCall() throws {
-        try stack()
-        launch(["HEYDAN_PAIRED_FEED": "1", "HEYDAN_FEED_WAV": try XCTUnwrap(env["HEYDAN_CHAT_WAV"]),
-                "HEYDAN_FEED_AFTER": "12", "HEYDAN_HANGUP_AFTER": "65", "HEYDAN_PAIRED_ICE": "all"])
-        openThread()
-        let call = app.buttons["chat.call"]
-        XCTAssertTrue(call.waitForExistence(timeout: 10))
-        XCTAssertTrue(call.isEnabled)
-        call.tap()
-        let close = app.buttons["chat.call.close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 20))
-        let until = Date().addingTimeInterval(80)
-        while Date() < until { RunLoop.current.run(until: Date().addingTimeInterval(1)) }
-        close.tap()
-        XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
     }
 
     func testUploadPhoto() throws { try upload() }

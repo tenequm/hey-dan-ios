@@ -89,3 +89,24 @@ import Testing
     #expect(changed.isEmpty)
     #expect(reducer.cursor == 55)
 }
+
+@Test func hiddenEventSurvivesAnOlderResponseAndAllowsShowingAgain() throws {
+    let f = try coreFixtures()
+    let wire = try #require(f["hiddenEvent"] as? [String: Any])
+    let event = AppEvent(kind: try fixtureDecode(Kind.self, #require(wire["kind"])),
+                         id: try #require(wire["id"] as? Int64),
+                         data: try JSONSerialization.data(withJSONObject: #require(wire["data"])))
+    let hidden = try event.decode(Conversation.self)
+    var shown = hidden
+    shown.hidden = nil
+    shown.seq -= 1
+    var reducer = ThreadReducer()
+    reducer.upsert(shown)
+    #expect(try reducer.apply(event) == [shown.id])
+    #expect(reducer.conversations[shown.id] == nil && reducer.cursor == hidden.seq)
+    #expect(reducer.upsert(shown).isEmpty)
+    #expect(reducer.conversationRecord(shown.id) == hidden)
+    shown.seq = hidden.seq + 1
+    reducer.upsert(shown)
+    #expect(reducer.conversations[shown.id] == shown)
+}

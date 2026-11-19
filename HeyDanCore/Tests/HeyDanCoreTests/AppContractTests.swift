@@ -178,3 +178,65 @@ private struct CheckFailure: Error { let label: String }
         #expect(try JSONDecoder().decode(CardChart.self, from: JSONEncoder().encode(chart)) == chart)
     }
 }
+
+@Test func agentsAndUnreadWireFixtures() throws {
+    let f = try coreFixtures()
+    let hello = try fixtureDecode(HelloResponse.self, #require(f["hello"]))
+    #expect(hello.features.contains("agents") && hello.features.contains("unread"))
+    let list = try fixtureDecode(AgentsResponse.self, #require(f["agentsResponse"]))
+    #expect(list.agents.contains { $0.chat != nil && $0.shown })
+    let request = try fixtureDecode(AgentVisibilityRequest.self, #require(f["setAgentRequest"]))
+    let response = try fixtureDecode(AgentResponse.self, #require(f["setAgentResponse"]))
+    #expect(response.agent.shown == request.shown)
+    let unread = try fixtureDecode(ReadResponse.self, #require(f["unreadResponse"]))
+    #expect(unread.conversation.unread > 0 && unread.badge.unreadTotal >= unread.conversation.unread)
+    let errors = try #require(f["errors"] as? [String: [String: Any]])
+    let conflict = try #require(errors["nothingUnread"])
+    #expect(conflict["status"] as? Int == 409)
+    #expect(try fixtureDecode(ErrorBody.self, #require(conflict["body"])).error == "nothing_unread")
+}
+
+@Test func voiceAttachmentWireStatesAndUploadDuration() throws {
+    let fixtures = try coreFixtures()
+    let hello = try fixtureDecode(HelloResponse.self, #require(fixtures["hello"]))
+    #expect(!hello.features.contains("voice-messages"))
+    var enabled = hello
+    enabled.features.append("voice-messages")
+    #expect(try JSONDecoder().decode(HelloResponse.self, from: JSONEncoder().encode(enabled)).features.contains("voice-messages"))
+
+    let voice = try #require(fixtures["voiceMessages"] as? [String: Any])
+    let mint = try fixtureDecode(FileInitRequest.self, #require(voice["fileInitRequest"]))
+    let attachment = Outbox.Attachment(localFileName: "draft", name: mint.name, mimeType: mint.mimeType,
+        size: mint.size, sha256: mint.sha256, durationMs: mint.durationMs)
+    let restored = try JSONDecoder().decode(Outbox.Attachment.self, from: JSONEncoder().encode(attachment))
+    #expect(restored.request.durationMs == 1250)
+    let pending = try fixtureDecode(FileAttachment.self, #require(voice["pendingFile"]))
+    #expect(pending.kind == .audio && pending.durationMs == mint.durationMs)
+    #expect(pending.transcript == .init(state: .pending))
+    let done = try fixtureDecode(FileAttachment.Transcript.self, #require(voice["done"]))
+    #expect(done.state == .done && done.text?.isEmpty == false)
+    let failed = try fixtureDecode(FileAttachment.Transcript.self, #require(voice["failed"]))
+    #expect(failed == .init(state: .failed))
+    let legacy = try fixtureDecode(FileInitRequest.self, #require(fixtures["fileInitRequest"]))
+    #expect(legacy.durationMs == nil)
+}
+
+@Test func unknownTranscriptStateKeepsTheVoiceMessage() throws {
+    let fixtures = try coreFixtures()
+    let send = try #require(fixtures["sendResponse"] as? [String: Any])
+    var message = try #require(send["message"] as? [String: Any])
+    let voice = try #require(fixtures["voiceMessages"] as? [String: Any])
+    var file = try #require(voice["pendingFile"] as? [String: Any])
+    file["transcript"] = ["state": "unavailable"]
+    message["text"] = ""
+    message["files"] = [file]
+    let entity = try fixtureDecode(ThreadEntity.self, message)
+    guard case .message(let decoded) = entity else {
+        Issue.record("Voice attachment made its message unreadable")
+        return
+    }
+    let attachment = try #require(decoded.files.first)
+    #expect(attachment.transcript?.state == .unknown("unavailable"))
+    let encoded = try JSONEncoder().encode(attachment.transcript?.state)
+    #expect(try JSONDecoder().decode(String.self, from: encoded) == "unavailable")
+}

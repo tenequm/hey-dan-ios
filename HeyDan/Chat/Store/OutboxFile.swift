@@ -7,6 +7,8 @@ extension Outbox {
 }
 
 actor OutboxFile {
+    static let shared = OutboxFile()
+    private var retryableReplies: [URL: Set<String>] = [:]
     private let root: URL
     private let downloads: URL
     /// Downloads can be fetched again, so they live where the system may purge them; the outbox must not.
@@ -42,8 +44,39 @@ actor OutboxFile {
             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
+    // Both the composer and notification actions write this file. Apply only the caller's changes.
+    func update(from previous: [Outbox.Entry], to next: [Outbox.Entry], host: URL, deviceId: String) throws {
+        let stored = try load(host: host, deviceId: deviceId)
+        var entries = stored
+        let old = Dictionary(uniqueKeysWithValues: previous.map { ($0.request.clientId, $0) })
+        let retained = Set(next.map(\.request.clientId))
+        entries.removeAll { old[$0.request.clientId] != nil && !retained.contains($0.request.clientId) }
+        for entry in next where old[entry.request.clientId] != entry {
+            if let index = entries.firstIndex(where: { $0.request.clientId == entry.request.clientId }) {
+                entries[index] = entry
+            } else if old[entry.request.clientId] == nil {
+                entries.append(entry)
+            }
+        }
+        if entries != stored { try save(entries, host: host, deviceId: deviceId) }
+    }
+
+    func deferReply(_ entry: Outbox.Entry, deviceId: String) {
+        retryableReplies[directory(host: entry.host, deviceId: deviceId), default: []].insert(entry.request.clientId)
+    }
+
+    func takeDeferredReplies(host: URL, deviceId: String) throws -> [Outbox.Entry] {
+        let key = directory(host: host, deviceId: deviceId)
+        guard let ids = retryableReplies[key] else { return [] }
+        let entries = try load(host: host, deviceId: deviceId).filter { ids.contains($0.request.clientId) }
+        retryableReplies.removeValue(forKey: key)
+        return entries
+    }
+
     func clear(host: URL, deviceId: String) throws {
-        try Self.remove(directory(host: host, deviceId: deviceId))
+        let outbox = directory(host: host, deviceId: deviceId)
+        try Self.remove(outbox)
+        retryableReplies.removeValue(forKey: outbox)
         try Self.remove(downloadsDirectory(host: host, deviceId: deviceId))
     }
     func stage(_ attachments: [StagedAttachment], host: URL, deviceId: String) throws -> [Outbox.Attachment] {
@@ -62,7 +95,8 @@ actor OutboxFile {
                 let name = UUID().uuidString
                 try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 result.append(Outbox.Attachment(localFileName: name, name: attachment.name,
-                    mimeType: attachment.mimeType, size: Int64(data.count), sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()))
+                    mimeType: attachment.mimeType, size: Int64(data.count), sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                    durationMs: attachment.durationMs))
             }
             return result
         } catch {

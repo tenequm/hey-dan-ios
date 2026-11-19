@@ -16,7 +16,7 @@ final class SignedClient: AppService {
     #endif
 
     init(host: URL = URL(string: "https://app.example.com")!, deviceId: String? = nil,
-         configuration: URLSessionConfiguration = .ephemeral,
+         configuration: URLSessionConfiguration = .ephemeral, requestTimeout: TimeInterval = 20,
          signer: @escaping @Sendable (Data, URL) throws -> Data = { try DeviceKey().sign($0, host: $1) }) {
         #if DEBUG
         _ = Self.launched
@@ -24,7 +24,7 @@ final class SignedClient: AppService {
         self.host = host
         self.deviceId = deviceId
         self.signer = signer
-        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForRequest = requestTimeout
         api = URLSession(configuration: configuration, delegate: TransferDelegate(), delegateQueue: nil)
         let stream = URLSessionConfiguration.ephemeral
         stream.timeoutIntervalForRequest = 60
@@ -96,7 +96,7 @@ final class SignedClient: AppService {
 
     private func routeTemplate(_ path: [String]) -> String {
         var template = path
-        if path.count > 1, ["conversations", "questions", "files", "calls"].contains(path[0]) {
+        if path.count > 1, ["agents", "conversations", "questions", "files", "calls"].contains(path[0]) {
             if path[0] == "calls", path[1] == "attempts", path.count > 2 { template[2] = ":id" }
             else { template[1] = ":id" }
         }
@@ -213,6 +213,15 @@ final class SignedClient: AppService {
     }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse {
         return try await json("POST", ["conversations", conversationId, "messages"], body: encode(request))
+    }
+    func agents() async throws(AppError) -> AgentsResponse {
+        try await json("GET", ["agents"])
+    }
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse {
+        try await json("PUT", ["agents", id], body: encode(request))
+    }
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse {
+        try await json("POST", ["conversations", conversationId, "unread"])
     }
     func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse {
         return try await json("POST", ["conversations", conversationId, "read"], body: encode(request))

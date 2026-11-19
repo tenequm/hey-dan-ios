@@ -45,24 +45,10 @@ final class VoiceSettingsModel {
     private static let definiteRefusals: Set<String> = ["voice_offline", "provider_unavailable"]
     private static var writes: [VoicePickerIdentity: (id: UUID, task: Task<Void, Never>)] = [:]
     private static var results: [VoicePickerIdentity: String] = [:]
-    private static let defaultSession: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 12
-        config.timeoutIntervalForResource = 20
-        config.urlCache = nil
-        #if DEBUG && targetEnvironment(simulator)
-        if PickerFixture.scenario != nil { config.protocolClasses = [PickerFixtureProtocol.self] }
-        #endif
-        return URLSession(configuration: config)
-    }()
 
     init(service: any VoicePickerService) {
         self.service = service
         saveResult = Self.results[service.identity]
-    }
-
-    static func lineService(_ line: VoiceLine) -> any VoicePickerService {
-        LineVoicePickerService(savedLine: line, session: defaultSession)
     }
 
     var provider: TTSProvider? { draft.flatMap { provider($0.provider) } }
@@ -126,13 +112,13 @@ final class VoiceSettingsModel {
         loadFailure = nil
         let captured = revision
         if let write = Self.writes[service.identity] { await write.task.value }
-        do {
+        do throws(TTSServiceFailure) {
             let loaded: TTSView = try await service.voice()
             guard captured == revision else { loading = false; return }
             adopt(loaded, replaceDraft: draft == nil)
             saveResult = Self.results[service.identity] ?? saveResult
         } catch {
-            if captured == revision { loadFailure = failure(error) }
+            if captured == revision { loadFailure = error }
         }
         loading = false
     }
@@ -182,8 +168,8 @@ final class VoiceSettingsModel {
         resetCatalog()
         Self.results[service.identity] = nil
         saveResult = saving
-            ? "This line was removed or its access changed. A save already sent may still apply; reopen Voice from Settings to check."
-            : "This line was removed or its access changed. Reopen Voice from Settings."
+            ? "This host is no longer paired. A save already sent may still apply; reopen Voice from Settings to check."
+            : "This host is no longer paired. Reopen Voice from Settings."
     }
 
     private func requestCatalog(cursor: String?, debounce: Bool = false) async {
@@ -223,7 +209,7 @@ final class VoiceSettingsModel {
             }
             await previous?.value
             guard !invalidated else { return }
-            do {
+            do throws(TTSServiceFailure) {
                 let loaded: TTSView = try await service.updateVoice(patch)
                 guard !invalidated else { return }
                 adopt(loaded, replaceDraft: true)
@@ -231,14 +217,14 @@ final class VoiceSettingsModel {
                 if !reset { saveSuccess += 1 }
             } catch {
                 guard !invalidated else { return }
-                let failed = failure(error)
+                let failed = error
                 saveFailure = failed
                 saveResult = failed.message
                 switch failed {
                 case .server(status: 500...599, code: let code, message: _) where Self.definiteRefusals.contains(code):
                     if let loaded: TTSView = try? await service.voice(), !invalidated { adopt(loaded, replaceDraft: false) }
-                case .unreachable, .transport, .pairedTransport, .malformed, .upstream, .refused(status: 500...599, body: _), .server(status: 500...599, code: _, message: _):
-                    do {
+                case .pairedTransport, .malformed, .server(status: 500...599, code: _, message: _):
+                    do throws(TTSServiceFailure) {
                         let loaded: TTSView = try await service.voice()
                         guard !invalidated else { return }
                         let matches = loaded.confirms(patch)
@@ -252,7 +238,7 @@ final class VoiceSettingsModel {
                         }
                     } catch {
                         guard !invalidated else { return }
-                        saveResult = "Save not confirmed. \(failure(error).message)"
+                        saveResult = "Save not confirmed. \(error.message)"
                     }
                 default:
                     if let loaded: TTSView = try? await service.voice(), !invalidated { adopt(loaded, replaceDraft: false) }
@@ -289,7 +275,7 @@ final class VoiceSettingsModel {
         let request = VoiceCatalogQuery(provider: provider, q: key.query.isEmpty ? nil : key.query,
                                         language: key.language.isEmpty ? nil : key.language,
                                         gender: key.gender.isEmpty ? nil : key.gender, cursor: cursor, limit: 50)
-        do {
+        do throws(TTSServiceFailure) {
             let page: CatalogPage = try await service.voices(request)
             guard generation == catalogGeneration, key == catalogKey, !Task.isCancelled else { return }
             guard page.provider == provider else { throw TTSServiceFailure.malformed }
@@ -300,12 +286,11 @@ final class VoiceSettingsModel {
             catalogFailure = nil
         } catch {
             guard generation == catalogGeneration, key == catalogKey, !Task.isCancelled else { return }
-            catalogFailure = failure(error)
+            catalogFailure = error
         }
         catalogLoading = false
     }
 
-    private func failure(_ error: any Error) -> TTSServiceFailure { (error as? TTSServiceFailure) ?? TTSServiceFailure(transportError: error) }
 }
 
 @MainActor @Observable
@@ -322,28 +307,12 @@ private final class SamplePlayback {
 enum VoiceSample {
     private static var owns = false
     private static var work: Task<Void, Never>?
-    private static var pendingSteps = 0
     private static var latest = UUID()
     private static var playback: SamplePlayback?
-    static var isIdle: Bool { pendingSteps == 0 && !owns }
-
-    #if DEBUG
-    static var onActivationStarted: (@MainActor () -> Void)?
-    static var activationBarrier: (@MainActor () async -> Void)?
-    private(set) static var deactivationsAfterHandoff = 0
-    private static var handedOff = false
-    #endif
-
     fileprivate static func play(_ voice: VoiceLineCatalogVoice, using owner: SamplePlayback) {
         guard !CallController.shared.isCallActive, let url = voice.preview else { return }
-        #if DEBUG
-        handedOff = false
-        #endif
         release()
-        enqueue(activation: true) {
-            #if DEBUG
-            await activationBarrier?()
-            #endif
+        enqueue {
             playback = owner
             owner.failure = nil
             do {
@@ -390,28 +359,17 @@ enum VoiceSample {
     }
 
     static func stop() async {
-        #if DEBUG
-        deactivationsAfterHandoff = 0
-        #endif
         release()
         while let pending = work { await pending.value }
-        #if DEBUG
-        handedOff = true
-        #endif
     }
 
-    private static func enqueue(activation: Bool = false, _ step: @escaping @MainActor () async -> Void) {
+    private static func enqueue(_ step: @escaping @MainActor () async -> Void) {
         let previous = work
         let id = UUID()
         latest = id
-        pendingSteps += 1
         work = Task {
-            #if DEBUG
-            if activation { onActivationStarted?() }
-            #endif
             await previous?.value
             await step()
-            pendingSteps -= 1
             if latest == id { work = nil }
         }
     }
@@ -430,9 +388,6 @@ enum VoiceSample {
         let deactivate = owns
         if owns {
             owns = false
-            #if DEBUG
-            if handedOff { deactivationsAfterHandoff += 1 }
-            #endif
             do { try await AVAudioSession.sharedInstance().deactivate(options: .notifyOthersOnDeactivation) } catch {
                 CallLog.log(.audio, "sample release failed", level: .error)
             }
@@ -464,7 +419,13 @@ struct VoicePickerSheet: View {
     @State private var customLanguage = ""
     @State private var languagePrompt = false
     private var call: CallController { .shared }
-    private let storedLineID: UUID?
+    private var pairingAvailable: Bool {
+        let identity = model.service.identity
+        return Pairings.shared.entries.contains { entry in
+            if case let .paired(host, device, _) = identity { return entry.host == host && entry.deviceId == device }
+            return false
+        }
+    }
     private var samplesUnavailable: Bool { call.isCallActive || call.liveCallID != nil }
     private var liveAvailable: Bool { !model.invalidated && callID != nil && callID == call.liveCallID && call.liveVoice != nil }
 
@@ -475,10 +436,9 @@ struct VoicePickerSheet: View {
     init(model: VoiceSettingsModel, agentName: String, callID: UUID?) {
         self.agentName = agentName
         self.callID = callID
-        storedLineID = model.service.line.flatMap { line in CallController.shared.lines.entries.first { $0.line == line }?.id }
         self.model = model
         sample = SamplePlayback()
-        if case .paired = model.service.identity, callID == nil { _detent = State(initialValue: .large) }
+        if callID == nil { _detent = State(initialValue: .large) }
     }
 
     var body: some View {
@@ -515,11 +475,8 @@ struct VoicePickerSheet: View {
         .onDisappear { model.cancelCatalog(); VoiceSample.release(sample) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { VoiceSample.release(sample) } }
         .onChange(of: call.isCallActive) { _, active in if active { VoiceSample.release(sample) } }
-        .onChange(of: call.lines) { _, lines in
-            if let storedLineID, lines.entry(storedLineID)?.line != model.service.line {
-                model.invalidate()
-                VoiceSample.release(sample)
-            }
+        .onChange(of: pairingAvailable) { _, available in
+            if !available { model.invalidate(); VoiceSample.release(sample) }
         }
         .onChange(of: call.liveVoice) { old, new in
             guard callID != nil, callID == call.liveCallID else { return }
@@ -870,6 +827,7 @@ struct VoicePickerSheet: View {
                     if voice.id == model.draft?.voice { Image(systemName: "checkmark").accessibilityLabel("Selected") }
                 }
                 .frame(minHeight: theme.control.touchTarget)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if voice.preview != nil {
@@ -877,7 +835,7 @@ struct VoicePickerSheet: View {
                     if sample.playing == voice.id { VoiceSample.release(sample) } else { VoiceSample.play(voice, using: sample) }
                 } label: { Image(systemName: sample.playing == voice.id ? "stop.fill" : "play.fill").frame(width: theme.control.touchTarget, height: theme.control.touchTarget) }
                     .buttonStyle(.glass).disabled(samplesUnavailable || model.invalidated)
-                    .accessibilityLabel("Voice sample: \(voice.name)")
+                    .accessibilityLabel(sample.playing == voice.id ? "Stop sample: \(voice.name)" : "Voice sample: \(voice.name)")
                     .accessibilityHint(samplesUnavailable ? "Use for this call to hear it on the next reply" : "Sample does not demonstrate the selected model")
                     .accessibilityIdentifier(AXID.pickerSample(voice.id))
             }
@@ -969,150 +927,3 @@ private struct VoiceName: View {
         .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
     }
 }
-
-#if DEBUG && targetEnvironment(simulator)
-private final class PickerFixtureProtocol: URLProtocol, @unchecked Sendable {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        Task { @MainActor in
-            do {
-                let (status, body) = try PickerFixture.response(request)
-                guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"]) else { return }
-                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: body)
-                client?.urlProtocolDidFinishLoading(self)
-            } catch { client?.urlProtocol(self, didFailWithError: error) }
-        }
-    }
-    override func stopLoading() {}
-}
-
-/// `/voice/tts` and `/voice/voices` as the server answers them, from `HEYDAN_PREVIEW_TTS`. `legacy` is a server from
-/// before voice names (no details, no model names, nothing saved); `unavailable` saves a voice the provider no longer
-/// has; `lookup-failed` answers the first load with names unavailable and the next with names; `lost-save` applies
-/// every PATCH but loses its answer.
-@MainActor
-enum PickerFixture {
-    static let scenario = ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_TTS"]
-    private static var savedByLine: [URL: [String: Any]] = [:]
-    private static var ttsLoads = 0
-    private static let providers = #"[{"id":"gemini","name":"Gemini","available":true,"models":["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"],"default":{"model":"gemini-3.8-flash-tts","voice":"alnilam"},"modelNames":{"gemini-3.8-flash-tts":"Gemini 3.8 Flash TTS","gemini-3.8-flash-lite-tts":"Gemini 3.8 Flash Lite TTS"}},{"id":"elevenlabs","name":"ElevenLabs","available":true,"models":["eleven_v4_turbo","eleven_v4"],"default":{"model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"modelNames":{"eleven_v4_turbo":"Eleven v4 Turbo","eleven_v4":"Eleven v4"}}]"#
-    private static let geminiVoices = #"[{"id":"achernar","name":"Achernar","language":"en-US","gender":"female","description":"Storyteller & Narrator. Soft, calm, and soothing voice with a higher pitch."},{"id":"en-us-techagent-4","name":"Tech Advisor 4","language":"en-US","gender":"male","description":"Tech Support Agent / Tech Advisor. Confident and clear."},{"id":"alnilam","name":"Alnilam","language":"en-US"}]"#
-    private static var providerRows: [[String: Any]] { try! JSONSerialization.jsonObject(with: Data(providers.utf8)) as! [[String: Any]] }
-
-    static func response(_ request: URLRequest) throws -> (Int, Data) {
-        guard let url = request.url else { throw URLError(.badURL) }
-        if scenario == "no-route" { return (404, Data()) }
-        if scenario == "forbidden", request.httpMethod == "PATCH" || url.path.hasSuffix("voices") { return (403, Data()) }
-        if url.path.hasSuffix("voices") {
-            if scenario == "catalog-fail" { return (502, Data(#"{"error":"upstream"}"#.utf8)) }
-            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-            let provider = query.first { $0.name == "provider" }?.value ?? "gemini"
-            if scenario == "eleven-unavailable", provider == "elevenlabs" { return (503, Data(#"{"error":"provider_unavailable","provider":"elevenlabs"}"#.utf8)) }
-            let search = query.first { $0.name == "q" }?.value ?? ""
-            let language = query.first { $0.name == "language" }?.value
-            let gender = query.first { $0.name == "gender" }?.value
-            var rows = try voices(provider).filter { row in
-                (search.isEmpty || "\(row["name"] ?? "") \(row["description"] ?? "")".localizedCaseInsensitiveContains(search))
-                    && (language == nil || row["language"] as? String == language) && (gender == nil || row["gender"] as? String == gender)
-            }
-            if scenario == "search-empty" { rows = [] }
-            var page: [String: Any] = ["provider": provider, "voices": rows]
-            if provider == "gemini", !rows.isEmpty, !query.contains(where: { $0.name == "cursor" }) { page["next"] = "eyJvIjoxMDB9" }
-            return (200, try JSONSerialization.data(withJSONObject: page))
-        }
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.path = "/voice/tts"
-        let key = components.url!
-        let legacy = scenario == "legacy"
-        let lineDefault: [String: Any] = scenario == "unavailable"
-            ? ["provider": "elevenlabs", "model": "eleven_v4_turbo", "voice": "pNInz6obpgDQGcFmaJgB"]
-            : ["provider": "gemini", "model": "gemini-3.8-flash-tts", "voice": "en-us-techagent-4"]
-        var saved = savedByLine[key] ?? (legacy ? [:] : lineDefault)
-        var available = providerRows
-        if scenario == "eleven-unavailable" { available[1]["available"] = false }
-        if request.httpMethod == "PATCH" {
-            let data = request.httpBody ?? request.httpBodyStream.map { stream in
-                stream.open()
-                defer { stream.close() }
-                var body = Data()
-                var bytes = [UInt8](repeating: 0, count: 1024)
-                while stream.hasBytesAvailable {
-                    let count = stream.read(&bytes, maxLength: bytes.count)
-                    guard count > 0 else { break }
-                    body.append(bytes, count: count)
-                }
-                return body
-            } ?? Data()
-            let input = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-            if input["reset"] as? Bool == true { saved = legacy ? [:] : lineDefault } else {
-                guard let id = input["provider"] as? String, let provider = available.first(where: { $0["id"] as? String == id }) else { return (400, Data(#"{"error":"invalid","field":"provider"}"#.utf8)) }
-                guard provider["available"] as? Bool == true else { return (503, Data(#"{"error":"provider_unavailable","provider":"elevenlabs"}"#.utf8)) }
-                // The server stores the provider default for an omitted model or voice.
-                saved = legacy ? input : (provider["default"] as! [String: Any]).merging(input) { $1 }
-            }
-            savedByLine[key] = saved
-            if scenario == "lost-save" { return (502, Data(#"{"error":"upstream"}"#.utf8)) }
-        }
-        let provider = available.first { $0["id"] as? String == saved["provider"] as? String } ?? available[0]
-        let effective = (provider["default"] as! [String: Any]).merging(["provider": provider["id"]!]) { $1 }.merging(saved) { $1 }
-        var body: [String: Any] = ["effective": effective, "saved": saved]
-        if legacy {
-            body["providers"] = available.map { $0.filter { $0.key != "modelNames" } }
-        } else {
-            ttsLoads += 1
-            let status = scenario == "lookup-failed" && ttsLoads == 1 ? "lookup_failed" : nil
-            body["details"] = ["saved": try details(saved, status: status), "effective": try details(effective, status: status)]
-            body["providers"] = try available.map { row in
-                row.merging(["defaultDetails": try details(["provider": row["id"]!], status: status)]) { $1 }
-            }
-        }
-        return (200, try JSONSerialization.data(withJSONObject: body))
-    }
-
-    /// What the worker says about a live choice, for the stand-in call.
-    static func details(_ choice: TTSChoice) -> ChoiceDetails? {
-        let fields = ["provider": choice.provider, "model": choice.model, "voice": choice.voice].compactMapValues(\.self)
-        guard let data = try? JSONSerialization.data(withJSONObject: details(fields)) else { return nil }
-        return try? JSONDecoder().decode(ChoiceDetails.self, from: data)
-    }
-
-    /// `ChoiceDetails` for a choice: names from this catalog, `unavailable` for a voice it does not have.
-    private static func details(_ choice: [String: Any], status: String? = nil) throws -> [String: Any] {
-        let id = choice["provider"] as? String ?? "gemini"
-        let provider = providerRows.first { $0["id"] as? String == id } ?? providerRows[0]
-        let defaults = provider["default"] as! [String: Any]
-        let model = choice["model"] as? String ?? defaults["model"] as! String
-        let voice = choice["voice"] as? String ?? defaults["voice"] as! String
-        let row = try voices(id).first { $0["id"] as? String == voice }
-        let status = status ?? (row == nil ? "unavailable" : "resolved")
-        let named = status == "resolved" ? row : nil
-        return ["provider": id, "providerName": provider["name"]!, "model": model,
-                "modelName": (provider["modelNames"] as? [String: String])?[model] ?? model, "voice": voice,
-                "voiceName": named?["name"] ?? NSNull(), "language": named?["language"] ?? NSNull(),
-                "gender": named?["gender"] ?? NSNull(), "preview": named?["preview"] ?? NSNull(), "status": status]
-    }
-
-    private static func voices(_ provider: String) throws -> [[String: Any]] {
-        guard provider == "elevenlabs" else { return try JSONSerialization.jsonObject(with: Data(geminiVoices.utf8)) as! [[String: Any]] }
-        let preview = try sampleURL().absoluteString
-        return [["id": "bIHbv24MWmeRgasZH58o", "name": "Will", "language": "en", "gender": "male", "preview": preview],
-                ["id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "language": "en", "gender": "female", "preview": preview]]
-    }
-
-    private static func sampleURL() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(path: "hey-dan-fixture-sample.wav")
-        var data = Data()
-        func append<T: FixedWidthInteger>(_ value: T) { var value = value.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) } }
-        let frames = 8000
-        data.append(contentsOf: "RIFF".utf8); append(UInt32(36 + frames * 2))
-        data.append(contentsOf: "WAVEfmt ".utf8); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
-        append(UInt32(8000)); append(UInt32(16000)); append(UInt16(2)); append(UInt16(16))
-        data.append(contentsOf: "data".utf8); append(UInt32(frames * 2))
-        for frame in 0..<frames { append(Int16(sin(Double(frame) * 2 * .pi * 440 / 8000) * 2000)) }
-        try data.write(to: url, options: .atomic)
-        return url
-    }
-}
-#endif

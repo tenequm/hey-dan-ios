@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import HeyDanCore
 import XCTest
+import Security
 import Synchronization
 @testable import HeyDan
 
@@ -16,6 +17,138 @@ private final class FixtureBundle {}
 
     private let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
         agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
+
+    func testDebugCallsRequireExactlyTheConfiguredAgent() throws {
+        func entry(_ agents: [Agent]) -> Pairings.Entry {
+            Pairings.Entry(host: URL(string: "https://example.com")!,
+                pairing: PairResponse(deviceId: "test", userName: "Tester", agents: agents, protocol: 1, serverTime: 0),
+                features: ["calls"])
+        }
+        let agent = conversation.agent
+        XCTAssertEqual(try IntentCall.testAgent(in: entry([agent]), expected: "taylor"), agent)
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([]), expected: agent.name))
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent, agent]), expected: agent.name))
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: "Other"))
+        XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: nil))
+    }
+
+    func testLegacyCleanupDeletesBackupsAndPreservesUnrelatedAccounts() {
+        let service = "test.legacy." + UUID().uuidString
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+        defer { SecItemDelete(base as CFDictionary) }
+        let removed = ["call-link", "voice-lines", "voice-lines-unreadable-1", "voice-lines-unreadable-2"]
+        for account in removed + ["keep"] {
+            var item = base
+            item[kSecAttrAccount as String] = account
+            item[kSecValueData as String] = Data([1])
+            XCTAssertEqual(SecItemAdd(item as CFDictionary, nil), errSecSuccess)
+        }
+        XCTAssertTrue(HeyDanApp.removeLegacyLinks(service: service))
+        XCTAssertTrue(HeyDanApp.removeLegacyLinks(service: service))
+        for account in removed + ["keep"] {
+            var item = base
+            item[kSecAttrAccount as String] = account
+            XCTAssertEqual(SecItemCopyMatching(item as CFDictionary, nil), account == "keep" ? errSecSuccess : errSecItemNotFound)
+        }
+    }
+
+    func testLaterTurnUsesItsOwnThreadOrderEvenWhenTheWordsRepeat() {
+        let now = Date(timeIntervalSince1970: 100)
+        for interim in ["other one", "No, the"] {
+            var transcript = Transcript()
+            transcript.caption(segment: "one", text: "No, the other one", isFinal: true, fromCaller: true, at: now)
+            transcript.apply(.status(.init(turn: 1, status: .sent, text: "No, the other one")), at: now)
+            var message = Message(kind: .message, id: "one", conversationId: conversation.id, order: 8, seq: 10,
+                                  role: .user, text: "No, the other one.", files: [], reactions: [], voice: .caller, createdAt: 500_000)
+            let first = transcript.lines[0].id
+            transcript.caption(segment: "two", text: interim, isFinal: false, fromCaller: true, at: now)
+            let orders: [Int: Int64] = [first: 7, transcript.lines[1].id: 8]
+            func visible() -> [String] { transcript.liveCaptions(in: [.entity(.message(message))], after: orders).map(\.text) }
+            XCTAssertEqual(visible(), [interim])
+            let final = interim + " please"
+            transcript.caption(segment: "two", text: final, isFinal: true, fromCaller: true, at: now)
+            message.order = 9
+            XCTAssertEqual(visible(), [final])
+            message.text = final
+            message.voice = .spoken
+            XCTAssertEqual(visible(), [final])
+            message.voice = .caller
+            message.createdAt = 1
+            XCTAssertEqual(visible(), [])
+        }
+    }
+
+    func testAllPiecesOfTheOpenReplyYieldToTheirMatchingMessage() {
+        var transcript = Transcript()
+        transcript.apply(ReplyInfo(reply: 1), at: .now)
+        transcript.caption(segment: "one", text: "All set", isFinal: true, fromCaller: false, at: .now)
+        transcript.caption(segment: "two", text: "See you", isFinal: true, fromCaller: false, at: .now)
+        let orders = Dictionary(uniqueKeysWithValues: transcript.lines.map { ($0.id, Int64(5)) })
+        var message = Message(kind: .message, id: "one", conversationId: conversation.id, order: 6, seq: 15,
+                              role: .agent, text: "An unrelated reply", files: [], reactions: [], createdAt: 0)
+        func visible() -> [String] { transcript.liveCaptions(in: [.entity(.message(message))], after: orders).map(\.text) }
+        XCTAssertEqual(visible(), ["All set", "See you"])
+        message.text = "All set!"
+        XCTAssertEqual(visible(), ["See you"])
+        message.text = "All set! See you."
+        XCTAssertEqual(visible(), [])
+    }
+
+    func testDeliveryMarkerLastsUntilTheNextTurn() {
+        for (event, expected) in [(TurnMessage.unheard, "Not heard"),
+                                  (.dropped(.init(.asleep, text: "Ready")), "Not heard"),
+                                  (.status(.init(turn: 1, status: .lost, reason: .timeout, text: "Ready")), "Delivery not confirmed")] {
+            var transcript = Transcript()
+            transcript.caption(segment: "one", text: "Ready", isFinal: true, fromCaller: true, at: .now)
+            transcript.apply(event, at: .now)
+            XCTAssertEqual(transcript.deliveryMarker, expected)
+            transcript.caption(segment: "two", text: "Again", isFinal: false, fromCaller: true, at: .now)
+            XCTAssertNil(transcript.deliveryMarker)
+        }
+    }
+
+    func testCallEndingFeedbackUsesConnectionHistory() {
+        let remote = CallController.Ending(cause: .remote, message: "Call ended.")
+        let live = CallController.Phase.live(.speaking)
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: live, liveSince: .now), .success)
+        XCTAssertEqual(HeyDanApp.callFeedback(from: live, to: .ended(remote), liveSince: .now), .impact(weight: .light))
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: .ended(.byCaller), liveSince: nil), .impact(weight: .light))
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: .ended(.failure(.microphoneDenied)), liveSince: nil), .error)
+    }
+
+    func testAgentRefreshReplacesSnapshotAndIgnoresAnOldDevice() async throws {
+        let account = "test-agents-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        while pairings.state == .unreadable { await Task.yield() }
+        let host = URL(string: "https://example.com")!
+        let old = Agent(id: "former", name: "Former")
+        try pairings.add(PairResponse(deviceId: "current", userName: "Tester", agents: [old], protocol: 1, serverTime: 0),
+                         host: host, features: ["calls"])
+        pairings.refreshAgents([conversation, conversation], host: host, deviceId: "current")
+        pairings.refreshAgents([], host: host, deviceId: "replaced")
+        let restored = Pairings(account: account, publishes: false)
+        while restored.state == .unreadable { await Task.yield() }
+        XCTAssertEqual(restored.active?.agents, [conversation.agent])
+        restored.refreshAgents([], host: host, deviceId: "current")
+        XCTAssertEqual(restored.active?.agents, [])
+    }
+
+    func testInactiveHostDiscoversAgentsWithoutSwitching() async throws {
+        let account = "test-inactive-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        let inactive = URL(string: "https://old.example.com")!
+        let active = URL(string: "https://active.example.com")!
+        for host in [inactive, active] {
+            try pairings.add(FixtureAppService.pairing, host: host, features: [])
+        }
+        await pairings.refreshInactiveAgents { _ in FixtureAppService() }
+        XCTAssertEqual(pairings.active?.host, active)
+        XCTAssertEqual(pairings.entries.first { $0.host == inactive }?.features.contains("agents"), true)
+        XCTAssertEqual(pairings.active?.features, [])
+    }
 
     /// The signed start, end and cancel as the contract fixtures write them, and the fixture grant decoded.
     func testPairedRequestsMatchTheContract() async throws {
@@ -33,13 +166,11 @@ private final class FixtureBundle {}
             configuration: configuration, signer: { data, _ in try key.signature(for: data).derRepresentation })
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service, attemptId: expectedStart.attemptId)
-        let http = URLSession(configuration: .ephemeral)
-        defer { http.invalidateAndCancel() }
-        let grant = try await target.grant(over: http)
+        let grant = try await target.grant()
         XCTAssertEqual(grant.callId, "call_5tGh2")
         XCTAssertEqual(grant.agent, "Taylor")
         XCTAssertEqual(grant.names.version, 6)
-        try await target.end(callId: grant.callId, reason: nil, over: http)
+        try await target.end(callId: grant.callId, reason: nil)
         try await target.cancel()
         let requests = seen.withLock { $0 }
         XCTAssertEqual(requests.map { $0.url!.path }, ["/app/calls", "/app/calls/call_5tGh2/end", "/app/calls/attempts/\(expectedStart.attemptId)/cancel"])
@@ -55,41 +186,12 @@ private final class FixtureBundle {}
         }
     }
 
-    /// The saved line's requests, written out rather than rebuilt by the builders the call path uses.
-    func testSavedLineRequestsRemainUnchanged() async throws {
-        let line = try XCTUnwrap(VoiceLine(callLink: "https://example.invalid/voice?t=fixture"))
-        let seen = Mutex<[URLRequest]>([])
-        Stub.handler.withLock { $0 = { request in
-            seen.withLock { $0.append(request) }
-            return (200, request.url!.path.hasSuffix("token")
-                ? Data(#"{"protocol":6,"url":"wss://example.invalid","token":"fixture","callId":"call_fixture"}"#.utf8)
-                : Data())
-        } }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [Stub.self]
-        let http = URLSession(configuration: configuration)
-        defer { http.invalidateAndCancel() }
-        let target = CallTarget(line: line)
-        let grant = try await target.grant(over: http)
-        try await target.end(callId: grant.callId, reason: .noAgent, over: http)
-        let requests = seen.withLock { $0 }
-        XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests[0].url?.absoluteString, "https://example.invalid/voice/livekit/token?t=fixture&v=6")
-        XCTAssertEqual(requests[0].httpMethod, "POST")
-        XCTAssertNil(requests[0].value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(requests[1].url?.absoluteString, "https://example.invalid/voice/livekit/end?t=fixture")
-        XCTAssertEqual(requests[1].httpMethod, "POST")
-        XCTAssertFalse(target.usesRelay)
-    }
-
     func testCancelWhileGrantIsPendingUsesTheSameAttempt() async throws {
         let service = CallServiceSpy()
         service.delaysGrant = true
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.invalid")!,
             deviceId: "dev_test", conversation: conversation), service: service)
-        let http = URLSession(configuration: .ephemeral)
-        defer { http.invalidateAndCancel() }
-        let pending = Task { try await target.grant(over: http) }
+        let pending = Task { try await target.grant() }
         let deadline = ContinuousClock.now + .seconds(2)
         while service.pendingGrant == nil, ContinuousClock.now < deadline { await Task.yield() }
         let continuation = try XCTUnwrap(service.pendingGrant)
@@ -98,7 +200,7 @@ private final class FixtureBundle {}
         continuation.resume()
         service.pendingGrant = nil
         let grant = try await pending.value
-        try await target.end(callId: grant.callId, reason: nil, over: http)
+        try await target.end(callId: grant.callId, reason: nil)
         XCTAssertEqual(service.ends.first?.0, grant.callId)
     }
 
@@ -108,10 +210,8 @@ private final class FixtureBundle {}
         service.grantAttempt = "another-attempt"
         let target = CallTarget(paired: PairedCallTarget(host: URL(string: "https://example.com")!, deviceId: "dev_test",
             conversation: conversation), service: service)
-        let http = URLSession(configuration: .ephemeral)
-        defer { http.invalidateAndCancel() }
         do {
-            _ = try await target.grant(over: http)
+            _ = try await target.grant()
             XCTFail("a mismatched attempt must not be joined")
         } catch { XCTAssertEqual(error, .malformedGrant) }
         XCTAssertEqual(service.starts.first?.voiceProtocol, VoiceProtocol.requestedVersion)
@@ -119,7 +219,7 @@ private final class FixtureBundle {}
         XCTAssertEqual(service.ends.first?.0, "call_test")
         XCTAssertEqual(service.ends.first?.1.reason, "updating")
         XCTAssertEqual(service.cancels.first?.0, target.attemptId)
-        XCTAssertNotEqual(CallTarget(paired: target.paired!, service: service).attemptId, target.attemptId)
+        XCTAssertNotEqual(CallTarget(paired: target.paired, service: service).attemptId, target.attemptId)
     }
 
     func testPairedFailuresKeepTheirMeaning() {
@@ -166,6 +266,15 @@ private final class FixtureBundle {}
     func conversations() async throws(AppError) -> ConversationsResponse { throw .transport(.unavailable) }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage { throw .transport(.unavailable) }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse { throw .transport(.unavailable) }
+    func agents() async throws(AppError) -> AgentsResponse {
+        throw .transport(.unavailable)
+    }
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse {
+        throw .transport(.unavailable)
+    }
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse {
+        throw .transport(.unavailable)
+    }
     func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse { throw .transport(.unavailable) }
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse { throw .transport(.unavailable) }
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> { throw .transport(.unavailable) }

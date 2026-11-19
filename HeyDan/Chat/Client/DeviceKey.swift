@@ -36,7 +36,18 @@ struct DeviceKey: Sendable {
 }
 
 enum IdentityKeychain {
-    private static let service = (Bundle.main.bundleIdentifier ?? "HeyDan") + ".identity"
+    #if DEBUG
+    static let callTestRun = ProcessInfo.processInfo.environment["HEYDAN_CALL_RUN"].flatMap(UUID.init(uuidString:))?.uuidString
+    #else
+    static let callTestRun: String? = nil
+    #endif
+    private static var service: String {
+        let base = (Bundle.main.bundleIdentifier ?? "HeyDan") + ".identity"
+        #if DEBUG
+        if let callTestRun { return base + "." + callTestRun }
+        #endif
+        return base
+    }
     private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,

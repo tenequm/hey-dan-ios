@@ -8,20 +8,11 @@ struct PairedCallTarget: Sendable, Equatable {
 }
 
 struct CallTarget {
-    let line: VoiceLine?
-    let paired: PairedCallTarget?
-    let service: (any AppService)?
+    let paired: PairedCallTarget
+    let service: any AppService
     let attemptId: String
 
-    init(line: VoiceLine) {
-        self.line = line
-        paired = nil
-        service = nil
-        attemptId = UUID().uuidString
-    }
-
     init(paired: PairedCallTarget, service: any AppService, attemptId: String = UUID().uuidString) {
-        line = nil
         self.paired = paired
         self.service = service
         self.attemptId = attemptId
@@ -36,7 +27,6 @@ struct CallTarget {
     }
 
     var usesRelay: Bool {
-        guard paired != nil else { return false }
         #if DEBUG
         if ProcessInfo.processInfo.environment["HEYDAN_PAIRED_ICE"] == "all" { return false }
         #endif
@@ -45,22 +35,7 @@ struct CallTarget {
 
     /// The host's grant and the names of the protocol it speaks. A grant on a protocol this app does not speak is never
     /// joined: its call ends on the host right away.
-    func grant(over http: URLSession, endingOver endHTTP: URLSession? = nil) async throws(CallFailure) -> Grant {
-        if let line {
-            let data: Data
-            let response: URLResponse
-            do { (data, response) = try await http.data(for: line.tokenRequest) }
-            catch { throw CallFailure(transportError: error) }
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            CallLog.log(.net, "token status=\(status) bytes=\(data.count)", level: status == 200 ? .info : .error)
-            let grant = try VoiceLineGrant(status: status, body: data)
-            guard let names = grant.names else {
-                Task { try? await end(callId: grant.callId, reason: .updating, over: endHTTP ?? http) }
-                throw .unsupportedProtocol(grant.protocolVersion)
-            }
-            return Grant(url: grant.url, token: grant.token, callId: grant.callId, agent: grant.agent, names: names)
-        }
-        guard let paired, let service else { throw .setupFailed }
+    func grant() async throws(CallFailure) -> Grant {
         let grant: CallGrant
         do {
             grant = try await service.startCall(CallRequest(conversationId: paired.conversation.id,
@@ -68,30 +43,28 @@ struct CallTarget {
         } catch { throw error.callFailure }
         guard grant.attemptId == attemptId else {
             // The host started a call this app cannot match to its attempt: end that call, then the attempt.
-            try? await end(callId: grant.callId, reason: .updating, over: endHTTP ?? http)
+            try? await end(callId: grant.callId, reason: .updating)
             try? await cancel()
             throw .malformedGrant
         }
         guard let names = VoiceProtocol.Names(version: grant.protocol) else {
-            try? await end(callId: grant.callId, reason: .updating, over: endHTTP ?? http)
+            try? await end(callId: grant.callId, reason: .updating)
             throw .unsupportedProtocol(grant.protocol)
         }
         return Grant(url: grant.url, token: grant.token, callId: grant.callId, agent: grant.agent, names: names)
     }
 
-    func end(callId: String, reason: VoiceLine.EndReason?, over http: URLSession) async throws {
+    enum EndReason: String {
+        case noAgent = "no-agent"
+        case updating
+    }
+
+    func end(callId: String, reason: EndReason?) async throws {
         let tag = "cid=\(callId.prefix(8)) end reason=\(reason?.rawValue ?? "hangup")"
         let asked = ContinuousClock.now
         do {
-            let status: Int
-            if let line {
-                let (_, response) = try await http.data(for: line.endRequest(callId: callId, reason: reason))
-                status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            } else if let service {
-                try await service.endCall(callId: callId, request: CallEndRequest(reason: reason?.rawValue ?? "hangup"))
-                status = 204
-            } else { return }
-            CallLog.log(.net, "\(tag) status=\(status) ms=\(CallLog.ms(since: asked)) paired=\(paired != nil)")
+            try await service.endCall(callId: callId, request: CallEndRequest(reason: reason?.rawValue ?? "hangup"))
+            CallLog.log(.net, "\(tag) acknowledged ms=\(CallLog.ms(since: asked)) paired=true")
         } catch {
             CallLog.log(.net, "\(tag) failed \(CallLog.describe(error))", level: .error)
             throw error
@@ -99,16 +72,11 @@ struct CallTarget {
     }
 
     func cancel() async throws {
-        if let service {
-            try await service.cancelCall(attemptId: attemptId, request: CallCancelRequest(reason: "hangup"))
-        }
+        try await service.cancelCall(attemptId: attemptId, request: CallCancelRequest(reason: "hangup"))
     }
 
     @MainActor var voicePickerService: (any VoicePickerService)? {
-        if let line { return VoiceSettingsModel.lineService(line) }
-        guard let paired, let service,
-              Pairings.shared.entries.first(where: { $0.host == paired.host })?.features.contains("voice-picker") == true
-        else { return nil }
+        guard Pairings.shared.entries.contains(where: { $0.host == paired.host && $0.deviceId == paired.deviceId && $0.features.contains("voice-picker") }) else { return nil }
         return PairedVoicePickerService(target: paired, service: service)
     }
 }

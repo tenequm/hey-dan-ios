@@ -23,17 +23,6 @@ build: gen
 # HEYDAN_SIM picks another Simulator and HEYDAN_DERIVED_DATA its build folder, so two runs can share the Mac.
 sim_name := env("HEYDAN_SIM", "Hey Dan iPhone")
 sim_build := env("HEYDAN_DERIVED_DATA", "build")
-# The test line's call link on stdout, for `link=$(just _test-link)` only: the link travels by env, never printed.
-# Test calls belong on a test line, never your main agent's: a test turn keeps that agent busy on your own calls.
-# TEST_CALL_LINK in .env.local is the link itself.
-[private]
-_test-link:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    [ -n "${TEST_CALL_LINK:-}" ] || { echo "no test line: set TEST_CALL_LINK in .env.local (see .env.local.example)" >&2; exit 1; }
-    printf '%s' "$TEST_CALL_LINK"
-
-# Build, install and launch in the Simulator with the test line's call link; calls go through CallKit as on the phone.
 sim: gen
     #!/usr/bin/env bash
     set -euo pipefail
@@ -49,24 +38,15 @@ sim: gen
     xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination "id=$udid" -derivedDataPath "{{sim_build}}" build -quiet
     xcrun simctl install "$udid" "{{sim_build}}/Build/Products/Debug-iphonesimulator/HeyDan.app"
     xcrun simctl privacy "$udid" grant microphone {{bundle_id}}
-    link=$(just _test-link)
-    # Every HEYDAN_* variable set for the recipe reaches the app: the DEBUG hooks in HeyDanApp.swift read them.
-    for name in $(compgen -e | grep '^HEYDAN_' || true); do export "SIMCTL_CHILD_$name=${!name}"; done
-    SIMCTL_CHILD_HEYDAN_CALL_LINK="$link" xcrun simctl launch --terminate-running-process "$udid" {{bundle_id}}
+    for name in $(compgen -A export HEYDAN_); do
+        case "$name" in *_CMD|*_LINK) continue ;; esac
+        export "SIMCTL_CHILD_$name=${!name}"
+    done
+    xcrun simctl launch --terminate-running-process "$udid" {{bundle_id}}
 
-# A real call to the test line from the Simulator: starts at launch, hangs up after `seconds`. Speak to it through the Mac.
-# Pass `say` to make the caller speak it (synthesized, fed in place of the microphone) 8 s after the app launched.
-# HEYDAN_STEPS="12:mute,16:unmute,20:manual,24:talk,30:done" presses keys mid-call, timed from launch.
-# `mode` (auto or review) is the turn mode the call starts in; empty keeps the app's last pick.
-sim-call seconds="90" say="" mode="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    feed=""
-    if [ -n {{quote(say)}} ]; then
-        mkdir -p build && say -o build/feed.aiff {{quote(say)}} && afconvert -f WAVE -d LEF32@48000 -c 1 build/feed.aiff build/feed.wav
-        feed="$PWD/build/feed.wav"
-    fi
-    HEYDAN_AUTOCALL=1 HEYDAN_HANGUP_AFTER={{seconds}} HEYDAN_FEED_WAV="$feed" HEYDAN_TURN_MODE={{quote(mode)}} just sim
+# A hands-free call with a disposable test pairing and per-row evidence.
+sim-call seconds="65" say="":
+    @HEYDAN_SIM={{quote(sim_name)}} HEYDAN_DERIVED_DATA={{quote(sim_build)}} HEYDAN_CALL_SECONDS={{quote(seconds)}} HEYDAN_CALL_SAY={{quote(say)}} python3 scripts/sim-e2e.py {{bundle_id}} call
 
 # A hands-free Simulator call with machine-readable evidence in HEYDAN_RUN_DIR (default build/e2e).
 sim-e2e:
@@ -85,10 +65,8 @@ device: gen
     xcrun devicectl device install app --device "$udid" build/Build/Products/Debug-iphoneos/HeyDan.app
     xcrun devicectl device process launch --terminate-existing --device "$udid" {{bundle_id}}
 
-# Needs the phone unlocked and a line saved on it. The caller says `say` (synthesized, fed in place of the microphone,
-# so the phone hears nothing and plays nothing) 8 s after the app launched; build/device-call.png is a screenshot 25 s in.
-# A real CallKit call to the phone's picked line, hands off: hangs up after `seconds`, then pulls the log.
-device-call seconds="70" say="Hey Dan. What is two plus two? Zulu.": gen
+# Build and install on the unlocked phone, then call with an isolated test pairing.
+device-call seconds="65" say="": gen
     #!/usr/bin/env bash
     set -euo pipefail
     list=$(mktemp)
@@ -96,19 +74,9 @@ device-call seconds="70" say="Hey Dan. What is two plus two? Zulu.": gen
     udid=$(jq -r '[.result.devices[] | select(.hardwareProperties.platform == "iOS" and .hardwareProperties.reality == "physical")][0].hardwareProperties.udid // empty' "$list")
     rm -f "$list"
     [ -n "$udid" ] || { echo "no iPhone connected" >&2; exit 1; }
-    mkdir -p build
-    say -o build/feed.aiff {{quote(say)}} && afconvert -f WAVE -d LEF32@48000 -c 1 build/feed.aiff build/feed.wav
     xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination "platform=iOS,id=$udid" -derivedDataPath build -allowProvisioningUpdates -allowProvisioningDeviceRegistration build -quiet
     xcrun devicectl device install app --device "$udid" build/Build/Products/Debug-iphoneos/HeyDan.app
-    xcrun devicectl device copy to --device "$udid" --domain-type appDataContainer --domain-identifier {{bundle_id}} \
-        --source build/feed.wav --destination Library/Caches/feed.wav
-    DEVICECTL_CHILD_HEYDAN_AUTOCALL=1 DEVICECTL_CHILD_HEYDAN_HANGUP_AFTER={{seconds}} DEVICECTL_CHILD_HEYDAN_FEED_WAV=feed.wav \
-        DEVICECTL_CHILD_HEYDAN_FEED_AFTER="${HEYDAN_FEED_AFTER:-8}" \
-        xcrun devicectl device process launch --terminate-existing --device "$udid" {{bundle_id}}
-    sleep 25
-    xcrun devicectl device capture screenshot --device "$udid" --destination build/device-call.png -q || echo "screenshot failed" >&2
-    sleep $(( {{seconds}} - 15 ))
-    just device-logs
+    HEYDAN_CALL_SECONDS={{quote(seconds)}} HEYDAN_CALL_SAY={{quote(say)}} python3 scripts/sim-e2e.py {{bundle_id}} device-call "$udid"
 
 # ASC_ENV_CMD (e.g. a secret manager's `env <entry> --`) prefixes the run to put the key in its environment.
 # Archive, sign and upload to TestFlight with the App Store Connect API key; waits for processing, fails on a rejection.
@@ -209,13 +177,7 @@ server-logs cid:
     grep -hF "$cid" "$dir/logs/nanoclaw.log" "$dir/logs/nanoclaw.error.log" | tail -50
     SH
 
-# Simulator checks of what used to need the phone in hand (HeyDanChecks, a UI test bundle), in the Simulator
-# `sim_name`: `check` is LiveActivityOnLockScreen, IntentStartsCallFromBackground, SetActionButtonToHeyDan (once
-# per Simulator) or ActionButtonStartsCall; HEYDAN_CHECK_LOCKED=1 locks first. Every HEYDAN_* variable reaches the
-# app, as with `just sim`; screenshots land in build/checks. Calls are real: set HEYDAN_HANGUP_AFTER.
-# The call link is seeded by one plain launch (the Simulator's keychain keeps it), never through the test runner's
-# environment: a result bundle records that. HEYDAN_KEEP_FAILED_RESULTS=1 keeps a failing bundle in a private
-# directory under the build folder for sim-checks or app-test. It can contain message text or pairing links.
+# Fixture and system checks on the selected Simulator. Failed result bundles may contain private data.
 sim-checks check="LiveActivityOnLockScreen":
     @python3 scripts/sim_tests.py sim-checks {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}} {{quote(check)}}
 
@@ -224,7 +186,7 @@ app-test:
     @python3 scripts/sim_tests.py app-test {{quote(sim_name)}} {{quote(sim_build)}} {{quote(bundle_id)}}
 
 # Treehouse runs this in every slot it hands out: copy the owner's untracked config from the main checkout.
-# .env.local stays out (release account, test call link): copy it by hand for testflight, calls and HeyDanChecks.
+# .env.local stays out (release account, test pairing command): copy it by hand for testflight, calls and HeyDanChecks.
 lane-ready:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -24,6 +24,180 @@ struct MessageNotificationTests {
             agents: [payload.hd.a], protocol: 1, serverTime: 0), features: ["push"])
     }
 
+    @Test func messageCategoryOffersBackgroundReplyAndRead() async throws {
+        let categories = await UNUserNotificationCenter.current().notificationCategories()
+        let category = try #require(categories.first { $0.identifier == "message" })
+        #expect(category.actions.map(\.title) == ["Reply", "Mark as Read"])
+        let reply = try #require(category.actions.first as? UNTextInputNotificationAction)
+        #expect(reply.identifier == AppDelegate.replyAction)
+        #expect(category.actions.last?.identifier == AppDelegate.readAction)
+        #expect(category.actions.allSatisfy { !$0.options.contains(.foreground) })
+    }
+
+    @Test func repliesUseIndependentHostsWithoutChangingTheOpenChat() async throws {
+        let account = "test-reply-" + UUID().uuidString
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer {
+            try? IdentityKeychain.remove(account: account)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        let target = entry(payload.hd.h), other = entry("https://other.example.com")
+        for entry in [target, other] { try pairings.add(entry.pairing, host: entry.host, features: entry.features) }
+        let files = OutboxFile(root: root)
+        let first = ScriptedAppService(), second = ScriptedAppService()
+        let chat = ChatController(service: second, store: SwiftDataThreadStore(inMemory: true), files: files, monitorsNetwork: false)
+        chat.setActive(false)
+        chat.selectPairing(other.pairing, host: other.host)
+        await chat.loadTask?.value
+        chat.openConversation("another-thread")
+        #expect(await chat.send(text: "Composer draft"))
+        let original = chat.outbox.entries
+        let generation = chat.generation
+        chat.sendFailure = "Original composer state"
+
+        // Losing the acknowledgement leaves the original request on disk for the regular runner.
+        await second.fail("sendAfter", with: [.transport(.offline)])
+        let delegate = AppDelegate()
+        delegate.clientFor = { $0.host == target.host ? first : second }
+        var otherPush = payload.hd
+        otherPush.h = other.host.absoluteString
+        async let a: Void = delegate.handleResponse(action: AppDelegate.replyAction, text: "First reply",
+                                                      data: payload.hd, pairings: pairings, files: files, chat: chat)
+        await delegate.handleResponse(action: AppDelegate.replyAction, text: "Second reply",
+                                      data: otherPush, pairings: pairings, files: files, chat: chat)
+        await a
+        #expect(pairings.active?.host == other.host && chat.host == other.host)
+        #expect(chat.openConversationId == "another-thread" && chat.generation == generation)
+        #expect(chat.outbox.entries == original && chat.sendFailure == "Original composer state")
+        #expect(await first.sentIDs.count == 1)
+        #expect(try await files.load(host: target.host, deviceId: target.deviceId).isEmpty)
+        let clientId = try #require(await second.sentIDs.first)
+        #expect(await chat.send(text: "Another composer draft"))
+        let saved = try await files.load(host: other.host, deviceId: other.deviceId)
+        #expect(saved.contains { $0.request.clientId == clientId && $0.conversationId == otherPush.c })
+        chat.setActive(true)
+        await chat.runner?.value
+        chat.setActive(false)
+        #expect(await second.sentIDs.filter { $0 == clientId }.count == 2)
+        let history = try await second.history(conversationId: otherPush.c, query: HistoryQuery())
+        #expect(history.items.filter {
+            guard case .message(let message) = $0 else { return false }
+            return message.clientId == clientId && message.conversationId == otherPush.c && message.text == "Second reply"
+        }.count == 1)
+        let firstHistory = try await first.history(conversationId: payload.hd.c, query: HistoryQuery())
+        #expect(firstHistory.items.contains {
+            guard case .message(let message) = $0 else { return false }
+            return message.conversationId == payload.hd.c && message.text == "First reply"
+        })
+    }
+
+    @Test func replyQueueFailurePostsInTheNotifiedConversation() async throws {
+        let account = "test-failure-" + UUID().uuidString
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer {
+            try? IdentityKeychain.remove(account: account)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try Data().write(to: root)
+        let files = OutboxFile(root: root)
+        let pairings = Pairings(account: account, publishes: false)
+        let delegate = AppDelegate()
+        var failures: [UNNotificationRequest] = []
+        delegate.postFailure = { failures.append($0) }
+        for paired in [false, true] {
+            if paired {
+                pairings.loadIfNeeded()
+                let host = entry(payload.hd.h)
+                try pairings.add(host.pairing, host: host.host, features: host.features)
+            }
+            await delegate.handleResponse(action: AppDelegate.replyAction, text: "Reply", data: payload.hd,
+                                          pairings: pairings, files: files)
+        }
+        #expect(failures.count == 2)
+        for notice in failures {
+            #expect(notice.content.title == "Reply not sent" && notice.content.threadIdentifier == payload.hd.c)
+            let bytes = try #require(notice.content.userInfo["replyFailure"] as? Data)
+            #expect(try JSONDecoder().decode(PushData.self, from: bytes) == payload.hd)
+        }
+    }
+
+    @Test func backgroundReadRetriesAndClearsOnlyThroughTheNotifiedItem() async throws {
+        let account = "test-read-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let target = entry(payload.hd.h)
+        let setup = Pairings(account: account, publishes: false)
+        setup.loadIfNeeded()
+        try setup.add(target.pairing, host: target.host, features: target.features)
+        let service = ScriptedAppService()
+        let chat = ChatController(service: service, store: SwiftDataThreadStore(inMemory: true), monitorsNetwork: false)
+        let delegate = AppDelegate()
+        var notified = payload.hd
+        notified.m = "msg_2102"
+        var older = notified, newer = notified, otherHost = notified, otherThread = notified
+        older.m = "msg_2101"; newer.m = "msg_card"; otherHost.h = "https://other.example.com"; otherThread.c = "another-thread"
+        var removed: [String] = []
+        delegate.deliveredMessages = {
+            let read = try? await service.conversations().conversations.first?.readOrder
+            #expect(read == 3)
+            return [("late", older), ("target", notified), ("newer", newer), ("host", otherHost), ("thread", otherThread)]
+        }
+        delegate.removeDelivered = { removed = $0 }
+        await service.fail("markRead", with: [.transport(.offline)])
+        let cold = Pairings(account: account, publishes: false)
+        delegate.clientFor = { _ in
+            #expect(cold.state == .unreadable)
+            return service
+        }
+        await delegate.handleResponse(action: AppDelegate.readAction, text: nil, data: notified, pairings: cold, chat: chat)
+        #expect(removed == ["late", "target"])
+        #expect(await service.beforeOrders.count == 2)
+        #expect(chat.host == nil && chat.streamTask == nil && chat.runner == nil && !chat.ready)
+        #expect(await service.cursors.isEmpty)
+        #expect(await service.sentIDs.isEmpty)
+    }
+
+    @Test func readUsesTheCachedItemWhenItHasLeftTheNewestPage() async throws {
+        let account = "test-cached-read-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let host = entry(payload.hd.h)
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        try pairings.add(host.pairing, host: host.host, features: host.features)
+        let store = SwiftDataThreadStore(inMemory: true)
+        let cached = Message(kind: .message, id: payload.hd.m, conversationId: payload.hd.c, order: 1,
+                             seq: 1, role: .agent, text: "", files: [], reactions: [], createdAt: 0)
+        try await store.save(ThreadSnapshot(entities: [.message(cached)]), host: host.host, deviceId: host.deviceId)
+        let service = ScriptedAppService()
+        let chat = ChatController(service: service, store: store, monitorsNetwork: false)
+        let delegate = AppDelegate()
+        delegate.clientFor = { _ in service }
+        delegate.deliveredMessages = { [] }
+        delegate.removeDelivered = { _ in }
+        await delegate.handleResponse(action: AppDelegate.readAction, text: nil, data: payload.hd,
+                                      pairings: pairings, chat: chat)
+        #expect(try await service.conversations().conversations.first?.readOrder == 1)
+        #expect(await service.beforeOrders.isEmpty)
+    }
+
+    @Test func completionDeadlineDoesNotWaitForTheOperationToReturn() async {
+        var release: CheckedContinuation<Void, Never>?
+        var completions = 0
+        await withCheckedContinuation { finished in
+            NotificationActionTask().run(timeout: .milliseconds(50)) {
+                await withCheckedContinuation { release = $0 }
+            } completion: {
+                completions += 1
+                if completions == 1 { finished.resume() }
+            }
+        }
+        #expect(release != nil)
+        release?.resume()
+        await Task.yield()
+        #expect(completions == 1)
+    }
+
     @Test func environmentMapping() {
         #expect(AppDelegate.environment("development") == "sandbox")
         #expect(AppDelegate.environment("production") == "production")
@@ -53,6 +227,29 @@ struct MessageNotificationTests {
         #expect(AppDelegate.entry(for: data, in: entries)?.host.absoluteString == "https://app.example.com")
         data.h = "https://unknown.example.com"
         #expect(AppDelegate.entry(for: data, in: entries) == nil)
+    }
+
+    @Test func hiddenPushClearsOnlyItsHostAndRoutesBackToTheList() async throws {
+        let data = payload.hd
+        let host = try #require(URL(string: data.h))
+        #expect(AppDelegate.matchesHidden(data, host: host, conversations: [data.c], agentID: nil))
+        #expect(!AppDelegate.matchesHidden(data, host: URL(string: "https://other.example.com")!, conversations: [data.c], agentID: nil))
+        #expect(!AppDelegate.matchesHidden(data, host: host, conversations: ["other"], agentID: nil))
+        let service = FixtureAppService()
+        let chat = ChatController(service: service, store: SwiftDataThreadStore(inMemory: true), monitorsNetwork: false)
+        chat.setActive(false)
+        chat.selectPairing(FixtureAppService.pairing, host: host)
+        await chat.routeNotification(to: data.c)
+        #expect(chat.openConversationId == data.c)
+        await chat.routeNotification(to: "unknown")
+        #expect(chat.openConversationId == nil)
+        var hidden = try #require(chat.conversation(data.c))
+        hidden.seq += 1
+        hidden.hidden = true
+        chat.reducer.upsert(hidden)
+        chat.openConversation("other")
+        await chat.routeNotification(to: data.c)
+        #expect(chat.openConversationId == nil)
     }
 
     @Test func deliveredNotificationsClearOnlyWhenReadOrderRises() {

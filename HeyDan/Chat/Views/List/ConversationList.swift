@@ -7,6 +7,9 @@ struct ConversationList: View {
     @State private var tab = Tab.chats
     @State private var query = ""
     @State private var pairing = false
+    @State private var hiddenNotice: UUID?
+    private let hiddenMessage = "Hidden. Show it again in Settings > Agents."
+    @State private var actionError: String?
 
     private enum Tab { case chats, settings, search }
 
@@ -52,35 +55,75 @@ struct ConversationList: View {
                         if conversations.isEmpty {
                             emptyState
                         } else {
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 0) {
-                                    HStack {
-                                        Text(chat.host?.host() ?? "Host").textRole(theme.type.label, theme.weight.medium)
-                                        Rectangle().fill(theme.color.border).frame(height: 1)
+                            List {
+                                HStack {
+                                    Text(chat.host?.host() ?? "Host").textRole(theme.type.label, theme.weight.medium)
+                                    Rectangle().fill(theme.color.border).frame(height: 1)
+                                }
+                                .foregroundStyle(theme.color.textTertiary)
+                                .padding(.horizontal, theme.space.s5)
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                                ForEach(conversations, id: \.id) { conversation in
+                                    Button { chat.openConversation(conversation.id) } label: {
+                                        ConversationRow(conversation: conversation, status: chat.statuses[conversation.id], onCall: onCall(conversation))
                                     }
-                                    .foregroundStyle(theme.color.textTertiary)
-                                    .padding(.horizontal, theme.space.s5)
-                                    .padding(.top, theme.space.s4)
-                                    .padding(.bottom, theme.space.s1_5)
-                                    ForEach(conversations, id: \.id) { conversation in
-                                        Button { chat.openConversation(conversation.id) } label: {
-                                            ConversationRow(conversation: conversation, status: chat.statuses[conversation.id])
+                                    .buttonStyle(.plain)
+                                    .opacity(chat.connectionState == .reconnecting ? 0.55 : 1)
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparatorTint(theme.color.borderSubtle)
+                                    .swipeActions(edge: .leading) {
+                                        if conversation.unread > 0 || chat.features.contains("unread") {
+                                            Button {
+                                                Task {
+                                                    do { try await chat.toggleRead(conversation) }
+                                                    catch { actionError = AppError.map(error).message }
+                                                }
+                                            } label: {
+                                                if conversation.unread > 0 { Label("Read", systemImage: "envelope.open") }
+                                                else { Label("Unread", systemImage: "envelope.badge") }
+                                            }
+                                            .tint(theme.color.accent)
                                         }
-                                        .buttonStyle(.plain)
-                                        .opacity(chat.connectionState == .reconnecting ? 0.55 : 1)
-                                        if conversation.id != conversations.last?.id {
-                                            Rectangle().fill(theme.color.borderSubtle).frame(height: 1)
-                                                .padding(.leading, theme.space.s5)
+                                    }
+                                    .swipeActions(edge: .trailing) {
+                                        if chat.features.contains("agents") {
+                                            Button {
+                                                Task {
+                                                    do {
+                                                        try await chat.hide(conversation)
+                                                        hiddenNotice = UUID()
+                                                        AccessibilityNotification.Announcement(hiddenMessage).post()
+                                                    } catch { actionError = AppError.map(error).message }
+                                                }
+                                            } label: { Label("Hide", systemImage: "eye.slash") }
                                         }
                                     }
                                 }
                             }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
                             .refreshable { await chat.refresh() }
                         }
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { tabBar }
+            .safeAreaInset(edge: .bottom) {
+                VStack {
+                    if let notice = hiddenNotice {
+                        Text(hiddenMessage)
+                            .textRole(theme.type.footnote).padding(theme.space.s2)
+                            .background(theme.color.surfaceGrouped, in: Capsule())
+                            .task(id: notice) {
+                                try? await Task.sleep(for: .seconds(3))
+                                if !Task.isCancelled { hiddenNotice = nil }
+                            }
+                    }
+                    tabBar
+                }
+            }
             .background(theme.color.surface.ignoresSafeArea())
             .toolbarVisibility(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in
@@ -92,8 +135,14 @@ struct ConversationList: View {
                 if chat.openConversationId == nil { await AppDelegate.requestPermission() }
             }
         }
+        .id(chat.notificationListID)
+        .onChange(of: chat.notificationListID) { tab = .chats }
         .foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)
+        .task(id: chat.host) { await Pairings.shared.refreshInactiveAgents() }
+        .alert("Chat", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            Button("OK") { actionError = nil }
+        } message: { Text(actionError ?? "") }
         .sheet(isPresented: $pairing) { PairingView() }
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
@@ -115,6 +164,12 @@ struct ConversationList: View {
         .padding(.vertical, theme.space.s1_5)
     }
 
+    private func onCall(_ conversation: Conversation) -> Bool {
+        guard let host = chat.host, let pairing = chat.pairing else { return false }
+        let target = PairedCallTarget(host: host, deviceId: pairing.deviceId, conversation: conversation)
+        return CallController.shared.isCallActive && CallController.shared.matches(target)
+    }
+
     private var connectionNotice: String {
         if let error = chat.error { return error.message }
         return "\(chat.host?.host() ?? "Your host") is unreachable. Messages you send now go out when it is back."
@@ -125,7 +180,9 @@ struct ConversationList: View {
             VStack(spacing: theme.space.s2) {
                 Text(query.isEmpty || tab != .search ? "No agents yet" : "No matching chats")
                     .textRole(theme.type.title, theme.weight.bold)
-                if query.isEmpty || tab != .search {
+                if (query.isEmpty || tab != .search) && chat.features.contains("agents") {
+                    Button("Choose agents in Settings") { tab = .settings }
+                } else if query.isEmpty || tab != .search {
                     Text("Pair this phone with a host to chat with its agents. Ask Dan for a pairing link with /pair.")
                         .textRole(theme.type.body).foregroundStyle(theme.color.textSecondary)
                     Button("Pair a host") { pairing = true }
@@ -193,6 +250,7 @@ struct ConversationRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let conversation: Conversation
     var status: Status?
+    var onCall = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: theme.space.s1) {
@@ -216,7 +274,9 @@ struct ConversationRow: View {
     }
 
     @ViewBuilder private var trailing: some View {
-        if let status, status.state == .working {
+        if onCall {
+            Label("On call", systemImage: "phone.fill").foregroundStyle(theme.color.accentText)
+        } else if let status, status.state == .working {
             HStack(spacing: theme.space.s1) {
                 if reduceMotion { Image(systemName: "circle.dashed") }
                 else { ProgressView().controlSize(.mini).tint(theme.color.statusWorking) }
@@ -236,7 +296,8 @@ struct ConversationRow: View {
 
     private var accessibilitySummary: String {
         var parts = [conversation.agent.name]
-        if status?.state == .working { parts.append(status?.label ?? "Working") }
+        if onCall { parts.append("On call") }
+        else if status?.state == .working { parts.append(status?.label ?? "Working") }
         else if status?.state == .waiting { parts.append("Input") }
         else if conversation.unread > 0, conversation.lastMessage?.role == .agent { parts.append("Done") }
         if let preview = conversation.lastMessage?.preview { parts.append(preview) }

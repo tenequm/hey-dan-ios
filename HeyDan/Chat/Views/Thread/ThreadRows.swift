@@ -54,6 +54,96 @@ private struct UserBubble: ViewModifier {
     }
 }
 
+extension Transcript {
+    func liveCaptions(in rows: [ThreadRow], after orders: [Int: Int64]) -> [Line] {
+        let live = liveLineIDs
+        return lines.filter { line in
+            guard live.contains(line.id), line.kind == .caption, !line.unspoken, !line.wakeOnly,
+                  line.mark == nil || line.mark == .sent, let order = orders[line.id] else { return false }
+            let speaker: Voice = line.speaker == .caller ? .caller : .spoken
+            let caption = captionWords(line.command?.words ?? line.text)
+            for row in rows.reversed() {
+                guard case .entity(.message(let message)) = row else { continue }
+                if message.order <= order { break }
+                // A Jev agent's saved reply has no spoken tag.
+                guard message.voice == speaker || (line.speaker == .agent && message.role == .agent && message.voice == nil)
+                else { continue }
+                if !caption.isEmpty, (" " + captionWords(message.text) + " ").contains(" " + caption + " ") { return false }
+            }
+            return true
+        }
+    }
+
+    var deliveryMarker: String? {
+        guard let last = lines.last else { return nil }
+        if last.kind == .unheard { return "Not heard" }
+        switch last.mark {
+        case .lost: return "Delivery not confirmed"
+        case .dropped: return "Not heard"
+        default: return nil
+        }
+    }
+
+    private func captionWords(_ text: String) -> String {
+        text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: " ").lowercased()
+    }
+}
+
+struct LiveCaptionRows: View {
+    @Environment(\.theme) private var theme
+    let rows: [ThreadRow]
+
+    var body: some View {
+        let call = CallController.shared
+        let lines = call.transcript.liveCaptions(in: rows, after: call.captionOrders)
+        if let first = lines.first {
+            LiveCaptionRow(text: lines.map(\.text).joined(separator: " "), speaker: first.speaker)
+        }
+        if let marker = call.transcript.deliveryMarker {
+            Text(marker).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+}
+
+private struct LiveCaptionRow: View {
+    @Environment(\.theme) private var theme
+    let text: String
+    let speaker: Transcript.Line.Speaker
+
+    var body: some View {
+        Group {
+            if speaker == .caller {
+                Text(text).modifier(UserBubble())
+                    .padding(.leading, theme.space.s10)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                VStack(alignment: .leading, spacing: theme.space.s1_5) {
+                    Text(text)
+                    Label("Speaking", systemImage: "speaker.wave.2").textRole(theme.type.caption)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .textRole(theme.type.body).foregroundStyle(theme.color.textSecondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.call.caption")
+    }
+}
+
+extension View {
+    func messageMenu(_ text: String) -> some View {
+        contextMenu {
+            if !text.isEmpty {
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+                    .accessibilityIdentifier("chat.menu.copy")
+                ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("chat.menu.share")
+            }
+        }
+    }
+}
+
 struct MessageRow: View {
     @Environment(\.theme) private var theme
     let message: Message
@@ -77,16 +167,24 @@ struct MessageRow: View {
             VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
                 if outgoing {
                     if !message.text.isEmpty {
-                        Text(message.text).textSelection(.enabled).modifier(UserBubble())
+                        Text(message.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(message.text)
                     }
                 } else if let card = visibleCard {
                     RichCard(card: card)
+                        .messageMenu(message.text)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier(AXID.card(message.id))
                 } else if !message.text.isEmpty {
-                    MessageBody(text: message.text)
+                    MessageBody(text: message.text, offersMessageActions: true)
                 }
-                ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
+                ForEach(message.files, id: \.id) { file in
+                    if outgoing, file.kind == .audio {
+                        VoiceMessageView(file: file, durationMs: file.durationMs)
+                            .modifier(UserBubble())
+                    } else {
+                        AttachmentView(file: file)
+                    }
+                }
                 HStack(spacing: theme.space.s2) {
                     if message.voice == .caller || message.voice == .spoken {
                         Label("Spoken", systemImage: message.voice == .caller ? "mic" : "speaker.wave.2")
@@ -100,6 +198,7 @@ struct MessageRow: View {
                         if !message.text.isEmpty {
                             Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
                                 .labelStyle(.iconOnly)
+                                .accessibilityIdentifier("chat.copy.\(message.id)")
                         }
                     }
                 }
@@ -110,7 +209,8 @@ struct MessageRow: View {
             .foregroundStyle(theme.color.textPrimary)
             .padding(.leading, outgoing ? theme.space.s10 : 0)
             .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
-            .accessibilityElement(children: visibleCard == nil ? .combine : .contain)
+            .accessibilityElement(children: !outgoing || message.files.contains(where: { $0.kind == .audio }) ? .contain : .combine)
+            .accessibilityLabel(message.text, isEnabled: !outgoing && !message.text.isEmpty)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
                 Button("Send again") { if let id = message.clientId { retry(id) } }
@@ -219,9 +319,15 @@ struct OutboxRow: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: theme.space.s1_5) {
-            if !entry.request.text.isEmpty { Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()) }
+            if !entry.request.text.isEmpty {
+                Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(entry.request.text)
+            }
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
-                Text(attachment.name)
+                if let duration = attachment.durationMs {
+                    VoiceMessageView(durationMs: duration).modifier(UserBubble())
+                } else {
+                    Text(attachment.name)
+                }
             }
             if let error = entry.lastServerError { Text(error.message).foregroundStyle(theme.color.danger) }
             HStack(spacing: theme.space.s1) {
@@ -249,6 +355,7 @@ struct OutboxRow: View {
         .padding(.leading, theme.space.s10)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.outbox.\(entry.request.clientId)")
         .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
             Button("Send again") { retry(entry.request.clientId) }
         }

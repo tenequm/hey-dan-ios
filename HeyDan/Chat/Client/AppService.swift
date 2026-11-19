@@ -19,6 +19,9 @@ protocol AppService: Sendable {
     func conversations() async throws(AppError) -> ConversationsResponse
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse
+    func agents() async throws(AppError) -> AgentsResponse
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse
     func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error>
@@ -70,7 +73,7 @@ extension AppError {
         switch self {
         case .pairing(let failure): failure.localizedDescription
         case .limit(let message): message
-        case .callActive: "End the call to this host first."
+        case .callActive: "End the current call first."
         case .server(_, let body): body.message
         case .keyUnavailable: "Unlock your device and try again."
         case .notPaired: "Pair this device to continue."

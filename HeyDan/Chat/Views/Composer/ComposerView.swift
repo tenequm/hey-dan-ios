@@ -9,6 +9,7 @@ struct ComposerView: View {
     let send: (String, [StagedAttachment]) async -> Bool
     /// Why the last send did not queue.
     var failure: String? = nil
+    var isInCall = false
     @State var text = ""
     @State var attachments: [StagedAttachment] = []
     @State private var draftFiles = AttachmentDraftFiles()
@@ -18,16 +19,27 @@ struct ComposerView: View {
     @State private var importURLs: [URL] = []
     @State private var staging = false
     @State private var sending = false
+    @State private var sentCount = 0
+    @State private var failedCount = 0
     @State private var importFailure: String?
     private static let unreadable = "Could not read the selected attachment. Try selecting it again."
     @FocusState private var textFocused: Bool
     @State private var showsDictationHint = false
+    @State private var recording = false
+
+    private var canSend: Bool {
+        !staging && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
 
     var body: some View {
-        let canSend = !staging && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        if !isInCall { composer }
+    }
+
+    private var composer: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !attachments.isEmpty {
                 StagedAttachmentTray(attachments: attachments) { attachment in
+                    importFailure = nil
                     attachments.removeAll { $0.fileURL == attachment.fileURL }
                     AttachmentStaging.remove(attachment)
                     draftFiles.urls.remove(attachment.fileURL)
@@ -43,67 +55,27 @@ struct ComposerView: View {
                     .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
                     .padding(.horizontal, theme.space.s3).padding(.top, theme.space.s2)
             }
-            HStack(alignment: .bottom, spacing: 0) {
-                if availableFeatures.contains("files") {
-                    Menu {
-                        Button("Photos", systemImage: "photo") { pickingPhotos = true }
-                            .accessibilityIdentifier(AXID.composerPhotos)
-                        Button("Files", systemImage: "folder") { importing = true }
-                    } label: {
-                        Image(systemName: "plus").foregroundStyle(theme.color.icon)
-                            .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+            if recording {
+                VoiceRecorder { result in
+                    recording = false
+                    switch result {
+                    case .dismissed(let note):
+                        importFailure = note
+                    case .send(let attachment), .staged(let attachment):
+                        attachments.append(attachment)
+                        draftFiles.urls.insert(attachment.fileURL)
+                        if case .send = result { queueMessage() }
+                        else { importFailure = "Recording stopped. Send or remove your voice message." }
                     }
-                    .accessibilityLabel("Attach")
-                    .accessibilityIdentifier(AXID.composerAttach)
-                    .disabled(staging)
                 }
-                TextField("Message", text: $text, prompt: Text("Message").foregroundStyle(theme.color.placeholder), axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($textFocused)
-                    .onChange(of: text) { showsDictationHint = false }
-                    .onChange(of: textFocused) { if !textFocused { showsDictationHint = false } }
-                    .textRole(theme.type.body)
-                    .foregroundStyle(theme.color.textPrimary)
-                    .padding(.horizontal, theme.space.s1).padding(.vertical, theme.space.s2_5)
-                    .accessibilityIdentifier(AXID.composerText)
-                if staging { ProgressView() }
-                Button {
-                    textFocused = true
-                    showsDictationHint = true
-                } label: {
-                    Image(systemName: "mic")
-                        .foregroundStyle(theme.color.icon)
-                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Use keyboard dictation")
-                .accessibilityIdentifier(AXID.composerDictation)
-                Button {
-                    importFailure = nil
-                    sending = true
-                    Task {
-                        defer { sending = false }
-                        guard await send(text, attachments) else { return }
-                        text = ""
-                        for attachment in attachments { AttachmentStaging.remove(attachment) }
-                        attachments = []
-                        draftFiles.urls.removeAll()
-                    }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: theme.type.body.size, weight: theme.weight.bold))
-                        .foregroundStyle(canSend ? theme.color.onAccent : theme.color.disabledIcon)
-                        .frame(width: theme.type.display.size, height: theme.type.display.size)
-                        .background(canSend ? theme.color.accent : theme.color.disabledFill, in: Circle())
-                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
-                }
-                .buttonStyle(.plain).accessibilityLabel("Send")
-                .disabled(!canSend)
-                .accessibilityIdentifier(AXID.composerSend)
+            } else {
+                composerControls
             }
-            .padding(.vertical, theme.space.s0_5)
         }
+        .onDisappear { recording = false }
         .disabled(sending)
+        .sensoryFeedback(.impact(weight: .light), trigger: sentCount)
+        .sensoryFeedback(.error, trigger: failedCount)
         .tint(theme.color.accentText)
         .background(theme.color.composer, in: RoundedRectangle(cornerRadius: theme.radius.composer))
         .overlay { RoundedRectangle(cornerRadius: theme.radius.composer).strokeBorder(theme.color.composerBorder).allowsHitTesting(false) }
@@ -137,6 +109,88 @@ struct ComposerView: View {
                 importURLs = [URL(fileURLWithPath: path)]
             }
             #endif
+        }
+    }
+
+    private var composerControls: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            if availableFeatures.contains("files") {
+                Menu {
+                    Button("Photos", systemImage: "photo") { pickingPhotos = true }
+                        .accessibilityIdentifier(AXID.composerPhotos)
+                    Button("Files", systemImage: "folder") { importing = true }
+                } label: {
+                    Image(systemName: "plus").foregroundStyle(theme.color.icon)
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                }
+                .accessibilityLabel("Attach")
+                .accessibilityIdentifier(AXID.composerAttach)
+                .disabled(staging)
+            }
+            TextField("Message", text: $text, prompt: Text("Message").foregroundStyle(theme.color.placeholder), axis: .vertical)
+                .lineLimit(1...6)
+                .focused($textFocused)
+                .onChange(of: text) { showsDictationHint = false }
+                .onChange(of: textFocused) { if !textFocused { showsDictationHint = false } }
+                .textRole(theme.type.body)
+                .foregroundStyle(theme.color.textPrimary)
+                .padding(.horizontal, theme.space.s1).padding(.vertical, theme.space.s2_5)
+                .accessibilityIdentifier(AXID.composerText)
+            if staging { ProgressView() }
+            if availableFeatures.contains("voice-messages"), text.isEmpty, attachments.isEmpty, !staging {
+                Button {
+                    textFocused = false
+                    importFailure = nil
+                    recording = true
+                } label: {
+                    Image(systemName: "mic").foregroundStyle(theme.color.icon)
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Record voice message")
+                .accessibilityIdentifier("composer.record")
+                .disabled(CallController.shared.isCallActive)
+            } else {
+                if !availableFeatures.contains("voice-messages") {
+                    Button {
+                        textFocused = true
+                        showsDictationHint = true
+                    } label: {
+                        Image(systemName: "mic")
+                            .foregroundStyle(theme.color.icon)
+                            .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Use keyboard dictation")
+                    .accessibilityIdentifier(AXID.composerDictation)
+                }
+                Button { queueMessage() } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: theme.type.body.size, weight: theme.weight.bold))
+                        .foregroundStyle(canSend ? theme.color.onAccent : theme.color.disabledIcon)
+                        .frame(width: theme.type.display.size, height: theme.type.display.size)
+                        .background(canSend ? theme.color.accent : theme.color.disabledFill, in: Circle())
+                        .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Send")
+                .disabled(!canSend)
+                .accessibilityIdentifier(AXID.composerSend)
+            }
+        }
+        .padding(.vertical, theme.space.s0_5)
+    }
+
+    private func queueMessage() {
+        guard !sending else { return }
+        importFailure = nil
+        sending = true
+        Task {
+            defer { sending = false }
+            guard await send(text, attachments) else { failedCount += 1; return }
+            sentCount += 1
+            text = ""
+            for attachment in attachments { AttachmentStaging.remove(attachment) }
+            attachments = []
+            draftFiles.urls.removeAll()
         }
     }
 

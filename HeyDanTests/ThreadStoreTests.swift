@@ -129,6 +129,99 @@ struct ThreadStoreTests {
         restored.setActive(false)
     }
 
+    @MainActor @Test func hidingAnAgentUpdatesAnOpenStreamAndItsOfflineCache() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hostService = FixtureAppService()
+        let store = SwiftDataThreadStore(inMemory: true)
+        let files = OutboxFile(root: root)
+        let chat = await paired(hostService, store: store, files: files, active: true)
+        defer { chat.setActive(false) }
+        try await waitUntil { chat.connectionState == .connected }
+        let conversation = try #require(chat.conversations.first)
+        #expect(chat.openConversation(conversation.id))
+        #expect(chat.openConversation(conversation.id))
+        _ = try await hostService.setAgent(id: conversation.agent.id, request: .init(shown: false))
+        try await waitUntil { chat.conversations.isEmpty && chat.openConversationId == nil && chat.badge?.unreadTotal == 0 }
+        let offline = await paired(hostService, store: store, files: files)
+        #expect(offline.conversations.isEmpty)
+        #expect(!offline.openConversation(conversation.id))
+        #expect(offline.openConversationId == nil)
+        _ = try await hostService.setAgent(id: conversation.agent.id, request: .init(shown: true))
+        try await waitUntil { chat.conversations.first?.id == conversation.id && chat.badge?.unreadTotal == conversation.unread }
+    }
+
+    @MainActor @Test func staleListKeepsShownThreadAndHistoryAcrossReload() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = ScriptedAppService()
+        let store = SwiftDataThreadStore(inMemory: true)
+        let files = OutboxFile(root: root)
+        let chat = await paired(service, store: store, files: files, active: true)
+        defer { chat.setActive(false) }
+        try await waitUntil { chat.connectionState == .connected }
+        let row = try #require(chat.conversations.first)
+        _ = try await service.setAgent(id: row.agent.id, request: .init(shown: false))
+        try await waitUntil { chat.conversations.isEmpty }
+        await service.hold("conversations")
+        let refresh = Task { await chat.refresh() }
+        try await service.waitUntilHeld()
+        _ = try await service.setAgent(id: row.agent.id, request: .init(shown: true))
+        try await waitUntil { !chat.conversations.isEmpty }
+        chat.openConversation(row.id)
+        try await waitUntil { !chat.thread.isEmpty }
+        let expected = chat.thread
+        await service.release()
+        await refresh.value
+        #expect(chat.openConversationId == row.id)
+        #expect(chat.thread == expected)
+        let offline = await paired(service, store: store, files: files)
+        #expect(offline.conversations == chat.conversations)
+        #expect(offline.reducer.thread(conversationId: row.id) == expected)
+    }
+
+    @MainActor @Test func swipesUpdateWhilePendingAndRestoreAfterFailure() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = ScriptedAppService()
+        let chat = await paired(service, files: OutboxFile(root: root))
+        await chat.refresh()
+        let row = try #require(chat.conversations.first)
+        chat.openConversation(row.id)
+        try await waitUntil { !chat.thread.isEmpty }
+        chat.closeConversation()
+        let historyCalls = await service.beforeOrders.count
+        for method in ["markRead", "setAgent"] {
+            await service.hold(method)
+            await service.fail(method, with: [.transport(.offline)])
+            let swipe = Task {
+                if method == "markRead" { try await chat.toggleRead(row) }
+                else { try await chat.hide(row) }
+            }
+            try await service.waitUntilHeld()
+            if method == "markRead" { #expect(chat.conversations.first?.unread == 0) }
+            else { #expect(chat.conversations.isEmpty) }
+            await service.release()
+            await #expect(throws: AppError.self) { try await swipe.value }
+            #expect(chat.conversations == [row])
+        }
+        #expect(await service.beforeOrders.count == historyCalls)
+        try await chat.toggleRead(row)
+        let read = try #require(chat.conversations.first)
+        #expect(read.unread == 0)
+        await service.hold("markUnread")
+        await service.fail("markUnread", with: [.transport(.offline)])
+        let unread = Task { try await chat.toggleRead(read) }
+        try await service.waitUntilHeld()
+        #expect(chat.conversations.first?.unread == 1)
+        await service.release()
+        await #expect(throws: AppError.self) { try await unread.value }
+        #expect(chat.conversations == [read])
+
+        try await chat.hide(read)
+        #expect(chat.conversations.isEmpty)
+        _ = try await service.setAgent(id: read.agent.id, request: .init(shown: true))
+        await chat.refresh()
+        #expect(chat.conversations.first?.id == read.id)
+    }
+
     @MainActor @Test func readAndAnswerKeepServerState() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = await paired(FixtureAppService(), files: OutboxFile(root: root))
@@ -526,7 +619,7 @@ private final class SaveGate: @unchecked Sendable {
     func release() { released.signal() }
 }
 
-private actor ScriptedAppService: AppService {
+actor ScriptedAppService: AppService {
     let base = FixtureAppService()
     var failures: [String: [AppError]] = [:]
     var sentIDs: [String] = []
@@ -536,6 +629,22 @@ private actor ScriptedAppService: AppService {
     var scriptedEvents: [AppEvent]?
     var scriptedPages: [HistoryPage] = []
     var beforeOrders: [Int64?] = []
+    private var heldMethod: String?
+    private var continuation: CheckedContinuation<Void, Never>?
+    func waitUntilHeld() async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while continuation == nil && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(continuation != nil)
+    }
+    func hold(_ method: String) { heldMethod = method }
+    func release() {
+        heldMethod = nil
+        continuation?.resume()
+        continuation = nil
+    }
+    private func waitIfHeld(_ method: String) async {
+        if heldMethod == method { await withCheckedContinuation { continuation = $0 } }
+    }
     func events(_ events: [AppEvent]) { scriptedEvents = events }
     func pages(_ pages: [HistoryPage]) { scriptedPages = pages }
     func fail(_ method: String, with errors: [AppError]) { failures[method] = errors }
@@ -552,6 +661,7 @@ private actor ScriptedAppService: AppService {
         try check("conversations")
         var list = try await base.conversations()
         list.seq = max(list.seq, emittedSeq)
+        await waitIfHeld("conversations")
         return list
     }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage { beforeOrders.append(query.before)
@@ -559,7 +669,18 @@ private actor ScriptedAppService: AppService {
         if !scriptedPages.isEmpty { return scriptedPages.removeFirst() }
         return try await base.history(conversationId: conversationId, query: query) }
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse { sentIDs.append(request.clientId); try check("send"); let result = try await base.send(conversationId: conversationId, request: request); try check("sendAfter"); return result }
-    func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse { try check("markRead"); return try await base.markRead(conversationId: conversationId, request: request) }
+    func agents() async throws(AppError) -> AgentsResponse {
+        try check("agents"); return try await base.agents()
+    }
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse {
+        await waitIfHeld("setAgent")
+        try check("setAgent"); return try await base.setAgent(id: id, request: request)
+    }
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse {
+        await waitIfHeld("markUnread")
+        try check("markUnread"); return try await base.markUnread(conversationId: conversationId)
+    }
+    func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse { await waitIfHeld("markRead"); try check("markRead"); return try await base.markRead(conversationId: conversationId, request: request) }
     func answer(questionId: String, request: AnswerRequest) async throws(AppError) -> AnswerResponse { try check("answer"); return try await base.answer(questionId: questionId, request: request) }
     func events(query: EventsQuery) async throws(AppError) -> AsyncThrowingStream<AppEvent, any Error> { cursors.append(query.after); try check("events")
         if let scriptedEvents {

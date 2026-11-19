@@ -13,7 +13,9 @@ import UIKit
         }
         #endif
         Task { @MainActor in _ = Pairings.shared }
-        return controller ?? ChatController(store: SwiftDataThreadStore())
+        let chat = controller ?? ChatController(store: SwiftDataThreadStore())
+        chat.active = UIApplication.shared.applicationState == .active
+        return chat
     }()
     enum ConnectionState: Sendable { case disconnected, connecting, connected, reconnecting }
     private(set) var pairing: PairResponse?
@@ -23,7 +25,19 @@ import UIKit
     /// Why the last send from the composer did not queue; shown there, not as the connection's error.
     var sendFailure: String?
     var features: [String] = []
-    var conversations: [Conversation] { reducer.conversations.values.sorted { $0.id < $1.id } }
+    private enum HideState: Equatable { case sending(UUID), confirmed(UUID) }
+    private var pendingHides: [String: HideState] = [:]
+    private var pendingReads: [String: Int] = [:]
+    private var newestPageRevision: [String: Int64] = [:]
+    private(set) var notificationListID = UUID()
+    var conversations: [Conversation] {
+        reducer.conversations.values.compactMap { conversation in
+            guard pendingHides[conversation.id] == nil else { return nil }
+            var row = conversation
+            if let unread = pendingReads[row.id] { row.unread = unread }
+            return row
+        }.sorted { $0.id < $1.id }
+    }
     var thread: [ThreadEntity] { openConversationId.map { visibleThread($0) } ?? [] }
     var rows: [ThreadRow] { openConversationId.map { visibleRows($0) } ?? [] }
     var historyFloors: [String: Int64] = [:]
@@ -80,7 +94,7 @@ import UIKit
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var protectedTask: Task<Void, Never>?
 
-    init(service: (any AppService)? = nil, store: any ThreadStore, files: OutboxFile = OutboxFile(), monitorsNetwork: Bool = true) {
+    init(service: (any AppService)? = nil, store: any ThreadStore, files: OutboxFile = .shared, monitorsNetwork: Bool = true) {
         self.service = service ?? SignedClient()
         self.store = store
         self.files = files
@@ -131,7 +145,7 @@ import UIKit
     }
 
     func selectPairing(_ pairing: PairResponse?, host: URL) {
-        guard self.host != host || self.pairing != pairing else { return }
+        guard self.host != host || self.pairing?.deviceId != pairing?.deviceId else { return }
         flushRead()
         let pendingOpen = self.host == nil || self.host == host ? openConversationId : nil
         generation = UUID()
@@ -140,6 +154,7 @@ import UIKit
         loadRetry?.cancel(); loadAttempts = 0
         self.host = host; self.pairing = pairing
         reducer = ThreadReducer(); outbox = Outbox(); historyStale = false; openConversationId = pairing == nil ? nil : pendingOpen
+        pendingHides = [:]; pendingReads = [:]; newestPageRevision = [:]
         historyFloors = [:]
         savedEntries = []; durableIDs = []; ready = false; hasCursor = false; pauseReason = nil; error = nil
         features = pairing == nil ? [] : Pairings.shared.entries.first { $0.host == host }?.features ?? []
@@ -187,14 +202,33 @@ import UIKit
             }
         }
     }
-    func openConversation(_ id: String) {
-        guard openConversationId != id else { return }
+    @discardableResult func openConversation(_ id: String) -> Bool {
+        guard pendingHides[id] == nil, reducer.hiddenConversations[id] == nil else { return false }
+        guard openConversationId != id else { return true }
         flushRead()
         openConversationId = id
         sendFailure = nil
         Task { await loadHistory(newest: true) }
+        return true
     }
     func closeConversation() { flushRead(); openConversationId = nil; sendFailure = nil }
+    func showNotificationList() {
+        closeConversation()
+        notificationListID = UUID()
+    }
+
+    func routeNotification(to id: String) async {
+        let token = generation
+        await loadTask?.value
+        guard generation == token, !Task.isCancelled else { return }
+        if reducer.hiddenConversations[id] == nil, conversation(id) == nil || connectionState != .connected {
+            await refresh()
+        }
+        guard generation == token, !Task.isCancelled else { return }
+        if conversation(id) != nil, pendingHides[id] == nil { openConversation(id) }
+        else { showNotificationList() }
+    }
+
     func setActive(_ active: Bool) {
         guard self.active != active else { return }
         self.active = active
@@ -243,6 +277,7 @@ import UIKit
     func refreshList(token: UUID) async throws {
         guard ready else { throw AppError.transport(.unavailable) }
         let requestedCursor = reducer.cursor
+        let hidesBeforeList = pendingHides
         let list = try await service.conversations()
         guard token == generation, !Task.isCancelled, let host, let pairing else { return }
         let restored = list.seq < requestedCursor
@@ -250,30 +285,58 @@ import UIKit
         let allowed = Set(list.conversations.map(\.id))
         var snapshot = ThreadSnapshot(cursor: cursor, conversations: list.conversations)
         snapshot.allowedConversations = allowed
+        snapshot.listSequence = list.seq
         snapshot.historyFloors = restored ? [:] : historyFloors
         snapshot.replacesCache = restored
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)
         guard token == generation, !Task.isCancelled else { return }
+        // A snapshot requested after the PUT can also contain a subsequent show from another device.
+        for (id, state) in hidesBeforeList where pendingHides[id] == state {
+            if case .confirmed = state { pendingHides.removeValue(forKey: id) }
+        }
+        let previous = Set(reducer.conversations.keys)
         if restored {
             reducer = ThreadReducer()
+            newestPageRevision.removeAll()
             historyFloors.removeAll()
             historyStale = openConversationId != nil
         }
-        reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: reducer.conversations.filter { allowed.contains($0.key) }, entities: reducer.entities.filter {
-            switch $0.value { case .message(let m): allowed.contains(m.conversationId); case .question(let q): allowed.contains(q.conversationId); case .unknown: false }
-        },
+        let retained = reducer.conversations.filter {
+            allowed.contains($0.key) || $0.value.seq > list.seq
+        }
+        let visible = allowed.union(retained.keys)
+        reducer = ThreadReducer(cursor: max(cursor, reducer.cursor), conversations: retained,
+            hiddenConversations: reducer.hiddenConversations, entities: reducer.entities.filter {
+                guard let key = $0.value.identity else { return false }
+                return visible.contains(key.conversationId) || key.seq > list.seq
+            },
             statuses: reducer.statuses, badge: reducer.badge, hasMoreBefore: reducer.hasMoreBefore)
         for value in list.conversations { reducer.upsert(value) }
         for value in list.statuses { reducer.upsert(value) }
         reducer.upsert(list.badge)
+        if let id = openConversationId, reducer.conversations[id] == nil { closeConversation() }
         hasCursor = true
+        await updateRoster(removed: previous.subtracting(reducer.conversations.keys), host: host, deviceId: pairing.deviceId,
+                           agentOrder: list.conversations.map(\.agent.id))
     }
+    func updateRoster(removed: Set<String>, host: URL, deviceId: String, agentOrder: [String]? = nil) async {
+        for id in removed { pendingHides.removeValue(forKey: id) }
+        let order = agentOrder ?? Pairings.shared.entries.first { $0.host == host }?.agents.map(\.id) ?? []
+        let byAgent = Dictionary(reducer.conversations.values.map { ($0.agent.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let extra = Set(byAgent.keys).subtracting(order).sorted()
+        Pairings.shared.refreshAgents((order + extra).compactMap { byAgent[$0] }, host: host, deviceId: deviceId)
+        if !removed.isEmpty { await AppDelegate.clearHidden(host: host, conversations: removed) }
+    }
+
     func loadHistory(before: Int64? = nil, newest: Bool = false) async {
         guard let id = openConversationId, ready else { return }
         let token = generation
         do {
-            let page = try await service.history(conversationId: id, query: HistoryQuery(before: before ?? (newest ? nil : historyFloors[id])))
+            let revision = reducer.conversations[id]?.seq
+            let boundary = before ?? (newest ? nil : historyFloors[id])
+            let page = try await service.history(conversationId: id, query: HistoryQuery(before: boundary))
             guard token == generation, !Task.isCancelled else { return }
+            if boundary == nil, !page.hasMoreAfter { newestPageRevision[id] = revision }
             if let floor = page.items.compactMap(\.order).min() {
                 historyFloors[id] = min(historyFloors[id] ?? floor, floor)
             }
@@ -310,6 +373,7 @@ import UIKit
         guard let id = openConversationId, readOrder > 0 else { return }
         let order = readOrder, token = generation
         readOrder = 0
+        guard reducer.hiddenConversations[id] == nil else { return }
         let client = service
         readFlushTask = Task { await sendRead(id: id, order: order, token: token, client: client) }
     }
@@ -321,6 +385,61 @@ import UIKit
             try await persist(reducer.upsert(response.conversation))
         } catch { if !Task.isCancelled { await handle(error, token: token) } }
     }
+    func hide(_ conversation: Conversation) async throws {
+        guard !CallController.shared.protectsChat(host: host, deviceId: pairing?.deviceId, agentId: conversation.agent.id)
+        else { throw AppError.callActive }
+        let id = conversation.id, mutation = UUID()
+        guard pendingHides[id] == nil else { return }
+        pendingHides[id] = .sending(mutation)
+        do {
+            _ = try await service.setAgent(id: conversation.agent.id, request: .init(shown: false))
+            if pendingHides[id] == .sending(mutation) {
+                pendingHides[id] = .confirmed(mutation)
+                if let host { await AppDelegate.clearHidden(host: host, conversations: [id]) }
+            }
+        } catch {
+            if pendingHides[id] == .sending(mutation) { pendingHides.removeValue(forKey: id) }
+            throw error
+        }
+    }
+
+    func toggleRead(_ conversation: Conversation) async throws {
+        let token = generation
+        let client = service
+        let id = conversation.id
+        guard pendingReads[id] == nil else { return }
+        pendingReads[id] = conversation.unread == 0 ? 1 : 0
+        defer { if token == generation { pendingReads.removeValue(forKey: id) } }
+        // A thread closed just before the swipe can still have a final read in flight.
+        await readFlushTask?.value
+        guard token == generation else { return }
+        let response: ReadResponse
+        if conversation.unread == 0 {
+            response = try await client.markUnread(conversationId: conversation.id)
+        } else {
+            guard let current = reducer.conversations[id] else { return }
+            let cachedLast = current.lastMessage.flatMap { reducer.entities[$0.id]?.identity }
+            let order: Int64
+            if (newestPageRevision[id] == current.seq || cachedLast?.conversationId == id),
+               let newest = reducer.thread(conversationId: id).last?.order {
+                order = newest
+            } else {
+                let page = try await client.history(conversationId: id, query: HistoryQuery(limit: 1))
+                guard token == generation, let newest = page.items.compactMap(\.order).max() else { return }
+                order = newest
+            }
+            response = try await client.markRead(conversationId: conversation.id, request: ReadRequest(order: order))
+        }
+        guard token == generation else { return }
+        reducer.upsert(response.badge)
+        try await persist(reducer.upsert(response.conversation))
+    }
+
+    func service(for entry: Pairings.Entry) -> any AppService {
+        if host == entry.host, pairing?.deviceId == entry.deviceId { return service }
+        return SignedClient(host: entry.host, deviceId: entry.deviceId)
+    }
+
     func markRead(order: Int64) async {
         guard let id = openConversationId, order > max(readOrder, reducer.conversations[id]?.readOrder ?? 0) else { return }
         readOrder = max(readOrder, order)
@@ -336,7 +455,9 @@ import UIKit
     func pairedConversation(agentId: String, entry: Pairings.Entry) async throws(AppError) -> (conversation: Conversation?, service: any AppService) {
         guard host == entry.host, pairing?.deviceId == entry.deviceId else {
             let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
-            return (try await client.conversations().conversations.first { $0.agent.id == agentId }, client)
+            let list = try await client.conversations()
+            Pairings.shared.refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
+            return (list.conversations.first { $0.agent.id == agentId }, client)
         }
         let client = service
         await loadTask?.value
@@ -354,7 +475,7 @@ import UIKit
     @discardableResult func unpair(host: URL, localOnly: Bool = false) async -> AppError? {
         guard let entry = Pairings.shared.entries.first(where: { $0.host == host }) else { return nil }
         // The call's hangup is signed with this host's key, which unpairing deletes.
-        if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired?.host == host {
+        if CallController.shared.isCallActive, CallController.shared.pairedCallTarget?.paired.host == host {
             error = .callActive
             return .callActive
         }
@@ -387,7 +508,7 @@ import UIKit
     }
     func persist(_ changed: Set<String>) async throws {
         guard let host, let pairing else { return }
-        var snapshot = ThreadSnapshot(conversations: changed.compactMap { reducer.conversations[$0] },
+        var snapshot = ThreadSnapshot(conversations: changed.compactMap { reducer.conversationRecord($0) },
             entities: changed.compactMap { reducer.entities[$0] })
         snapshot.historyFloors = historyFloors
         try await store.save(snapshot, host: host, deviceId: pairing.deviceId)

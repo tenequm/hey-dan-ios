@@ -1,19 +1,27 @@
 #if DEBUG
-import CoreGraphics
+import UIKit
 import Foundation
 import HeyDanCore
 
 actor FixtureAppService: AppService {
     static let host = FixtureContent.capturing ? FixtureContent.host : URL(string: "https://app.example.com")!
+    static let secondAgent = Agent(id: "ag_second", name: "Alex")
+    static let hasSecondAgent = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"] == "1" && !FixtureContent.capturing
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: FixtureContent.capturing ? "iPhone 17 Pro" : "Taylor tester",
-        agents: FixtureContent.capturing ? FixtureContent.agents : [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
+        agents: FixtureContent.capturing ? FixtureContent.agents : [Agent(id: "ag_taylor", name: "Taylor")] + (hasSecondAgent ? [secondAgent] : []),
+        protocol: 1, serverTime: 0)
     let previewOutbox: [Outbox.Entry]
     private let scenario: String?
 
     init(scenario: String? = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]) {
         self.scenario = scenario
         let preview = ThreadPreviewValues.self
-        if scenario == "outbox" {
+        if scenario == "message-menus" {
+            previewOutbox = [Outbox.State.queued, .failed].map { state in
+                Outbox.Entry(host: Self.host, conversationId: "conv_taylor01",
+                    request: SendRequest(clientId: state == .queued ? "queued" : "failed", text: "Example", fileIds: []), state: state)
+            }
+        } else if scenario == "outbox" {
             previewOutbox = [Outbox.State.queued, .waiting, .held].map { state in
                 Outbox.Entry(host: Self.host, conversationId: "conv_taylor01",
                     request: SendRequest(clientId: UUID().uuidString, text: "Please check the report.", fileIds: []),
@@ -21,6 +29,9 @@ actor FixtureAppService: AppService {
             }
         } else { previewOutbox = [] }
         switch scenario {
+        case "message-menus":
+            messages = [Message(kind: .message, id: "msg_5", conversationId: "conv_taylor01", order: 6, seq: 6,
+                role: .user, text: "Example", files: [], reactions: [], delivery: .reached, createdAt: 0)]
         case "outbox":
             messages = [Delivery.stored, .routed].enumerated().map { offset, delivery in
                 let order = Int64(5 + offset)
@@ -97,7 +108,7 @@ actor FixtureAppService: AppService {
         return Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0)
     }
     private var includesQuestion: Bool { !FixtureContent.capturing || scenario == "question" || scenario == "full" }
-    private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.unread) }
+    private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.hidden == true ? 0 : conversation.unread) }
     private func event<T: Encodable>(_ kind: Kind, _ value: T, id: Int64? = nil) throws(AppError) -> AppEvent {
         do { return AppEvent(kind: kind, id: id, data: try JSONEncoder().encode(value)) }
         catch { throw .transport(.invalidResponse) }
@@ -107,11 +118,32 @@ actor FixtureAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse {
         HelloResponse(protocol: 1, minProtocol: 1, voiceProtocol: 6,
-            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker"], serverTime: 0)
+            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker", "agents", "unread", "voice-messages"], serverTime: 0)
     }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { Self.pairing }
+    private var candidate: AgentCandidate {
+        AgentCandidate(id: conversation.agent.id, name: conversation.agent.name, chat: "Team", shown: conversation.hidden != true)
+    }
+    func agents() async throws(AppError) -> AgentsResponse { AgentsResponse(agents: [candidate]) }
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse {
+        guard id == candidate.id else { throw .server(status: 404, body: ErrorBody(error: "not_found", message: "Agent unavailable.")) }
+        if request.shown != candidate.shown {
+            sequence += 1
+            conversation.seq = sequence
+            conversation.hidden = !request.shown
+            try publish(event(.conversation, conversation, id: sequence))
+            if request.shown { try publish(event(.status, status)) }
+            try publish(event(.badge, badge))
+        }
+        return AgentResponse(agent: candidate)
+    }
     func conversations() async throws(AppError) -> ConversationsResponse {
-        ConversationsResponse(conversations: [conversation], statuses: [status], badge: badge, seq: sequence)
+        var conversations = candidate.shown ? [conversation] : []
+        if Self.hasSecondAgent {
+            conversations.append(Conversation(kind: .conversation, id: "conv_second", seq: 1,
+                agent: Self.secondAgent, unread: 0, readOrder: 0, canCall: true, createdAt: 0))
+        }
+        return ConversationsResponse(conversations: conversations, statuses: candidate.shown ? [status] : [], badge: badge, seq: sequence)
     }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage {
         var items = messages.filter { (query.before == nil || $0.order < query.before!) && (query.after == nil || $0.order > query.after!) }.map(ThreadEntity.message)
@@ -127,19 +159,34 @@ actor FixtureAppService: AppService {
             clientId: request.clientId, delivery: .stored, createdAt: 0)
         messages.append(stored)
         try publish(event(.message, stored, id: sequence))
+        let voice = stored.files.contains { $0.kind == .audio }
+        if voice { try publishPreview(stored, text: "Voice message") }
         Task {
-            try? await Task.sleep(for: .milliseconds(150))
+            try? await Task.sleep(for: voice ? .seconds(3) : .milliseconds(150))
             try? self.complete(stored)
         }
         return SendResponse(message: stored)
     }
+    private func publishPreview(_ message: Message, text: String) throws(AppError) {
+        sequence += 1
+        conversation.seq = sequence
+        conversation.lastMessage = LastMessage(id: message.id, role: message.role, preview: text, at: message.createdAt)
+        try publish(event(.conversation, conversation, id: sequence))
+    }
+
     private func complete(_ stored: Message) throws(AppError) {
         sequence += 1
         var reached = stored
         reached.seq = sequence
         reached.delivery = .reached
+        if let index = reached.files.firstIndex(where: { $0.kind == .audio }) {
+            reached.files[index].transcript = .init(state: .done, text: "Recorded fixture message.")
+        }
         if let index = messages.firstIndex(where: { $0.id == reached.id }) { messages[index] = reached }
         try publish(event(.message, reached, id: sequence))
+        if let preview = reached.files.first(where: { $0.kind == .audio })?.transcript?.text, conversation.lastMessage?.id == reached.id {
+            try publishPreview(reached, text: preview)
+        }
         sequence += 1
         let reply = Message(kind: .message, id: "msg_reply_" + stored.id, conversationId: stored.conversationId,
             order: sequence, seq: sequence, role: .agent, text: "Received.", files: [], reactions: [], createdAt: 0)
@@ -147,10 +194,22 @@ actor FixtureAppService: AppService {
         try publish(event(.message, reply, id: sequence))
     }
     func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse {
-        sequence += 1
-        conversation.seq = sequence
         conversation.readOrder = max(conversation.readOrder, request.order)
         conversation.unread = 0
+        return try publishReadState()
+    }
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse {
+        let newest = messages.filter { $0.role == .agent }.map(\.order).max()
+        guard let order = [newest, includesQuestion ? question.order : nil].compactMap({ $0 }).max() else {
+            throw .server(status: 409, body: ErrorBody(error: "nothing_unread", message: "There is nothing to mark unread."))
+        }
+        conversation.readOrder = order - 1
+        conversation.unread = 1
+        return try publishReadState()
+    }
+    private func publishReadState() throws(AppError) -> ReadResponse {
+        sequence += 1
+        conversation.seq = sequence
         try publish(event(.conversation, conversation, id: sequence))
         try publish(event(.badge, badge))
         return ReadResponse(conversation: conversation, badge: badge)
@@ -171,12 +230,12 @@ actor FixtureAppService: AppService {
         let pair = AsyncThrowingStream<AppEvent, any Error>.makeStream()
         let id = UUID()
         var snapshot = [try event(.conversation, conversation, id: conversation.seq)]
-        if includesQuestion { snapshot.append(try event(.question, question, id: question.seq)) }
-        for message in messages { snapshot.append(try event(.message, message, id: message.seq)) }
+        if candidate.shown && includesQuestion { snapshot.append(try event(.question, question, id: question.seq)) }
+        for message in messages where candidate.shown { snapshot.append(try event(.message, message, id: message.seq)) }
         for item in snapshot.sorted(by: { ($0.id ?? 0) < ($1.id ?? 0) }) where (item.id ?? 0) > query.after {
             pair.continuation.yield(item)
         }
-        pair.continuation.yield(try event(.status, status))
+        if candidate.shown { pair.continuation.yield(try event(.status, status)) }
         pair.continuation.yield(try event(.badge, badge))
         pair.continuation.yield(try event(.synchronized, Synchronized(seq: sequence)))
         listeners[id] = pair.continuation
@@ -186,8 +245,10 @@ actor FixtureAppService: AppService {
     private func removeListener(_ id: UUID) { listeners.removeValue(forKey: id) }
     func initializeFile(_ request: FileInitRequest) async throws(AppError) -> FileInitResponse {
         let id = "file_" + request.uploadKey
+        let audio = request.mimeType == "audio/mp4" || request.mimeType == "audio/x-m4a"
         fileMetadata[id] = FileAttachment(id: id, name: request.name, mimeType: request.mimeType,
-            size: request.size, kind: request.mimeType.hasPrefix("image/") ? .image : .file)
+            size: request.size, kind: audio ? .audio : (request.mimeType.hasPrefix("image/") ? .image : .file),
+            durationMs: request.durationMs, transcript: audio ? .init(state: .pending) : nil)
         return FileInitResponse(fileId: id, ticket: "fixture", expiresAt: Int64.max,
             uploadPath: "/app/files/" + id, uploaded: uploaded[id] != nil)
     }
@@ -216,15 +277,63 @@ actor FixtureAppService: AppService {
         }
         return Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
     }
-    func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant { throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Calls are unavailable in this preview.")) }
+    func startCall(_ request: CallRequest) async throws(AppError) -> CallGrant {
+        var reason = "Calls are unavailable in this preview."
+        if scenario == "control-admission" {
+            let background = await MainActor.run { UIApplication.shared.applicationState == .background }
+            reason = background ? "CallKit admitted the background call." : "CallKit admitted the foreground call."
+        }
+        throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: reason))
+    }
     func endCall(callId: String, request: CallEndRequest) async throws(AppError) {}
     func cancelCall(attemptId: String, request: CallCancelRequest) async throws(AppError) {}
+    private var voiceFault = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_VOICE_FAILURE"]
+    private var savedVoices: [String: TTSView] = [:]
+
     func voice(conversationId: String) async throws(AppError) -> TTSView {
-        if FixtureContent.capturing { return FixtureContent.voice }
-        throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: "Voice settings are unavailable in this preview."))
+        if voiceFault == "load" {
+            voiceFault = nil
+            throw .transport(.offline)
+        }
+        let view = savedVoices[conversationId] ?? FixtureContent.voice
+        if voiceFault == "names" {
+            voiceFault = nil
+            let unknown = ChoiceDetails(provider: view.saved.provider, status: .lookupFailed)
+            return TTSView(effective: view.effective, saved: view.saved, providers: view.providers,
+                           details: TTSDetails(saved: unknown, effective: unknown))
+        }
+        return view
     }
-    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView { try await voice(conversationId: conversationId) }
-    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage { CatalogPage(provider: query.provider, voices: FixtureContent.capturing ? FixtureContent.voices : []) }
+
+    func updateVoice(conversationId: String, request: TTSPatch) async throws(AppError) -> TTSView {
+        let initial = FixtureContent.voice
+        switch request {
+        case .reset: savedVoices[conversationId] = nil
+        case let .choice(choice):
+            guard let provider = initial.providers.first(where: { $0.id == choice.provider && $0.available }) else {
+                throw .server(status: 503, body: ErrorBody(error: "provider_unavailable", message: "Provider unavailable"))
+            }
+            let model = choice.model ?? provider.default.model
+            let id = choice.voice ?? provider.default.voice
+            let details = ChoiceDetails(provider: provider.id, providerName: provider.name, model: model, voice: id,
+                voiceName: FixtureContent.voices.first { $0.id == id }?.name, status: .resolved)
+            savedVoices[conversationId] = TTSView(effective: TTSChoice(provider: provider.id, model: model, voice: id),
+                saved: SavedTTSChoice(provider: provider.id, model: model, voice: id), providers: initial.providers,
+                details: TTSDetails(saved: details, effective: details))
+        }
+        if voiceFault == "lost-save" { throw .transport(.timeout) }
+        return try await voice(conversationId: conversationId)
+    }
+
+    func voices(conversationId: String, query: VoiceCatalogQuery) async throws(AppError) -> CatalogPage {
+        if voiceFault == "catalog" { throw .transport(.offline) }
+        let voices = FixtureContent.voices.filter { voice in
+            (query.q.map { voice.name.localizedCaseInsensitiveContains($0) } ?? true)
+                && (query.gender == nil || query.gender == voice.gender)
+                && (query.language == nil || query.language == voice.language)
+        }
+        return CatalogPage(provider: query.provider, voices: query.provider == "elevenlabs" ? voices : [])
+    }
     func registerPushToken(_ request: PushTokenRequest) async throws(AppError) {}
     func unpair() async throws(AppError) {}
 }

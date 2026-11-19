@@ -13,7 +13,6 @@ struct TurnMessageTests {
         #expect(message(#"{"turn":2,"status":"lost","reason":"stt"}"#) == .status(TurnStatus(turn: 2, status: .lost, reason: .stt)))
         #expect(message(#"{"turn":4,"status":"lost","reason":"rate_limited"}"#) == .status(TurnStatus(turn: 4, status: .lost, reason: .rateLimited)))
         #expect(message(#"{"turn":1,"status":"sending"}"#) == .status(TurnStatus(turn: 1, status: .sending)))
-        #expect(message(#"{"turn":3,"status":"sending","text":"Hi","draft":1}"#) == .status(TurnStatus(turn: 3, status: .sending, text: "Hi", draft: 1)))
         #expect(message(#"{"turn":1,"status":"working"}"#) == .status(TurnStatus(turn: 1, status: .working)))
     }
 
@@ -68,24 +67,20 @@ struct ReplyInfoTests {
     }
 }
 
-struct ReviewStateTests {
-    private func state(_ json: String) throws -> ReviewState {
-        try JSONDecoder().decode(ReviewState.self, from: Data(json.utf8))
+struct WorkerTurnStateTests {
+    private func state(_ json: String) throws -> WorkerTurnState {
+        try JSONDecoder().decode(WorkerTurnState.self, from: Data(json.utf8))
     }
 
     @Test func decodesTheWakeState() throws {
         #expect(try state(#"{"seq":3,"mode":"auto","draft":null,"wake":{"on":true,"pauseSends":false,"waiting":true}}"#)
-            == ReviewState(seq: 3, mode: .auto, wake: WakeState(on: true, pauseSends: false, waiting: true)))
+            .wake == WakeState(on: true, pauseSends: false, waiting: true))
         let full = try state(
             #"{"seq":9,"mode":"auto","draft":null,"wake":{"on":true,"pauseSends":true,"waiting":false,"phrase":"Hey LiveKit","heard":2,"slept":1,"cut":true}}"#
         )
         #expect(full.wake == WakeState(on: true, pauseSends: true, waiting: false, phrase: "Hey LiveKit", heard: 2, slept: 1, cut: true))
     }
 
-    @Test func decodesTheDraftAndAnOlderWorkersMissingWake() throws {
-        let review = try state(#"{"seq":5,"mode":"review","draft":{"id":2,"state":"ready","text":"Hi","tooLong":true},"preparing":true}"#)
-        #expect(review == ReviewState(seq: 5, mode: .review, draft: Draft(id: 2, state: .ready, text: "Hi", tooLong: true), preparing: true))
-    }
 }
 
 struct SettingsTests {
@@ -95,12 +90,12 @@ struct SettingsTests {
     }
 
     @Test func decodesReplies() {
-        #expect(ReviewReply(payload: #"{"gen":4,"ok":true,"seq":7}"#).map { [$0.gen, $0.seq] } == [4, 7])
-        let refused = ReviewReply(payload: #"{"gen":5,"ok":false,"seq":7,"error":"closed"}"#)
+        #expect(WorkerReply(payload: #"{"gen":4,"ok":true,"seq":7}"#).map { [$0.gen, $0.seq] } == [4, 7])
+        let refused = WorkerReply(payload: #"{"gen":5,"ok":false,"seq":7,"error":"closed"}"#)
         #expect(refused?.ok == false)
         #expect(refused?.error == "closed")
-        #expect(ReviewReply(payload: #"{"ok":true}"#) == nil)
-        #expect(ReviewReply(payload: "") == nil)
+        #expect(WorkerReply(payload: #"{"ok":true}"#) == nil)
+        #expect(WorkerReply(payload: "") == nil)
     }
 
     @Test func onlyTheCallsFirstSettingsSendIsCutShort() {
@@ -210,17 +205,8 @@ struct CommandWordsTests {
         #expect(CommandWords(attribute: attribute) == nil)
     }
 
-    @Test func hintsQuoteTheFlaggedWordsElseTheFirst() throws {
-        #expect(CommandWords.builtIn.sendHint == #""zulu" or "copy""#)
-        let unflagged = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"over"},{"say":"roger"}],"discard":[{"say":"belay"},{"say":"cancel"}]}"#))
-        #expect(unflagged.sendHint == #""over""#)
-        let three = try #require(CommandWords(attribute: #"{"v":1,"send":[{"say":"a","hint":true},{"say":"b","hint":true},{"say":"Прийом","hint":true}]}"#))
-        #expect(three.sendHint == #""a", "b" or "Прийом""#)
-    }
-
-    @Test(arguments: [4, 6])
-    func readsACaptionsMark(version: Int) throws {
-        let names = try #require(VoiceProtocol.Names(version: version))
+    @Test func readsACaptionsMark() throws {
+        let names = try #require(VoiceProtocol.Names(version: 6))
         let command = names.captionCommandAttribute, words = names.captionWordsAttribute
         let marked = [command: "send", words: "Book a table"]
         #expect(SpokenCommand(captionAttributes: marked, names: names) == SpokenCommand(.send, words: "Book a table"))
@@ -232,8 +218,8 @@ struct CommandWordsTests {
     }
 
     @Test func aCaptionMarkOfTheOtherProtocolIsNoMark() throws {
-        let v4 = try #require(VoiceProtocol.Names(version: 4)), v6 = try #require(VoiceProtocol.Names(version: 6))
-        let markedOn4 = [v4.captionCommandAttribute: "send", v4.captionWordsAttribute: "Book"]
+        let v6 = try #require(VoiceProtocol.Names(version: 6))
+        let markedOn4 = ["nanoclaw.voice.command": "send", "nanoclaw.voice.words": "Book"]
         #expect(SpokenCommand(captionAttributes: markedOn4, names: v6) == nil)
     }
 }

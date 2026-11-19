@@ -63,7 +63,7 @@ nonisolated enum StoreLocation {
 }
 
 actor SwiftDataThreadStore: ThreadStore {
-    static let schemaVersion = 2
+    static let schemaVersion = 3
     private let root: URL
     private let version: Int
     private let inMemory: Bool
@@ -131,6 +131,9 @@ actor SwiftDataThreadStore: ThreadStore {
             return ThreadSnapshot()
         }
     }
+    func itemOrders(_ ids: [String], conversationId: String, host: URL, deviceId: String) async throws -> [String: Int64] {
+        try await worker(host: host).itemOrders(ids, conversationId: conversationId, deviceId: deviceId)
+    }
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws {
         let began = ContinuousClock.now
         let worker = try await worker(host: host)
@@ -143,6 +146,13 @@ actor SwiftDataThreadStore: ThreadStore {
 }
 
 @ModelActor actor ThreadStoreWorker {
+    func itemOrders(_ ids: [String], conversationId: String, deviceId: String) throws -> [String: Int64] {
+        let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
+            $0.deviceId == deviceId && $0.conversationId == conversationId && $0.kind != "conversation" && ids.contains($0.entityId)
+        }))
+        return Dictionary(uniqueKeysWithValues: records.map { ($0.entityId, $0.order) })
+    }
+
     func load(deviceId: String) throws -> ThreadSnapshot {
         let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
             predicate: #Predicate { $0.deviceId == deviceId }, sortBy: [SortDescriptor(\.order)]))
@@ -179,9 +189,14 @@ actor SwiftDataThreadStore: ThreadStore {
         do {
             if snapshot.replacesCache { try deleteRecords(deviceId: deviceId) }
             let encoder = JSONEncoder()
-            if let allowed = snapshot.allowedConversations.map(Array.init) {
+            if let listed = snapshot.allowedConversations {
+                let sequence = snapshot.listSequence
+                let newer = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
+                    $0.deviceId == deviceId && $0.kind == "conversation" && $0.seq > sequence
+                }))
+                let allowed = Array(listed.union(newer.map(\.conversationId)))
                 for row in try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
-                    $0.deviceId == deviceId && !allowed.contains($0.conversationId)
+                    $0.deviceId == deviceId && $0.seq <= sequence && !allowed.contains($0.conversationId)
                 })) { modelContext.delete(row) }
             }
             typealias Row = (id: String, conversationId: String, kind: String, order: Int64, seq: Int64, value: any Encodable)

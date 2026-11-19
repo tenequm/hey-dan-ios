@@ -75,7 +75,7 @@ targets:
         HeyDanAPSEnvironment: $(APS_ENVIRONMENT)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSMicrophoneUsageDescription: Hey Dan sends your voice to your NanoClaw agent during a call.
+        NSMicrophoneUsageDescription: Hey Dan uses the microphone for calls and voice messages you send to your agent.
         # App Store processing requires it (ITMS-90683): LiveKit's WebRTC links the camera capture APIs.
         NSCameraUsageDescription: Hey Dan never uses the camera. The voice-call library it is built on includes video support.
         UIBackgroundModes: [audio, voip]

@@ -9,16 +9,30 @@ struct ThreadView: View {
     @State private var answerFailure: (questionID: String, message: String)?
     private var live: Conversation { chat.conversation(conversation.id) ?? conversation }
 
+    private var call: CallController { .shared }
+    private var target: PairedCallTarget? {
+        guard let host = chat.host, let device = chat.pairing?.deviceId else { return nil }
+        return PairedCallTarget(host: host, deviceId: device, conversation: live)
+    }
+
+    private var callTarget: CallTarget? {
+        guard let target, call.matches(target) else { return nil }
+        return call.pairedCallTarget
+    }
+
     var body: some View {
+        let activeTarget = call.isCallActive ? callTarget : nil
+        let attemptId = callTarget?.attemptId
         ThreadContent(
             rows: chat.rows,
             agentName: conversation.agent.name,
-            status: chat.statuses[conversation.id],
+            status: activeTarget == nil ? chat.statuses[conversation.id] : nil,
+            showsCaptions: activeTarget != nil,
             outboxStates: chat.outboxStates,
             hasMoreBefore: chat.hasMoreBefore,
             errorMessage: answerFailure?.message,
             errorQuestionID: answerFailure?.questionID,
-            active: scenePhase == .active && !CallController.shared.showsPairedCall,
+            active: scenePhase == .active,
             answer: { id, value in
                 answerFailure = nil
                 Task { answerFailure = await chat.answer(questionId: id, value: value).map { (id, $0) } }
@@ -28,11 +42,41 @@ struct ThreadView: View {
             markRead: { order in Task { await chat.markRead(order: order) } },
             loadHistory: { await chat.loadHistory(before: $0) }
         )
+        .sensoryFeedback(.error, trigger: chat.outbox.entries) { previous, current in
+            current.contains { entry in
+                entry.conversationId == conversation.id && entry.state.canSendAgain &&
+                    previous.contains { $0.request.clientId == entry.request.clientId && !$0.state.canSendAgain }
+            }
+        }
         .safeAreaBar(edge: .bottom) {
-            ComposerView(send: { text, attachments in
-                await chat.send(text: text, attachments: attachments)
-            }, failure: chat.sendFailure)
-            .id(conversation.id)
+            VStack(spacing: 0) {
+                if let activeTarget {
+                    ThreadCallBar(target: activeTarget)
+                } else if attemptId != nil, let ending = call.endingNotice, let target {
+                    let failed = CallController.isFailure(ending, liveSince: call.liveSince)
+                    HStack {
+                        Label(ending.message, systemImage: failed ? "exclamationmark.circle" : "phone.down")
+                        Spacer()
+                        Button("Call again") {
+                            Task { _ = await call.start(target: CallTarget(paired: target, service: chat.service)) }
+                        }
+                        .disabled(!live.canCall || !chat.features.contains("calls"))
+                    }
+                    .textRole(theme.type.footnote, theme.weight.medium)
+                    .foregroundStyle(failed ? theme.color.danger : theme.color.textSecondary)
+                    .padding(.vertical, theme.space.s3).padding(.horizontal, theme.space.s3_5)
+                    .background(failed ? theme.color.dangerSurface : theme.color.surfaceCard, in: RoundedRectangle(cornerRadius: theme.radius.l))
+                    .overlay { RoundedRectangle(cornerRadius: theme.radius.l).strokeBorder(failed ? theme.color.dangerBorder : theme.color.border).allowsHitTesting(false) }
+                    .padding(.horizontal, theme.space.s3).padding(.bottom, theme.space.s1_5)
+                }
+                // Keep the draft and its staged files alive across a call.
+                ComposerView(send: { text, attachments in
+                    let sent = await chat.send(text: text, attachments: attachments)
+                    if sent { call.dismissEndingNotice(attemptId: attemptId) }
+                    return sent
+                }, failure: chat.sendFailure, isInCall: activeTarget != nil)
+                .id(conversation.id)
+            }
         }
         .safeAreaBar(edge: .top) {
             if chat.features.contains("calls"), !live.canCall, let refusal = live.callRefusal {
@@ -44,13 +88,20 @@ struct ThreadView: View {
                     .accessibilityIdentifier("chat.call.refusal")
             }
         }
+        .onDisappear { call.dismissEndingNotice(attemptId: attemptId) }
         .navigationTitle(conversation.agent.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
                     Text(conversation.agent.name).textRole(theme.type.headline, theme.weight.semibold)
-                    if let host = chat.host?.host() {
+                    if activeTarget != nil {
+                        HStack(spacing: 0) {
+                            Text("On call · ")
+                            CallElapsed(since: call.liveSince)
+                        }
+                        .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+                    } else if let host = chat.host?.host() {
                         Text(host).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
                     }
                 }
@@ -68,6 +119,7 @@ struct ThreadContent: View {
     let rows: [ThreadRow]
     var agentName: String?
     var status: Status?
+    var showsCaptions = false
     var outboxStates: [String: Outbox.State] = [:]
     var hasMoreBefore = false
     var errorMessage: String?
@@ -113,6 +165,7 @@ struct ThreadContent: View {
                     case .entity(.unknown): EmptyView()
                     }
                 }
+                if showsCaptions { LiveCaptionRows(rows: rows) }
                 if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()

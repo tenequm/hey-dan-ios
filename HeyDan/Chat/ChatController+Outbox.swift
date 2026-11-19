@@ -20,7 +20,7 @@ extension ChatController {
         }
         let token = generation
         do {
-            let copied = try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
+            let copied = attachments.isEmpty ? [] : try await files.stage(attachments, host: host, deviceId: pairing.deviceId)
             let entry = Outbox.Entry(host: host, conversationId: conversationId,
                 request: SendRequest(clientId: UUID().uuidString, text: text, fileIds: []), attachments: copied)
             guard token == generation else {
@@ -55,7 +55,7 @@ extension ChatController {
         // A second tap while the copy is staged would send the message twice.
         defer { retrying.remove(clientId) }
         let directory = await files.directory(host: host, deviceId: pairing.deviceId)
-        let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType) }
+        let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType, durationMs: $0.durationMs) }
         if await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId) { await discard(clientId: clientId) }
     }
     func discard(clientId: String) async {
@@ -73,8 +73,9 @@ extension ChatController {
         for entry in removed { outbox.remove(clientId: entry.request.clientId); durableIDs.remove(entry.request.clientId) }
         let entries = outbox.entries
         guard entries != savedEntries || !removed.isEmpty else { return }
-        try await files.save(entries, host: host, deviceId: pairing.deviceId)
-        savedEntries = entries
+        let token = generation
+        try await files.update(from: savedEntries, to: entries, host: host, deviceId: pairing.deviceId)
+        if token == generation { savedEntries = entries }
         try await files.removeCopies(removed, host: host, deviceId: pairing.deviceId)
     }
     /// Delivery runs in the foreground, and keeps draining under a background task once the app leaves it.
@@ -86,6 +87,15 @@ extension ChatController {
         let runID = UUID()
         runnerID = runID
         runner = Task {
+            do {
+                let replies = try await files.takeDeferredReplies(host: host, deviceId: pairing.deviceId)
+                guard token == generation else { return }
+                for entry in replies where !durableIDs.contains(entry.request.clientId) {
+                    outbox.enqueue(entry)
+                    savedEntries.append(entry)
+                    durableIDs.insert(entry.request.clientId)
+                }
+            } catch { await handle(error, token: token) }
             await deliver(token: token, host: host, deviceId: pairing.deviceId)
             // Only the current runner: a stale one cancelled by a pairing switch must not end the new run's task.
             if token == generation, runnerID == runID {
@@ -96,7 +106,7 @@ extension ChatController {
     }
     /// Only for sends that can go out now: a backoff or a held entry waits for the foreground.
     func keepDeliveringInBackground() {
-        guard !active, backgroundDelivery == .invalid, ready, !paused,
+        guard !active, networkAvailable, backgroundDelivery == .invalid, ready, !paused,
               outbox.entries.contains(where: { durableIDs.contains($0.request.clientId) && Self.deliverable($0) }) else { return }
         backgroundDelivery = UIApplication.shared.beginBackgroundTask(withName: "Chat delivery") { [weak self] in
             self?.runner?.cancel()

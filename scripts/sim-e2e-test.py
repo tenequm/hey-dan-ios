@@ -18,13 +18,19 @@ harness = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness)
 
 class SimulatorSelectionTests(unittest.TestCase):
-    def test_only_voice_class_and_its_methods_seed_the_link(self):
-        for selector in ('HeyDanChecks', 'HeyDanChecks/HeyDanChecks', 'LiveActivityOnLockScreen',
-                         'HeyDanChecks/testLiveActivityOnLockScreen'):
-            self.assertTrue(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
-        for selector in ('ChatChecks', 'ChatThreadChecks/testRichCardTable'):
-            self.assertFalse(sim_tests.needs_call_link(sim_tests.ui_selector(selector)))
 
+    def test_call_launch_forwards_drills_only_to_the_call(self):
+        hooks = {'HEYDAN_STEPS': '8:mute,9:unmute', 'HEYDAN_PAIR_CMD': 'unused', 'HEYDAN_PAIR_LINK': 'unused',
+                 'HEYDAN_CALL_RUN': 'wrong', 'HEYDAN_CALL_PAIR_CMD': 'unused'}
+        with patch.dict(os.environ, hooks):
+            for device, prefix in [(False, 'SIMCTL_CHILD_'), (True, 'DEVICECTL_CHILD_')]:
+                launched = harness.call_launch_environment('run', 'Test Agent', {}, device)
+                self.assertEqual(launched[prefix + 'HEYDAN_STEPS'], hooks['HEYDAN_STEPS'])
+                self.assertEqual(launched[prefix + 'HEYDAN_CALL_RUN'], 'run')
+                self.assertEqual(launched[prefix + 'HEYDAN_CALL_AGENT'], 'Test Agent')
+                self.assertFalse(any(key.endswith(('_CMD', '_LINK')) for key in launched))
+                cleanup = harness.call_launch_environment('run', 'Test Agent', {'HEYDAN_CALL_CLEANUP': '1'}, device)
+                self.assertNotIn(prefix + 'HEYDAN_STEPS', cleanup)
 
     def test_deadline_counts_only_enabled_tests_in_the_selection(self):
         inventory = ("Plan HeyDanSimulatorTests\n"
@@ -49,40 +55,38 @@ class SimulatorSelectionTests(unittest.TestCase):
 
 # Real app log lines (trimmed), so a changed log line or SDK error description fails here first.
 JEV_CALL = '''\
-19:48:04.939 N call c=3667770a +0ms claim line=4462b845 mode=auto
+19:48:04.939 N call c=3667770a +0ms claim paired=true
 19:48:04.950 N audio debug feed: wav frames=133120 after=12.0s
 19:48:08.029 N room c=3667770a cid=0e77951f +3089ms connected ms=1265
 19:48:08.066 N room c=3667770a cid=0e77951f +3127ms agent audio subscribed sid=TR_AMU6MTWnsqJCwL
 19:48:08.083 N call c=3667770a cid=0e77951f +3144ms live
-19:48:16.121 N call c=3667770a cid=0e77951f +11182ms review grace ran out: not offered, the call runs hands-free
 19:48:20.762 N stream c=3667770a cid=0e77951f +15823ms e2e caption final caller=true
 19:48:21.185 I room c=3667770a cid=0e77951f +16245ms agent state=listening thinking=1 updating=- commands=- review=- protocol=6 changed=[thinking]
 19:48:24.332 N stream c=3667770a cid=0e77951f +19392ms e2e caption final caller=false
 19:49:10.186 N call c=3667770a cid=0e77951f +65246ms finish site=provider(_:perform:) cause=caller cx=- host=- connected=true mic=true live=true streams=[transcription=7]
-19:49:10.264 N net cid=0e77951f end reason=hangup status=204 ms=35
+19:49:10.264 N net cid=0e77951f end reason=hangup acknowledged ms=35
 '''
 PLAIN_CALL = '''\
-20:30:50.960 N call c=0a2dc0d8 +0ms claim line=3f8dbb00 mode=auto
+20:30:50.960 N call c=0a2dc0d8 +0ms claim paired=true
 20:30:50.961 N audio debug feed: wav frames=139264 after=12.0s
 20:30:54.275 N room c=0a2dc0d8 cid=cb682391 +3315ms connected ms=292
 20:30:54.843 N room c=0a2dc0d8 cid=cb682391 +3883ms agent audio subscribed sid=TR_AMNEQttAfKcAHw
 20:30:54.864 N call c=0a2dc0d8 cid=cb682391 +3903ms live
-20:30:54.870 N call c=0a2dc0d8 cid=cb682391 +3910ms review offered
 20:31:07.682 I room c=0a2dc0d8 cid=cb682391 +16722ms agent state=listening thinking=1 updating=- commands=3 review=1 protocol=6
 20:31:07.784 N stream c=0a2dc0d8 cid=cb682391 +16824ms e2e caption final caller=true
 20:31:08.187 N stream c=0a2dc0d8 cid=cb682391 +17227ms e2e reply turn=true notice=false unspoken=false
 20:31:09.099 N stream c=0a2dc0d8 cid=cb682391 +18138ms e2e caption final caller=false
 20:31:56.087 N call c=0a2dc0d8 cid=cb682391 +65126ms finish site=provider(_:perform:) cause=caller cx=- host=- connected=true mic=true live=true streams=[transcription=6,reply=1,review=3,turn=3]
-20:31:57.087 N net cid=cb682391 end reason=hangup status=204 ms=956
+20:31:57.087 N net cid=cb682391 end reason=hangup acknowledged ms=956
 '''
 CONNECT_TIMEOUT = '''\
 15:06:38.823 N room c=c9f5d656 cid=d4098288 +11622ms state .connecting -> .disconnected
 15:06:38.824 E room c=c9f5d656 cid=d4098288 +11624ms connect failed LiveKitError(Timed out) ms=10130
 15:06:38.830 E call c=c9f5d656 cid=d4098288 +11630ms setup failed CallFailure(roomConnect)
 15:06:38.835 N call c=c9f5d656 cid=d4098288 +11634ms finish site=connect(_:) cause=failure cx=1 host=- connected=false mic=false live=false streams=[]
-15:06:38.894 N net cid=d4098288 end reason=hangup status=204 ms=13
+15:06:38.894 N net cid=d4098288 end reason=hangup acknowledged ms=13
 '''
-REFUSED = '19:48:04.938 E call debug autocall refused: supplied line invalid or not selected\n'
+REFUSED = '19:48:04.938 E call debug autocall refused: invalid test pairing\n'
 PROOF = ('connected', 'reply', 'audio', 'clean', 'ended', 'fed')
 
 
@@ -100,6 +104,7 @@ class Grade(unittest.TestCase):
     def test_plain_call_needs_its_reply_event(self):
         without_reply = ''.join(line for line in PLAIN_CALL.splitlines(True) if 'e2e reply' not in line)
         self.assertFalse(harness.grade(without_reply)['reply'])
+        self.assertFalse(harness.grade('agent state=listening commands=- pending\n' + without_reply)['reply'])
         self.assertFalse(harness.grade(PLAIN_CALL.replace('notice=false', 'notice=true'))['reply'])
 
     def test_jev_call_needs_the_agent_caption(self):
@@ -114,7 +119,7 @@ class Grade(unittest.TestCase):
         caller = '\ncheck thread voice=caller id=msg_a\n'
         spoken = '\ncheck thread voice=spoken id=msg_b\n'
         for original in (JEV_CALL, PLAIN_CALL):
-            paired = original.replace('end reason=hangup status=204', 'end reason=hangup status=204 paired=true')
+            paired = original.replace('end reason=hangup acknowledged', 'end reason=hangup acknowledged paired=true')
             with self.subTest(mode=harness.grade(original)['mode']):
                 self.assertTrue(harness.grade_paired(paired + caller + spoken))
                 self.assertEqual(harness.grade_paired(paired + caller), original == JEV_CALL)

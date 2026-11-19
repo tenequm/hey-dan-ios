@@ -9,7 +9,16 @@ struct PairedSettingsSection: View {
     @State private var notifications = false
     var close: (() -> Void)?
     private var pairings: Pairings { .shared }
-    private var call: CallController { .shared }
+    @AppStorage("defaultCallAgent") private var defaultAgent = ""
+
+    private var callAgents: [AgentEntity] {
+        pairings.entries.filter { $0.features.contains("calls") }.flatMap { entry in
+            entry.agents.map { AgentEntity(entry: entry, agent: $0) }
+        }
+    }
+    private var defaultName: String {
+        defaultAgent.isEmpty ? "First agent on active host" : callAgents.first { $0.id.uuidString == defaultAgent }?.agent ?? "Unavailable"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +31,16 @@ struct PairedSettingsSection: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.space.s6) {
                     PairedHostSettingsRows()
+                    let agentHosts = pairings.entries.filter { $0.features.contains("agents") }
+                    if !agentHosts.isEmpty {
+                        SettingsSection {
+                            NavigationLink {
+                                AgentSettings()
+                            } label: {
+                                SettingsRow(title: "Agents", icon: "person.2", navigates: true)
+                            }
+                        }
+                    }
                     if pairings.entries.contains(where: { $0.features.contains("push") }) {
                         SettingsSection("Notifications") {
                             Toggle(isOn: Binding(get: { notifications }, set: { _ in
@@ -44,16 +63,15 @@ struct PairedSettingsSection: View {
                         }
                     }
                     SettingsSection("Calls") {
-                        NavigationLink { VoiceLinesSettings(showsPairedHosts: false, onCall: close) } label: {
-                            SettingsRow(title: "Voice lines", icon: "phone", detail: "\(call.lines.entries.count)", navigates: true)
-                        }
                         Menu {
-                            Button("Hands-free") { Task { await call.setTurnMode(.auto) } }
-                            Button("Manual") { Task { await call.setTurnMode(.review) } }
-                                .disabled(!call.review.available && call.isCallActive)
+                            Picker("Default agent", selection: $defaultAgent) {
+                                Text("First agent on active host").tag("")
+                                ForEach(callAgents, id: \.id) { agent in
+                                    Text("\(agent.agent) · \(agent.source)").tag(agent.id.uuidString)
+                                }
+                            }
                         } label: {
-                            SettingsRow(title: "Turn mode", icon: "hand.raised",
-                                        detail: call.review.mode == .auto ? "Hands-free" : "Manual", navigates: true)
+                            SettingsRow(title: "Default agent", icon: "phone", detail: defaultName, navigates: true)
                         }
                     }
                 }
@@ -74,13 +92,113 @@ struct PairedSettingsSection: View {
     }
 }
 
+private struct AgentSettings: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                HStack {
+                    GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() }
+                        .accessibilityIdentifier("chat.settings.agents.back")
+                    Spacer()
+                }
+                Text("Agents").textRole(theme.type.body, theme.weight.bold).accessibilityAddTraits(.isHeader)
+            }
+            .padding(.horizontal, theme.space.s4).padding(.vertical, theme.space.s1_5)
+            ScrollView {
+                VStack(alignment: .leading, spacing: theme.space.s6) {
+                    ForEach(Pairings.shared.entries.filter { $0.features.contains("agents") }, id: \.host) { entry in
+                        HostAgentToggles(entry: entry).id(entry.deviceId)
+                    }
+                }
+                .padding(theme.space.s4)
+            }
+        }
+        .foregroundStyle(theme.color.textPrimary)
+        .background(theme.color.surface.ignoresSafeArea()).toolbarVisibility(.hidden, for: .navigationBar)
+    }
+}
+
+private struct HostAgentToggles: View {
+    @Environment(\.theme) private var theme
+    let entry: Pairings.Entry
+    @State private var candidates: [AgentCandidate]?
+    @State private var pending: [String: Bool] = [:]
+    @State private var error: String?
+    @State private var revision = 0
+    private var chat: ChatController { .shared }
+
+    var body: some View {
+        SettingsSection(entry.host.host() ?? "Host") {
+            if let candidates {
+                let duplicates = Dictionary(grouping: candidates, by: \.name)
+                ForEach(candidates) { agent in
+                    Toggle(isOn: Binding(get: { pending[agent.id] ?? agent.shown }, set: { update(agent, shown: $0) })) {
+                        SettingsRow(title: agent.name, icon: "person",
+                            subtitle: duplicates[agent.name, default: []].count > 1 ? agent.chat : nil)
+                    }
+                    .padding(.trailing, theme.space.s4)
+                    .disabled(pending[agent.id] != nil)
+                    .tint(theme.color.accent)
+                    .accessibilityIdentifier("chat.settings.agent.\(agent.id)")
+                }
+                if candidates.isEmpty { Text("No agents available") }
+            } else if error == nil {
+                ProgressView()
+            } else {
+                Button("Retry") { Task { await load() } }
+            }
+            if let error { Text(error).foregroundStyle(theme.color.danger) }
+        }
+        .task(id: chat.host == entry.host ? Set(chat.conversations.map { $0.agent.id }) : []) { await load() }
+    }
+
+    private func load() async {
+        let started = revision
+        do {
+            let result = try await chat.service(for: entry).agents()
+            guard !Task.isCancelled, started == revision else { return }
+            candidates = result.agents
+            error = nil
+        } catch {
+            if !Task.isCancelled { self.error = error.message }
+        }
+    }
+
+    private func update(_ agent: AgentCandidate, shown: Bool) {
+        if !shown, CallController.shared.protectsChat(host: entry.host, deviceId: entry.deviceId, agentId: agent.id) {
+            error = AppError.callActive.message
+            return
+        }
+        pending[agent.id] = shown
+        error = nil
+        let service = chat.service(for: entry)
+        Task {
+            defer { pending.removeValue(forKey: agent.id) }
+            do {
+                let result = try await service.setAgent(id: agent.id, request: AgentVisibilityRequest(shown: shown))
+                if !result.agent.shown { await AppDelegate.clearHidden(host: entry.host, agentID: agent.id) }
+                if chat.host != entry.host {
+                    if let list = try? await service.conversations(), chat.host != entry.host {
+                        Pairings.shared.refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
+                    }
+                }
+                revision += 1
+                if let index = candidates?.firstIndex(where: { $0.id == agent.id }) { candidates?[index] = result.agent }
+            } catch { self.error = AppError.map(error).message }
+        }
+    }
+}
+
 struct PairedHostSettingsRows: View {
     @State private var showsPairing = false
 
     var body: some View {
         SettingsSection("Paired hosts") {
             ForEach(Pairings.shared.entries, id: \.host) { entry in
-                NavigationLink { HostDetail(entry: entry) } label: { PairedHostRow(entry: entry) }
+                NavigationLink { HostDetail(pairing: entry) } label: { PairedHostRow(entry: entry) }
                     .accessibilityIdentifier("chat.settings.host.\(entry.host.host() ?? "")")
             }
             Button { showsPairing = true } label: { SettingsRow(title: "Pair a host", icon: "plus") }

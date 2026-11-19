@@ -52,7 +52,7 @@ nonisolated public enum Voice: Sendable, Equatable, Codable {
 }
 
 nonisolated public enum Kind: Sendable, Equatable, Codable {
-    case conversation, message, question, status, badge, synchronized, image, file
+    case conversation, message, question, status, badge, synchronized, image, file, audio
     case unknown(String)
     public init(_ value: String) {
         switch value {
@@ -62,6 +62,7 @@ nonisolated public enum Kind: Sendable, Equatable, Codable {
         case "badge": self = .badge
         case "status": self = .status
         case "synchronized": self = .synchronized
+        case "audio": self = .audio
         case "image": self = .image
         case "file": self = .file
         default: self = .unknown(value)
@@ -75,6 +76,7 @@ nonisolated public enum Kind: Sendable, Equatable, Codable {
         case .badge: "badge"
         case .status: "status"
         case .synchronized: "synchronized"
+        case .audio: "audio"
         case .image: "image"
         case .file: "file"
         case .unknown(let value): value
@@ -158,6 +160,35 @@ nonisolated public struct Agent: Sendable, Equatable, Codable {
     }
 }
 
+nonisolated public struct AgentCandidate: Sendable, Equatable, Codable, Identifiable {
+    public let id: String
+    public let name: String
+    public let chat: String?
+    public var shown: Bool
+
+    public init(id: String, name: String, chat: String?, shown: Bool) {
+        self.id = id
+        self.name = name
+        self.chat = chat
+        self.shown = shown
+    }
+}
+
+nonisolated public struct AgentsResponse: Sendable, Equatable, Codable {
+    public var agents: [AgentCandidate]
+    public init(agents: [AgentCandidate]) { self.agents = agents }
+}
+
+nonisolated public struct AgentVisibilityRequest: Sendable, Equatable, Codable {
+    public var shown: Bool
+    public init(shown: Bool) { self.shown = shown }
+}
+
+nonisolated public struct AgentResponse: Sendable, Equatable, Codable {
+    public var agent: AgentCandidate
+    public init(agent: AgentCandidate) { self.agent = agent }
+}
+
 nonisolated public struct AppVersion: Sendable, Equatable, Codable {
     public var `version`: String
     public var `build`: String
@@ -236,6 +267,13 @@ nonisolated public struct LastMessage: Sendable, Equatable, Codable {
     public var `role`: Role
     public var `preview`: String
     public var `at`: Int64
+
+    public init(id: String, role: Role, preview: String, at: Int64) {
+        self.id = id
+        self.role = role
+        self.preview = preview
+        self.at = at
+    }
 }
 
 nonisolated public struct Conversation: Sendable, Equatable, Codable {
@@ -243,6 +281,7 @@ nonisolated public struct Conversation: Sendable, Equatable, Codable {
     public var `id`: String
     public var `seq`: Int64
     public var `agent`: Agent
+    public var hidden: Bool?
     public var `lastMessage`: LastMessage?
     public var `unread`: Int
     public var `readOrder`: Int64
@@ -271,7 +310,41 @@ nonisolated public struct FileAttachment: Sendable, Equatable, Codable {
     public var `kind`: Kind
     public var `width`: Int?
     public var `height`: Int?
-    public init(`id`: String, `name`: String, `mimeType`: String, `size`: Int64, `kind`: Kind, `width`: Int? = nil, `height`: Int? = nil) {
+    public var durationMs: Int?
+    public var transcript: Transcript?
+
+    public struct Transcript: Sendable, Equatable, Codable {
+        public enum State: RawRepresentable, Sendable, Equatable, Codable {
+            case pending, done, failed
+            case unknown(String)
+
+            public init(rawValue: String) {
+                switch rawValue {
+                case "pending": self = .pending
+                case "done": self = .done
+                case "failed": self = .failed
+                default: self = .unknown(rawValue)
+                }
+            }
+
+            public var rawValue: String {
+                switch self {
+                case .pending: "pending"
+                case .done: "done"
+                case .failed: "failed"
+                case .unknown(let value): value
+                }
+            }
+        }
+        public var state: State
+        public var text: String?
+        public init(state: State, text: String? = nil) {
+            self.state = state
+            self.text = text
+        }
+    }
+
+    public init(`id`: String, `name`: String, `mimeType`: String, `size`: Int64, `kind`: Kind, `width`: Int? = nil, `height`: Int? = nil, durationMs: Int? = nil, transcript: Transcript? = nil) {
         self.`id` = `id`
         self.`name` = `name`
         self.`mimeType` = `mimeType`
@@ -279,6 +352,8 @@ nonisolated public struct FileAttachment: Sendable, Equatable, Codable {
         self.`kind` = `kind`
         self.`width` = `width`
         self.`height` = `height`
+        self.durationMs = durationMs
+        self.transcript = transcript
     }
 }
 
@@ -636,6 +711,7 @@ nonisolated public struct FileInitRequest: Sendable, Equatable, Codable {
     public var `mimeType`: String
     public var `size`: Int64
     public var `sha256`: String
+    public var durationMs: Int?
 }
 
 nonisolated public struct FileInitResponse: Sendable, Equatable, Codable {
