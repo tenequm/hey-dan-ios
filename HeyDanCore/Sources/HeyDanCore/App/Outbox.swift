@@ -4,7 +4,9 @@ public struct StagedAttachment: Sendable, Equatable {
     public let fileURL: URL
     public let name: String
     public let mimeType: String
-    public init(fileURL: URL, name: String, mimeType: String) {
+    public let durationMs: Int?
+    public init(fileURL: URL, name: String, mimeType: String, durationMs: Int? = nil) {
+        self.durationMs = durationMs
         self.fileURL = fileURL; self.name = name; self.mimeType = mimeType
     }
 }
@@ -27,18 +29,20 @@ public struct Outbox: Sendable {
         public let mimeType: String
         public let size: Int64
         public let sha256: String
+        public let durationMs: Int?
         public var fileId: String?
         public var ticket: String?
         public var uploaded: Bool
         public init(uploadKey: String = UUID().uuidString, localFileName: String, name: String,
-                    mimeType: String, size: Int64, sha256: String, fileId: String? = nil,
+                    mimeType: String, size: Int64, sha256: String, durationMs: Int? = nil, fileId: String? = nil,
                     ticket: String? = nil, uploaded: Bool = false) {
             self.uploadKey = uploadKey; self.localFileName = localFileName; self.name = name
             self.mimeType = mimeType; self.size = size; self.sha256 = sha256
+            self.durationMs = durationMs
             self.fileId = fileId; self.ticket = ticket; self.uploaded = uploaded
         }
         public var request: FileInitRequest {
-            FileInitRequest(uploadKey: uploadKey, name: name, mimeType: mimeType, size: size, sha256: sha256)
+            FileInitRequest(uploadKey: uploadKey, name: name, mimeType: mimeType, size: size, sha256: sha256, durationMs: durationMs)
         }
     }
     public struct Entry: Sendable, Equatable, Codable {

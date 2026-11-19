@@ -55,7 +55,7 @@ extension ChatController {
         // A second tap while the copy is staged would send the message twice.
         defer { retrying.remove(clientId) }
         let directory = await files.directory(host: host, deviceId: pairing.deviceId)
-        let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType) }
+        let attachments = entry.attachments.map { StagedAttachment(fileURL: directory.appending(path: $0.localFileName), name: $0.name, mimeType: $0.mimeType, durationMs: $0.durationMs) }
         if await enqueue(text: entry.request.text, attachments: attachments, conversationId: entry.conversationId) { await discard(clientId: clientId) }
     }
     func discard(clientId: String) async {

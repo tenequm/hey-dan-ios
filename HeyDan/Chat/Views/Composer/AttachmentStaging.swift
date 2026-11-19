@@ -28,7 +28,7 @@ nonisolated enum AttachmentStaging {
         guard try file.seekToEnd() <= UInt64(Outbox.maximumFileBytes) else { throw AppError.limit(Outbox.fileLimitMessage) }
     }
 
-    private static func destination(extension suffix: String) throws -> URL {
+    static func destination(extension suffix: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ChatAttachments", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(suffix)

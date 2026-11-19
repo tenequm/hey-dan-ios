@@ -63,7 +63,7 @@ nonisolated enum StoreLocation {
 }
 
 actor SwiftDataThreadStore: ThreadStore {
-    static let schemaVersion = 2
+    static let schemaVersion = 3
     private let root: URL
     private let version: Int
     private let inMemory: Bool
