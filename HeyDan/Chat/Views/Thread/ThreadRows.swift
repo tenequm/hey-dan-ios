@@ -76,7 +76,7 @@ struct MessageRow: View {
             let outgoing = message.role == .user
             VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
                 if outgoing {
-                    if !message.text.isEmpty {
+                    if !message.text.isEmpty && !message.files.contains(where: { $0.kind == .audio && ($0.transcript?.text == message.text || $0.transcript == nil) }) {
                         Text(message.text).textSelection(.enabled).modifier(UserBubble())
                     }
                 } else if let card = visibleCard {
@@ -86,7 +86,14 @@ struct MessageRow: View {
                 } else if !message.text.isEmpty {
                     MessageBody(text: message.text)
                 }
-                ForEach(message.files, id: \.id) { AttachmentView(file: $0) }
+                ForEach(message.files, id: \.id) { file in
+                    if outgoing, file.kind == .audio {
+                        VoiceMessageView(file: file, durationMs: file.durationMs, messageText: message.text)
+                            .modifier(UserBubble())
+                    } else {
+                        AttachmentView(file: file)
+                    }
+                }
                 HStack(spacing: theme.space.s2) {
                     if message.voice == .caller || message.voice == .spoken {
                         Label("Spoken", systemImage: message.voice == .caller ? "mic" : "speaker.wave.2")
@@ -113,7 +120,7 @@ struct MessageRow: View {
                     ShareLink(item: message.text)
                 }
             }
-            .accessibilityElement(children: visibleCard == nil ? .combine : .contain)
+            .accessibilityElement(children: visibleCard != nil || message.files.contains(where: { $0.kind == .audio }) ? .contain : .combine)
             .accessibilityIdentifier(AXID.message(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
                 Button("Send again") { if let id = message.clientId { retry(id) } }
@@ -224,7 +231,11 @@ struct OutboxRow: View {
         VStack(alignment: .trailing, spacing: theme.space.s1_5) {
             if !entry.request.text.isEmpty { Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()) }
             ForEach(entry.attachments, id: \.uploadKey) { attachment in
-                Text(attachment.name)
+                if let duration = attachment.durationMs {
+                    VoiceMessageView(durationMs: duration).modifier(UserBubble())
+                } else {
+                    Text(attachment.name)
+                }
             }
             if let error = entry.lastServerError { Text(error.message).foregroundStyle(theme.color.danger) }
             HStack(spacing: theme.space.s1) {

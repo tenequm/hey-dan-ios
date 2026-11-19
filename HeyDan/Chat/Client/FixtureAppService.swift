@@ -107,7 +107,7 @@ actor FixtureAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse {
         HelloResponse(protocol: 1, minProtocol: 1, voiceProtocol: 6,
-            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker", "agents", "unread"], serverTime: 0)
+            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker", "agents", "unread", "voice-messages"], serverTime: 0)
     }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { Self.pairing }
     private var candidate: AgentCandidate {
@@ -143,19 +143,35 @@ actor FixtureAppService: AppService {
             clientId: request.clientId, delivery: .stored, createdAt: 0)
         messages.append(stored)
         try publish(event(.message, stored, id: sequence))
+        let voice = stored.files.contains { $0.kind == .audio }
+        if voice { try publishPreview(stored, text: "Voice message") }
         Task {
-            try? await Task.sleep(for: .milliseconds(150))
+            try? await Task.sleep(for: voice ? .seconds(3) : .milliseconds(150))
             try? self.complete(stored)
         }
         return SendResponse(message: stored)
     }
+    private func publishPreview(_ message: Message, text: String) throws(AppError) {
+        sequence += 1
+        conversation.seq = sequence
+        conversation.lastMessage = LastMessage(id: message.id, role: message.role, preview: text, at: message.createdAt)
+        try publish(event(.conversation, conversation, id: sequence))
+    }
+
     private func complete(_ stored: Message) throws(AppError) {
         sequence += 1
         var reached = stored
         reached.seq = sequence
         reached.delivery = .reached
+        if let index = reached.files.firstIndex(where: { $0.kind == .audio }) {
+            reached.text = "Recorded fixture message."
+            reached.files[index].transcript = .init(state: .done, text: reached.text)
+        }
         if let index = messages.firstIndex(where: { $0.id == reached.id }) { messages[index] = reached }
         try publish(event(.message, reached, id: sequence))
+        if reached.files.contains(where: { $0.kind == .audio }), conversation.lastMessage?.id == reached.id {
+            try publishPreview(reached, text: reached.text)
+        }
         sequence += 1
         let reply = Message(kind: .message, id: "msg_reply_" + stored.id, conversationId: stored.conversationId,
             order: sequence, seq: sequence, role: .agent, text: "Received.", files: [], reactions: [], createdAt: 0)
@@ -214,8 +230,10 @@ actor FixtureAppService: AppService {
     private func removeListener(_ id: UUID) { listeners.removeValue(forKey: id) }
     func initializeFile(_ request: FileInitRequest) async throws(AppError) -> FileInitResponse {
         let id = "file_" + request.uploadKey
+        let audio = request.mimeType == "audio/mp4" || request.mimeType == "audio/x-m4a"
         fileMetadata[id] = FileAttachment(id: id, name: request.name, mimeType: request.mimeType,
-            size: request.size, kind: request.mimeType.hasPrefix("image/") ? .image : .file)
+            size: request.size, kind: audio ? .audio : (request.mimeType.hasPrefix("image/") ? .image : .file),
+            durationMs: request.durationMs, transcript: audio ? .init(state: .pending) : nil)
         return FileInitResponse(fileId: id, ticket: "fixture", expiresAt: Int64.max,
             uploadPath: "/app/files/" + id, uploaded: uploaded[id] != nil)
     }

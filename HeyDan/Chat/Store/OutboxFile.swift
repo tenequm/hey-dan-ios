@@ -62,7 +62,8 @@ actor OutboxFile {
                 let name = UUID().uuidString
                 try data.write(to: directory.appending(path: name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 result.append(Outbox.Attachment(localFileName: name, name: attachment.name,
-                    mimeType: attachment.mimeType, size: Int64(data.count), sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()))
+                    mimeType: attachment.mimeType, size: Int64(data.count), sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                    durationMs: attachment.durationMs))
             }
             return result
         } catch {

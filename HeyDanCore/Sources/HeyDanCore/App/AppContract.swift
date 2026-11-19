@@ -52,7 +52,7 @@ nonisolated public enum Voice: Sendable, Equatable, Codable {
 }
 
 nonisolated public enum Kind: Sendable, Equatable, Codable {
-    case conversation, message, question, status, badge, synchronized, image, file
+    case conversation, message, question, status, badge, synchronized, image, file, audio
     case unknown(String)
     public init(_ value: String) {
         switch value {
@@ -62,6 +62,7 @@ nonisolated public enum Kind: Sendable, Equatable, Codable {
         case "badge": self = .badge
         case "status": self = .status
         case "synchronized": self = .synchronized
+        case "audio": self = .audio
         case "image": self = .image
         case "file": self = .file
         default: self = .unknown(value)
@@ -75,6 +76,7 @@ nonisolated public enum Kind: Sendable, Equatable, Codable {
         case .badge: "badge"
         case .status: "status"
         case .synchronized: "synchronized"
+        case .audio: "audio"
         case .image: "image"
         case .file: "file"
         case .unknown(let value): value
@@ -265,6 +267,13 @@ nonisolated public struct LastMessage: Sendable, Equatable, Codable {
     public var `role`: Role
     public var `preview`: String
     public var `at`: Int64
+
+    public init(id: String, role: Role, preview: String, at: Int64) {
+        self.id = id
+        self.role = role
+        self.preview = preview
+        self.at = at
+    }
 }
 
 nonisolated public struct Conversation: Sendable, Equatable, Codable {
@@ -301,7 +310,20 @@ nonisolated public struct FileAttachment: Sendable, Equatable, Codable {
     public var `kind`: Kind
     public var `width`: Int?
     public var `height`: Int?
-    public init(`id`: String, `name`: String, `mimeType`: String, `size`: Int64, `kind`: Kind, `width`: Int? = nil, `height`: Int? = nil) {
+    public var durationMs: Int?
+    public var transcript: Transcript?
+
+    public struct Transcript: Sendable, Equatable, Codable {
+        public enum State: String, Sendable, Codable { case pending, done, failed }
+        public var state: State
+        public var text: String?
+        public init(state: State, text: String? = nil) {
+            self.state = state
+            self.text = text
+        }
+    }
+
+    public init(`id`: String, `name`: String, `mimeType`: String, `size`: Int64, `kind`: Kind, `width`: Int? = nil, `height`: Int? = nil, durationMs: Int? = nil, transcript: Transcript? = nil) {
         self.`id` = `id`
         self.`name` = `name`
         self.`mimeType` = `mimeType`
@@ -309,6 +331,8 @@ nonisolated public struct FileAttachment: Sendable, Equatable, Codable {
         self.`kind` = `kind`
         self.`width` = `width`
         self.`height` = `height`
+        self.durationMs = durationMs
+        self.transcript = transcript
     }
 }
 
@@ -666,6 +690,7 @@ nonisolated public struct FileInitRequest: Sendable, Equatable, Codable {
     public var `mimeType`: String
     public var `size`: Int64
     public var `sha256`: String
+    public var durationMs: Int?
 }
 
 nonisolated public struct FileInitResponse: Sendable, Equatable, Codable {
