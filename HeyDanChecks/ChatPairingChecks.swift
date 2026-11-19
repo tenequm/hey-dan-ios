@@ -20,16 +20,11 @@ import XCTest
         return app
     }
 
-    func testPairingFromUnpairedVoiceLines() {
+    func testUnpairedLaunchOpensPairing() {
         let app = XCUIApplication()
         app.launchEnvironment["HEYDAN_PREVIEW_SETTINGS"] = "1"
         app.launchForChecks()
-        let pair = app.buttons["Pair a host"]
-        XCTAssertTrue(pair.waitForExistence(timeout: 10))
-        pair.tap()
         XCTAssertTrue(app.buttons["pairing.paste"].waitForExistence(timeout: 5))
-        app.buttons["Back"].tap()
-        XCTAssertTrue(pair.waitForExistence(timeout: 5))
     }
 
     func testInvalidLink() {

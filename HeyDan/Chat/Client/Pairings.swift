@@ -17,7 +17,7 @@ import UIKit
         let host: URL
         let deviceId: String
         let userName: String
-        let agents: [Agent]
+        var agents: [Agent]
         var pairing: PairResponse {
             PairResponse(deviceId: deviceId, userName: userName, agents: agents, protocol: 1, serverTime: 0)
         }
@@ -125,6 +125,27 @@ import UIKit
         next.active = host.absoluteString
         try commit(next)
     }
+    func refreshInactiveAgents() async {
+        guard !fixture else { return }
+        for entry in entries where entry.host != active?.host && entry.features.contains("calls") {
+            guard !Task.isCancelled else { return }
+            let client = SignedClient(host: entry.host, deviceId: entry.deviceId)
+            guard let list = try? await client.conversations(), !Task.isCancelled, entry.host != active?.host else { continue }
+            refreshAgents(list.conversations, host: entry.host, deviceId: entry.deviceId)
+        }
+    }
+
+    func refreshAgents(_ conversations: [Conversation], host: URL, deviceId: String) {
+        guard var entry = saved.entries[host.absoluteString], entry.deviceId == deviceId else { return }
+        var seen = Set<String>()
+        let agents = conversations.map(\.agent).filter { seen.insert($0.id).inserted }
+        guard agents != entry.agents else { return }
+        entry.agents = agents
+        var next = saved
+        next.entries[host.absoluteString] = entry
+        do { try commit(next) } catch { CallLog.log(.store, "pairings agents_failed \(error.logName)") }
+    }
+
     func refreshFeatures(_ features: [String], host: URL) {
         guard var entry = saved.entries[host.absoluteString], entry.features != features else { return }
         entry.features = features

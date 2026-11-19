@@ -68,14 +68,7 @@ final class CallController: NSObject {
     /// before it went live is no failure either.
     static func isFailure(_ ending: Ending, liveSince: Date?) -> Bool { liveSince == nil && ending.cause != .caller }
     private(set) var isMuted = false
-    /// Who the screen is about: the shown line's agent, or the call's once its host named it.
-    private(set) var agentName = VoiceLines.unnamedAgent
-    /// Every saved voice line and the one a call goes to unless an intent names another.
-    private(set) var lines = VoiceLines()
-    /// The line the screen shows: the picked one, or the one the last call used until the pick changes.
-    private(set) var shownLineID: UUID?
-    /// The picked line, the one the Action Button calls.
-    var line: VoiceLine? { lines.selected?.line }
+    private(set) var agentName = "Agent"
     /// The call's live transcript: cleared when a call starts, kept readable (all final) after it ends.
     private(set) var transcript = Transcript()
     /// Auto mode's spoken-command settings: nil unless this call's worker speaks the commands vocabulary this
@@ -85,19 +78,7 @@ final class CallController: NSObject {
     private(set) var commandWords = CommandWords.builtIn
     /// The caller's picks: where every call starts, changed by `updateSettings`.
     private(set) var settingsPicks = SettingsStore.load()
-    /// Review mode (Manual) as the screen shows it, and apart from it the words of the open recording, so a caption
-    /// re-renders only the draft. Both follow `reviewSession`.
-    private(set) var review = ReviewSession(pick: TurnModeStore.load()).review
-    private(set) var draftWords = ""
     private(set) var liveVoice: CallVoiceState?
-
-    #if DEBUG && targetEnvironment(simulator)
-    private enum PreviewVoice: String { case pending, active, ended, refused }
-    private var previewVoice: PreviewVoice?
-    private var previewVoiceUpdate: Task<Void, Never>?
-    private static let previewVoiceCallID = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
-    private static let previewVoiceAttribute = #"{"v":1,"active":{"provider":"gemini","model":"gemini-3.8-flash-tts","voice":"alnilam"},"activeDetails":{"provider":"gemini","providerName":"Gemini","model":"gemini-3.8-flash-tts","modelName":"Gemini 3.8 Flash TTS","voice":"alnilam","voiceName":"Alnilam","language":"en-US","gender":null,"preview":null,"status":"resolved"},"pending":{"provider":"elevenlabs","model":"eleven_v4_turbo","voice":"bIHbv24MWmeRgasZH58o"},"pendingDetails":{"provider":"elevenlabs","providerName":"ElevenLabs","model":"eleven_v4_turbo","modelName":"Eleven v4 Turbo","voice":"bIHbv24MWmeRgasZH58o","voiceName":"Will","language":"en","gender":"male","preview":null,"status":"resolved"},"gen":7}"#
-    #endif
 
     var isCallActive: Bool {
         switch phase {
@@ -110,12 +91,9 @@ final class CallController: NSObject {
     /// so a late callback from an earlier call can never touch the current one.
     private struct ActiveCall {
         let id: UUID
-        /// Keep admission identity fixed even if the selected pairing or saved line changes.
         let target: CallTarget
         let claimedAt = ContinuousClock.now
         var callId: String?
-        /// Set before the room exists: before CallKit when the precheck said Tailscale is off, and setup then uses it
-        /// instead of asking again.
         var grant: CallTarget.Grant?
         /// The worker's names on the protocol the host said it speaks.
         var names: VoiceProtocol.Names? { grant?.names }
@@ -142,10 +120,7 @@ final class CallController: NSObject {
         var interimTimer: Task<Void, Never>?
         var streams = StreamOrder<StreamEvent>()
         var streamFlush: Task<Void, Never>?
-        /// Runs out when the worker sets no review attribute in time: it has no Manual mode.
-        var reviewGrace: Task<Void, Never>?
-        /// The worker's review attribute arrived on this call.
-        var reviewOffered = false
+        var stateSequence = 0
         /// The wake state the worker last said it runs.
         var workerWake: WakeState?
         /// The `gen` of the last RPC sent, and the newest settings request: only its outcome counts.
@@ -162,13 +137,6 @@ final class CallController: NSObject {
     @ObservationIgnored private var call: ActiveCall?
     /// The last call that ended, and how: what an intent that started it reports.
     @ObservationIgnored private var lastEnded: (id: UUID, ending: Ending)?
-    /// Review mode's state and bookkeeping; the one call's part of it is reset when a call starts.
-    @ObservationIgnored private var reviewSession = ReviewSession(pick: TurnModeStore.load())
-    @ObservationIgnored private var reviewNoteTimer: Task<Void, Never>?
-    /// The Keychain item was read: until then a save would overwrite lines this launch never saw.
-    @ObservationIgnored private var linesLoaded = false
-    /// Before the first unlock the Keychain keeps the lines out of reach: they load once protected data is there.
-    @ObservationIgnored private var unlockObserver: (any NSObjectProtocol)?
     /// Created on the first call, not at launch: on iOS 27 a provider made right after unlock (an Action Button
     /// launch) can be left without `didActivate` (Apple developer forums thread 837211).
     @ObservationIgnored private var provider: CXProvider?
@@ -180,63 +148,11 @@ final class CallController: NSObject {
     /// the silence it hears.
     private static let micPublishOptions = AudioPublishOptions(dtx: VoiceProtocol.micDTX, red: false)
 
-    /// Short enough that a dead tailnet shows its hint quickly; the host answers in about a second.
-    private static let http = session(timeout: 10)
-    /// The token request after a precheck that says Tailscale is off: a host that answers still gets the call, and a
-    /// dead tailnet's hint still comes fast.
-    private static let quickHTTP = session(timeout: 4)
-
-    private static func session(timeout: TimeInterval) -> URLSession {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        return URLSession(configuration: configuration)
-    }
-
-    /// Setup's own waits before the agent's join timer starts (precheck, token, room, audio activation), with room to spare.
     static let setupBound = VoiceProtocol.agentJoinTimeout + .seconds(20)
 
     override private init() {
         super.init()
         CallActivity.follow(self)
-        loadLines()
-        #if DEBUG
-        let env = ProcessInfo.processInfo.environment
-        // Tests set the turn mode calls start in, as the caller's hands-free | Manual pick would.
-        if let mode = env["HEYDAN_TURN_MODE"].flatMap(TurnMode.init(rawValue:)) {
-            TurnModeStore.save(mode)
-            editReview { $0 = ReviewSession(pick: mode) }
-        }
-        #endif
-        #if DEBUG && targetEnvironment(simulator)
-        if let scenario = env["HEYDAN_PREVIEW_VOICE"].flatMap(PreviewVoice.init(rawValue:)),
-           let state = CallVoiceState(attribute: Self.previewVoiceAttribute) {
-            previewVoice = scenario
-            liveVoice = scenario == .active
-                ? CallVoiceState(active: state.pending ?? state.active, activeDetails: state.pendingDetails ?? state.activeDetails, gen: state.gen)
-                : state
-        }
-        // `just sim` hands the call link in at launch: the Simulator's pasteboard does not take a CLI copy.
-        if let link = env["HEYDAN_CALL_LINK"] { saveCallLink(link) }
-        // Screenshots: fake lines named for the agents listed, never a real link; the first listed is picked.
-        if FixtureContent.capturing {
-            lines = VoiceLines()
-            for (agent, host) in [("Dan", "voice.home.example.ts.net"), ("Stan", "voice-test.home.example.ts.net")] {
-                if let line = VoiceLine(callLink: "https://\(host)/voice?t=fixture") { _ = lines.add(line, agent: agent) }
-            }
-            if let first = lines.entries.first { lines.select(first.id) }
-            showLine(lines.selected)
-        } else if let names = env["HEYDAN_PREVIEW_LINES"] {
-            _ = keep { next in
-                let ids = names.split(separator: ",").compactMap { name in
-                    VoiceLine(callLink: "https://lines.example/voice?t=fake-\(name.lowercased())").map {
-                        next.add($0, agent: String(name))
-                    }
-                }
-                if let first = ids.first { next.select(first) }
-            }
-            showLine(lines.selected)
-        }
-        #endif
         // CallKit activates the audio session; LiveKit's engine runs only between didActivate and didDeactivate.
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         setEngine(.none)
@@ -261,24 +177,6 @@ final class CallController: NSObject {
         return provider
     }
 
-    /// Calls the line `lineID` names, or the picked one. The id of the call it claimed; nil when another call is on or
-    /// there is no such line.
-    @discardableResult
-    func start(lineID: UUID? = nil) async -> UUID? {
-        guard !isCallActive else {
-            trace(.call, "start refused: call active")
-            return nil
-        }
-        let entry = if let lineID { lines.entry(lineID) } else { lines.selected }
-        guard let entry else {
-            // A shortcut can name a line deleted since: that is no phone without a line.
-            phase = .ended(.failure(lines.entries.isEmpty ? .noLine : .lineGone))
-            return nil
-        }
-        showLine(entry)
-        return await start(target: CallTarget(line: entry.line))
-    }
-
     func start(target: CallTarget) async -> UUID? {
         guard !isCallActive else {
             trace(.call, "start refused: call active")
@@ -286,27 +184,17 @@ final class CallController: NSObject {
         }
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
-        pairedCallTarget = target.paired == nil ? nil : target
-        showsPairedCall = target.paired != nil
+        pairedCallTarget = target
+        showsPairedCall = true
         call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
         liveVoice = nil
-        if let paired = target.paired { agentName = paired.conversation.agent.name }
+        agentName = target.paired.conversation.agent.name
         phase = .connecting
         transcript = Transcript()
         commands = nil
         commandWords = .builtIn
-        editReview { $0.startCall() }
-        if target.line != nil {
-            trace(.call, "claim line=\(Self.short(shownLineID)) mode=\(reviewSession.pick.rawValue) paired=false")
-        } else {
-            trace(.call, "claim paired=true mode=\(reviewSession.pick.rawValue)")
-        }
-        #if DEBUG && targetEnvironment(simulator)
-        previewVoiceUpdate?.cancel()
-        previewVoiceUpdate = nil
-        VoiceDebug.callClaimed(id)
-        #endif
+        trace(.call, "claim paired=true")
         #if DEBUG
         // Tests end every call, one the App Intent started too, this many seconds after it was claimed.
         if let seconds = ProcessInfo.processInfo.environment["HEYDAN_HANGUP_AFTER"].flatMap(Double.init) {
@@ -316,23 +204,13 @@ final class CallController: NSObject {
             }
         }
         #endif
-        // Manual never opens the microphone before talk: the track is published muted.
-        if review.mode == .review { isMuted = true }
-        await place(id, on: target)
+        await place(id)
         return id
     }
 
-    private func place(_ id: UUID, on target: CallTarget) async {
+    private func place(_ id: UUID) async {
         await VoiceSample.stop()
         trace(.audio, "sample stop drained", id)
-        guard call?.id == id else { return }
-        // Before the microphone prompt and CallKit: with Tailscale off the token request would only fail at its timeout.
-        if let line = target.line {
-            let checking = ContinuousClock.now
-            let tailnet = await Tailnet.check(host: line.host)
-            trace(.net, "tailscale precheck \(tailnet.logName) ms=\(CallLog.ms(since: checking))", id, level: tailnet == .off ? .error : .default)
-            if tailnet == .off, await !grantEarly(id, target) { return }
-        }
         guard call?.id == id else { return }
         let granted = await AVAudioApplication.requestRecordPermission()
         trace(.audio, "mic permission granted=\(granted)", id)
@@ -347,27 +225,6 @@ final class CallController: NSObject {
         } catch {
             trace(.callkit, "start transaction failed \(CallLog.describe(error))", id, level: .error)
             finish(id, .failure(.callKitRefused(error.localizedDescription)), endedBy: nil)
-        }
-    }
-
-    /// A precheck can misread, so it never blocks a call alone: the host gets a short try, and only when that cannot
-    /// reach it does the call end on the Tailscale hint. False when the call is over.
-    private func grantEarly(_ id: UUID, _ target: CallTarget) async -> Bool {
-        let asked = ContinuousClock.now
-        do {
-            let accepted = try await target.grant(over: Self.quickHTTP, endingOver: Self.http)
-            guard call?.id == id else {
-                endOnHost(target, callId: accepted.callId)
-                return false
-            }
-            call?.callId = accepted.callId
-            call?.grant = accepted
-            trace(.net, "token ok despite the precheck protocol=\(accepted.names.version) ms=\(CallLog.ms(since: asked))", id)
-            return true
-        } catch {
-            trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
-            finish(id, .failure(error == .unreachable ? .tailscaleOff : error), endedBy: nil)
-            return false
         }
     }
 
@@ -483,21 +340,17 @@ final class CallController: NSObject {
         guard let target = call?.target else { return }
         call?.connectTask = Task {
             do {
-                let accepted: CallTarget.Grant
-                if let early = call?.grant {
-                    accepted = early
-                } else {
-                    let asked = ContinuousClock.now
-                    do { accepted = try await target.grant(over: Self.http, endingOver: Self.http) } catch {
-                        trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
-                        throw error
-                    }
-                    guard call?.id == id else { return endOnHost(target, callId: accepted.callId) }
-                    call?.callId = accepted.callId
-                    call?.grant = accepted
-                    trace(.net, "token ok protocol=\(accepted.names.version) ms=\(CallLog.ms(since: asked))", id)
+                let grant: CallTarget.Grant
+                let asked = ContinuousClock.now
+                do { grant = try await target.grant() } catch {
+                    trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
+                    throw error
                 }
-                let grant = accepted, names = accepted.names
+                guard call?.id == id else { return endOnHost(target, callId: grant.callId) }
+                call?.callId = grant.callId
+                call?.grant = grant
+                trace(.net, "token ok protocol=\(grant.names.version) ms=\(CallLog.ms(since: asked))", id)
+                let names = grant.names
                 if let agent = grant.agent, !agent.isEmpty { setAgentName(agent, for: id) }
                 let room = Room(delegate: self, roomOptions: RoomOptions(defaultAudioPublishOptions: Self.micPublishOptions))
                 call?.room = room
@@ -507,7 +360,7 @@ final class CallController: NSObject {
                 trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
                 do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
                     trace(.room, "connect failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: connecting))", id, level: .error)
-                    throw target.paired == nil ? CallFailure.roomConnect : CallFailure.pairedTransport
+                    throw CallFailure.pairedTransport
                 }
                 guard call?.id == id else { return }
                 call?.roomConnected = true
@@ -545,7 +398,6 @@ final class CallController: NSObject {
 
     private func setAgentName(_ name: String, for id: UUID) {
         agentName = name
-        if let line = call?.target.line, let lineID = lines.id(of: line) { nameLine(lineID, agent: name) }
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.localizedCallerName = name
@@ -576,10 +428,6 @@ final class CallController: NSObject {
         if room.connectionState == .reconnecting { return phase = .reconnecting }
         guard let agent = room.remoteParticipants.values.first(where: \.isAgent) else { return }
         let attributes = agent.attributes
-        if names.isProtocol5Worker(attributes) {
-            trace(.room, "worker speaks protocol 5", level: .error)
-            return finish(call.id, .failure(.unsupportedProtocol(5)), endedBy: .failed, hostReason: .updating)
-        }
         if names.isUpdating(attributes) {
             trace(.room, "worker is updating", level: .error)
             return finish(call.id, .failure(.updating), endedBy: .failed, hostReason: .updating)
@@ -600,7 +448,6 @@ final class CallController: NSObject {
             provider?.reportOutgoingCall(with: call.id, connectedAt: nil)
         }
         phase = .live(activity)
-        refreshReview(attributes, names: names, for: call.id)
     }
 
     /// Before `room.connect` returned this is the SDK cleaning up a connect that failed; `connect` reports that.
@@ -612,7 +459,7 @@ final class CallController: NSObject {
 
     /// Ends call `id` everywhere, once: on the host, in LiveKit and, unless CallKit asked, in CallKit.
     private func finish(
-        _ id: UUID, _ ending: Ending, endedBy reason: CXCallEndedReason?, hostReason: VoiceLine.EndReason? = nil,
+        _ id: UUID, _ ending: Ending, endedBy reason: CXCallEndedReason?, hostReason: CallTarget.EndReason? = nil,
         site: String = #function
     ) {
         guard let current = call, current.id == id else { return }
@@ -640,7 +487,7 @@ final class CallController: NSObject {
         ended.interimTimer?.cancel()
         if let callId = ended.callId {
             endOnHost(ended.target, callId: callId, reason: hostReason)
-        } else if ended.target.paired != nil {
+        } else {
             Task {
                 do { try await ended.target.cancel() }
                 catch { CallLog.log(.net, "call cancel failed \(CallLog.describe(error))", level: .error) }
@@ -654,7 +501,6 @@ final class CallController: NSObject {
             }
         }
         editTranscript { $0.end() }
-        editReview { $0.endCall(byCaller: ending.cause == .caller) }
         commands = nil
         if let reason { provider?.reportCall(with: id, endedAt: nil, reason: reason) }
         // didDeactivate does not always follow (a reset, a call CallKit never knew).
@@ -666,27 +512,20 @@ final class CallController: NSObject {
         isMuted = false
         lastEnded = (id, ending)
         phase = .ended(ending)
-        if ended.target.paired != nil, !showsPairedCall { showSavedLine() }
     }
 
-    /// Dismisses a paired call's screen. Once that call is over, the root screen is about the saved line again: its
-    /// name, an idle phase and an empty transcript, so its Call key and its words agree.
     func closePairedCall() {
         showsPairedCall = false
-        if !isCallActive { showSavedLine() }
     }
 
-    private func showSavedLine() {
-        showLine(shownLineID.flatMap(lines.entry))
-        if case .ended = phase {
-            phase = .idle
-            transcript = Transcript()
-        }
-    }
+    @ObservationIgnored private var hostEnd: Task<Void, Never>?
+    #if DEBUG
+    func waitForHostEnd() async { await hostEnd?.value }
+    #endif
 
-    private func endOnHost(_ target: CallTarget, callId: String, reason: VoiceLine.EndReason? = nil) {
-        Task {
-            try? await target.end(callId: callId, reason: reason, over: Self.http)
+    private func endOnHost(_ target: CallTarget, callId: String, reason: CallTarget.EndReason? = nil) {
+        hostEnd = Task {
+            try? await target.end(callId: callId, reason: reason)
         }
     }
 
@@ -738,152 +577,6 @@ extension CallController.Phase {
     }
 }
 
-// MARK: - Voice lines
-
-extension CallController {
-    /// Saves a call link as a line and picks it; nil when it is not one or the Keychain refused it. Who answers
-    /// is asked of the host right after, or learned on the line's first call.
-    @discardableResult
-    func saveCallLink(_ link: String) -> UUID? {
-        guard let parsed = VoiceLine(callLink: link) else {
-            CallLog.log(.store, "line save rejected: not a call link", level: .error)
-            return nil
-        }
-        var known = false
-        var added: UUID?
-        guard keep({
-            known = $0.id(of: parsed) != nil
-            added = $0.add(parsed)
-        }), let id = added else { return nil }
-        CallLog.log(.store, "line save line=\(Self.short(id)) known=\(known) lines=\(lines.entries.count)")
-        pick(id)
-        return id
-    }
-
-    func selectLine(_ id: UUID) {
-        guard keep({ $0.select(id) }) else { return }
-        CallLog.log(.store, "line pick line=\(Self.short(id))")
-        pick(id)
-    }
-
-    func removeLine(_ id: UUID) {
-        guard keep({ $0.remove(id) }) else { return }
-        CallLog.log(.store, "line remove line=\(Self.short(id)) lines=\(lines.entries.count)")
-        pick(lines.selected?.id)
-    }
-
-    /// A line's log name: the start of its random id, never anything from its link.
-    nonisolated static func short(_ id: UUID?) -> String {
-        id.map { $0.uuidString.prefix(8).lowercased() } ?? "-"
-    }
-
-    /// Asks the host who answers line `id` and names the line for it.
-    @discardableResult
-    func nameLine(_ id: UUID) async throws(CallFailure) -> String {
-        guard let entry = lines.entry(id) else { throw .noLine }
-        let data: Data
-        let response: URLResponse
-        let asked = ContinuousClock.now
-        let tag = "line info line=\(Self.short(id))"
-        do {
-            (data, response) = try await Self.http.data(for: entry.line.infoRequest)
-        } catch {
-            CallLog.log(.net, "\(tag) failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", level: .error)
-            throw CallFailure(transportError: error)
-        }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let info: LineInfo
-        do { info = try LineInfo(status: status, body: data) } catch {
-            CallLog.log(.net, "\(tag) status=\(status) \(error.logName) ms=\(CallLog.ms(since: asked))", level: .error)
-            throw error
-        }
-        CallLog.log(.net, "\(tag) status=\(status) ms=\(CallLog.ms(since: asked))")
-        nameLine(id, agent: info.agent)
-        return info.agent
-    }
-
-    /// Names every line the host has not named yet; one it cannot reach keeps waiting for its first call.
-    private func nameLines() async {
-        for entry in lines.entries where entry.agent == nil {
-            // nameLine(_:) logs why it failed; the line stays unnamed until it answers or takes a call.
-            _ = try? await nameLine(entry.id)
-        }
-    }
-
-    private func nameLine(_ id: UUID, agent: String) {
-        var named = false
-        guard keep({ named = $0.name(id, agent: agent) }), named else { return }
-        CallLog.log(.store, "line named line=\(Self.short(id))")
-        if shownLineID == id, !isCallActive { agentName = lines.entry(id)?.name ?? agentName }
-    }
-
-    /// A new pick is what the screen shows next, unless a call is on: the ended call's words make way for it.
-    private func pick(_ id: UUID?) {
-        guard !isCallActive, id != shownLineID else { return }
-        showLine(id.flatMap(lines.entry))
-        if case .ended = phase {
-            phase = .idle
-            transcript = Transcript()
-        }
-    }
-
-    private func showLine(_ entry: VoiceLines.Entry?) {
-        shownLineID = entry?.id
-        agentName = entry?.name ?? VoiceLines.unnamedAgent
-    }
-
-    /// Reads the saved lines; locked before the first unlock, it tries again once the phone is unlocked.
-    private func loadLines() {
-        switch LineStore.load() {
-        case let .loaded(loaded):
-            linesLoaded = true
-            lines = loaded
-            if let unlockObserver {
-                NotificationCenter.default.removeObserver(unlockObserver)
-                self.unlockObserver = nil
-                HeyDanShortcuts.updateAppShortcutParameters()
-            }
-            if !isCallActive { showLine(lines.selected) }
-            if lines.entries.contains(where: { $0.agent == nil }) { Task { await nameLines() } }
-        case .locked:
-            guard unlockObserver == nil else { return }
-            CallLog.log(.store, "keychain locked until the first unlock: lines load then", level: .error)
-            unlockObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.loadLines() }
-            }
-        case .unreadable:
-            break
-        }
-    }
-
-    /// The saved lines are unreadable for now: nothing can be saved over them.
-    var linesUnreadable: Bool { !linesLoaded }
-
-    /// Reads the saved lines now if they could not be read yet (before the first unlock after a restart).
-    func readLinesIfNeeded() {
-        if !linesLoaded { loadLines() }
-    }
-
-    /// Saves `change` made to the saved lines. Lines that failed to load are read again first (a Keychain error can
-    /// pass), so the change is made to what is really saved, never to an empty stand-in.
-    private func keep(_ change: (inout VoiceLines) -> Void) -> Bool {
-        if !linesLoaded { loadLines() }
-        guard linesLoaded else {
-            CallLog.log(.store, "line save refused: the saved lines could not be read", level: .error)
-            return false
-        }
-        var next = lines
-        change(&next)
-        guard next != lines else { return true }
-        guard LineStore.save(next) else { return false }
-        lines = next
-        HeyDanShortcuts.updateAppShortcutParameters()
-        return true
-    }
-}
-
 // MARK: - Transcript and spoken commands
 
 extension CallController {
@@ -906,7 +599,7 @@ extension CallController {
         case caption(segment: String, text: String, isFinal: Bool, fromCaller: Bool, command: SpokenCommand?)
         case turn(TurnMessage)
         case reply(ReplyInfo)
-        case review(ReviewState)
+        case review(WorkerTurnState)
     }
 
     /// Stream handlers finish in any order, so each event waits in `streams` until it is next in sending order.
@@ -935,7 +628,7 @@ extension CallController {
             }
             event = .reply(reply)
         case names.reviewTopic:
-            guard let state = try? JSONDecoder().decode(ReviewState.self, from: json) else {
+            guard let state = try? JSONDecoder().decode(WorkerTurnState.self, from: json) else {
                 return trace(.stream, "undecodable \(info.topic)", id, level: .error)
             }
             event = .review(state)
@@ -967,12 +660,8 @@ extension CallController {
                 trace(.stream, "e2e caption final caller=\(fromCaller)", id)
             }
             #endif
-            // A review recording's words are the draft's, never the transcript's.
-            let known = transcript.knows(segment: segment)
-            if fromCaller, editReview({ $0.caption(segment: segment, text: text, knownToTranscript: known) }) { return }
             editTranscript { $0.caption(segment: segment, text: text, isFinal: isFinal, fromCaller: fromCaller, command: command, at: now) }
         case let .turn(message):
-            if case let .status(status) = message { editReview { $0.turnStatus(status) } }
             editTranscript { $0.apply(message, at: now) }
         case let .reply(reply):
             #if DEBUG
@@ -980,25 +669,8 @@ extension CallController {
             #endif
             editTranscript { $0.apply(reply, at: now) }
         case let .review(state):
-            var next = transcript
-            guard let closeMic = editReview({ $0.receive(state, transcript: &next, micOn: !isMuted) }) else {
-                return trace(.stream, "review state seq=\(state.seq) stale, have seq=\(reviewSession.seq)", id, level: .debug)
-            }
-            trace(
-                .stream,
-                "review state seq=\(state.seq) mode=\(state.mode.rawValue) draft=\(state.draft.map { "\($0.id)/\($0.state.rawValue)" } ?? "-") preparing=\(state.preparing)",
-                id, level: .info
-            )
-            if next != transcript { transcript = next }
-            if closeMic {
-                trace(.call, "review recording stopped by the worker, mic closes", id)
-                Task { _ = await setMic(false, for: id) }
-            }
-            let muted = isMuted
-            if editReview({ $0.resyncedStateReopensMic(micMuted: muted) }) {
-                trace(.call, "review initial switch unanswered, the worker runs hands-free: mic opens", id)
-                Task { _ = await setMic(true, for: id) }
-            }
+            guard state.seq > (call?.stateSequence ?? 0) else { return }
+            call?.stateSequence = state.seq
             guard let wake = state.wake else { return }
             call?.workerWake = wake
             commands?.apply(wake)
@@ -1089,7 +761,7 @@ extension CallController {
         } else {
             // The state the worker sends again carries its wake switch, which `commands` follows.
             trace(.rpc, "settings unanswered, asking the worker for its state again", id)
-            let resynced = await reviewRPC(.mode, for: id)
+            let resynced = await requestWorkerState(id)
             if resynced == nil, call?.id == id, call?.settingsRequest == request {
                 commands?.revert(running: call?.workerWake, taken: call?.takenPicks ?? .defaults)
             }
@@ -1098,7 +770,7 @@ extension CallController {
     }
 
     /// The worker's answer to one settings request; nil when it did not answer or the call is over.
-    private func settingsRPC(_ picks: SettingsPicks, for id: UUID) async -> ReviewReply? {
+    private func settingsRPC(_ picks: SettingsPicks, for id: UUID) async -> WorkerReply? {
         guard let method = call?.names?.settingsMethod, let gen = nextRPCGen(for: id) else { return nil }
         call?.settingsSends += 1
         let ackTimeout = VoiceProtocol.settingsAckTimeout(send: call?.settingsSends ?? 0)
@@ -1110,8 +782,13 @@ extension CallController {
     /// After a full reconnect the worker's state may have moved on: a mode request naming no mode makes it send
     /// its state again, never changes it.
     private func resyncWorkerState() {
-        guard let id = call?.id, reviewSession.seq > 0 else { return }
-        Task { _ = await reviewRPC(.mode, for: id) }
+        guard let id = call?.id, call?.stateSequence != 0 else { return }
+        Task { _ = await requestWorkerState(id) }
+    }
+
+    private func requestWorkerState(_ id: UUID) async -> WorkerReply? {
+        guard let method = call?.names?.stateMethod, let gen = nextRPCGen(for: id) else { return nil }
+        return await workerRPC(method, payload: "{\"gen\":\(gen)}", for: id)
     }
 
     private func nextRPCGen(for id: UUID) -> Int? {
@@ -1125,7 +802,7 @@ extension CallController {
     @discardableResult
     private func workerRPC(
         _ method: String, payload: String, ackTimeout: TimeInterval = VoiceProtocol.rpcAckTimeout, traceReply: Bool = true, for id: UUID
-    ) async -> ReviewReply? {
+    ) async -> WorkerReply? {
         guard call?.id == id, let room = call?.room,
               let agent = room.remoteParticipants.values.first(where: \.isAgent)?.identity
         else { return nil }
@@ -1135,7 +812,7 @@ extension CallController {
                 destinationIdentity: agent, method: method, payload: payload, responseTimeout: VoiceProtocol.rpcTimeout,
                 maxRoundTripLatency: ackTimeout
             )
-            let reply = ReviewReply(payload: raw)
+            let reply = WorkerReply(payload: raw)
             if traceReply {
                 trace(
                     .rpc, "\(method) ok=\(reply?.ok ?? false) gen=\(reply?.gen ?? -1) error=\(reply?.error ?? "-") ms=\(CallLog.ms(since: asked))", id,
@@ -1156,175 +833,7 @@ extension CallController {
     }
 }
 
-// MARK: - Review mode (Manual)
-
 extension CallController {
-    /// Hands-free or Manual. Outside a call it is only the pick for the next one; mid-call the worker has to take it,
-    /// and then it is the pick too.
-    func setTurnMode(_ mode: TurnMode) async {
-        guard let id = call?.id else {
-            if editReview({ $0.pickMode(mode) }) {
-                TurnModeStore.save(mode)
-                CallLog.log(.call, "review pick mode=\(mode.rawValue) (next call)")
-            }
-            return
-        }
-        guard case .live = phase, call?.micPublished == true, editReview({ $0.beginSwitch(to: mode) }) else {
-            return trace(.call, "review mode=\(mode.rawValue) skipped phase=\(phase.logName) pending=\(review.pending?.op.rawValue ?? "-")", id, level: .info)
-        }
-        // Manual starts with the microphone off: it stops before the worker is asked.
-        let openBefore = !isMuted
-        if mode == .review, openBefore { _ = await setMic(false, for: id) }
-        let reply = await reviewRPC(.mode, mode: mode, afterTurn: reviewSession.maxTurn, for: id)
-        guard call?.id == id else { return }
-        let taken = reply?.ok == true
-        if taken, editReview({ $0.keepPick(mode) }) { TurnModeStore.save(mode) }
-        trace(.call, "review mode=\(mode.rawValue) taken=\(taken) submitted=\(reply?.submitted.map(String.init) ?? "-")", id)
-        // Hands-free listens: the microphone opens again once the worker took the switch, or when a switch to Manual
-        // did not happen, unless muted by hand.
-        if Review.reopensMic(to: mode, taken: taken, muted: isMuted, mutedByHand: reviewSession.mutedByHand, openBefore: openBefore) {
-            _ = await setMic(true, for: id)
-        }
-        settle(reply, for: id, outcome: .init(note: taken && reply?.submitted != nil ? "Previous turn already submitted." : nil))
-    }
-
-    /// Opens a recording: the worker sets up its transcription first, then the microphone opens.
-    func talk() async {
-        guard let id = call?.id, case let .live(activity) = phase, activity != .speaking, editReview({ $0.beginTalk() })
-        else { return skipped(.talk) }
-        let reply = await reviewRPC(.talk, for: id)
-        guard call?.id == id else { return }
-        guard let reply, reply.ok, let draft = reply.draft else { return settle(reply, for: id) }
-        if await setMic(true, for: id) {
-            // A reply may have stopped the recording meanwhile: the microphone follows the worker.
-            if let current = review.draft, current.id != draft || current.state != .recording {
-                trace(.call, "review talk draft=\(draft) stopped by the worker meanwhile, mic closes", id)
-                _ = await setMic(false, for: id)
-            }
-            return settle(reply, for: id)
-        }
-        guard call?.id == id else { return }
-        trace(.call, "review talk draft=\(draft) mic did not open, discarding", id, level: .error)
-        editReview { $0.micFailed(.start) }
-        settle(await reviewRPC(.discard, draft: draft, for: id), for: id)
-    }
-
-    /// Ends the recording: the microphone stops, and the worker freezes what it heard into the draft.
-    func done() async {
-        guard let id = call?.id, let draft = editReview({ $0.beginDone() }) else { return skipped(.done) }
-        if await !setMic(false, for: id), call?.id == id {
-            trace(.call, "review done draft=\(draft) mic did not close", id, level: .error)
-            editReview { $0.micFailed(.stop) }
-        }
-        settle(await reviewRPC(.done, draft: draft, for: id), for: id)
-    }
-
-    func send() async {
-        guard let id = call?.id, let draft = editReview({ $0.beginSend() }) else { return skipped(.send) }
-        let reply = await reviewRPC(.send, draft: draft, for: id)
-        guard call?.id == id else { return }
-        let taken = reply?.ok == true
-        if taken, let turn = reply?.turn {
-            trace(.call, "review sent draft=\(draft) turn=\(turn)", id)
-            editReview { $0.sent(turn: turn) }
-        }
-        settle(reply, for: id, outcome: .init(delivery: taken ? .sending : nil))
-    }
-
-    /// Drops the draft: on the worker mid-call, here for one kept after the call.
-    func discard() async {
-        let live = if case .live = phase { true } else { false }
-        let start = editReview { $0.beginDiscard(live: live) }
-        guard case let .ask(draft) = start, let id = call?.id else {
-            return start == .local ? CallLog.log(.call, "review discard: the kept draft dropped here") : skipped(.discard)
-        }
-        if !isMuted { _ = await setMic(false, for: id) }
-        settle(await reviewRPC(.discard, draft: draft, for: id), for: id, outcome: .init(clearWords: true))
-    }
-
-    /// Manual is on offer once the worker says it runs it, and a call picked in Manual asks for it then, once.
-    /// Without the attribute after its grace the worker has none: the call runs hands-free.
-    private func refreshReview(_ attributes: [String: String], names: VoiceProtocol.Names, for id: UUID) {
-        guard attributes[names.reviewAttribute] == "1" else {
-            guard call?.reviewGrace == nil else { return }
-            trace(.call, "review attribute absent, grace started", id, level: .info)
-            call?.reviewGrace = Task { [weak self] in
-                try? await Task.sleep(for: VoiceProtocol.agentAttributeGrace)
-                guard let self, call?.id == id else { return }
-                guard call?.room?.remoteParticipants.values.first(where: \.isAgent)?.attributes[names.reviewAttribute] != "1" else {
-                    return trace(.call, "review grace ran out, worker offers it meanwhile", id, level: .info)
-                }
-                trace(.call, "review grace ran out: not offered, the call runs hands-free", id)
-                let muted = isMuted
-                if editReview({ $0.notOffered(micMuted: muted) }) {
-                    trace(.call, "review not offered: hands-free opens the mic", id)
-                    _ = await setMic(true, for: id)
-                }
-            }
-            return
-        }
-        if call?.reviewOffered == false {
-            call?.reviewOffered = true
-            trace(.call, "review offered", id)
-        }
-        editReview { $0.offered() }
-        guard editReview({ $0.beginInitialSwitch() }) else { return }
-        trace(.call, "review initial switch asked", id)
-        Task {
-            let reply = await reviewRPC(.mode, mode: .review, afterTurn: reviewSession.maxTurn, for: id)
-            // Refused, the worker stays in hands-free: so does the call, and its microphone opens unless muted by hand.
-            // Unanswered, the state the worker sends again decides.
-            let refused = ReviewSession.Outcome(note: "\(Review.modeName(.review)) didn't start - the call is \(Review.modeName(.auto)).", mode: .auto)
-            let taken = reply?.ok == true
-            trace(.call, "review initial switch taken=\(taken) answered=\(reply != nil)", id, level: taken ? .default : .error)
-            let muted = isMuted
-            guard call?.id == id else { return }
-            let reopens = editReview { $0.initialSwitchReopensMic(reply, micMuted: muted) }
-            settle(reply, for: id, outcome: reply.map { $0.ok ? .init() : refused } ?? .init())
-            guard reopens else { return }
-            trace(.call, "review initial switch refused: hands-free opens the mic", id)
-            _ = await setMic(true, for: id)
-        }
-    }
-
-    /// The operation in flight is answered (nil: it was not); nothing for a call that is over. Unanswered, the worker
-    /// may have done it anyway, so its state is read again.
-    private func settle(_ reply: ReviewReply?, for id: UUID, outcome: ReviewSession.Outcome = .init()) {
-        guard call?.id == id else { return }
-        let agentName = agentName
-        guard editReview({ $0.settle(reply, agentName: agentName, outcome: outcome) }) else { return }
-        trace(.rpc, "review unanswered, asking the worker for its state again", id)
-        resyncWorkerState()
-    }
-
-    /// A key pressed in a state that has no such operation (another one in flight, the wrong draft state).
-    private func skipped(_ op: Review.Op) {
-        trace(.call, "review \(op.rawValue) skipped phase=\(phase.logName) pending=\(review.pending?.op.rawValue ?? "-") draft=\(review.draft.map { "\($0.id)/\($0.state.rawValue)" } ?? "-")", level: .info)
-    }
-
-    /// One review operation on the worker; nil when it did not answer, answered another request, or the call is over.
-    private func reviewRPC(
-        _ op: Review.Op, draft: Int? = nil, mode: TurnMode? = nil, afterTurn: Int? = nil, for id: UUID
-    ) async -> ReviewReply? {
-        guard let names = call?.names, let gen = nextRPCGen(for: id) else { return nil }
-        let request = ReviewRequest(gen: gen, draft: draft, mode: mode, afterTurn: afterTurn)
-        trace(.rpc, "review \(op.rawValue) ask gen=\(gen) draft=\(draft.map(String.init) ?? "-") mode=\(mode?.rawValue ?? "-")", id, level: .info)
-        let reply = await workerRPC(names.method(op), payload: request.payload, for: id)
-        if let reply, reply.gen != gen {
-            trace(.rpc, "review \(op.rawValue) reply dropped: gen=\(reply.gen) answers another request than gen=\(gen)", id, level: .error)
-            return nil
-        }
-        return reply
-    }
-
-    /// Manual opens and closes the microphone itself, apart from the caller's own mute; true once the track did it.
-    private func setMic(_ on: Bool, for id: UUID) async -> Bool {
-        let followed = await applyMute(!on, for: id)
-        reportMute(for: id)
-        guard followed else { return false }
-        return call?.mic.map { $0.isMuted == !on } ?? false
-    }
-
     /// Shows CallKit (lock screen, AirPods) the microphone as the app left it, so its mute key never claims otherwise.
     private func reportMute(for id: UUID) {
         guard call?.id == id else { return }
@@ -1338,35 +847,6 @@ extension CallController {
         }
     }
 
-    /// The caller's own mute (the key, CallKit): back in hands-free the microphone stays as they left it.
-    private func muteByHand(_ muted: Bool, for id: UUID) async -> Bool {
-        let done = await applyMute(muted, for: id)
-        if call?.id == id, done { reviewSession.mutedByHand = muted }
-        return done
-    }
-
-    /// Assigns only a real change, so an event that changes nothing re-renders nothing; a new note goes after a while.
-    @discardableResult
-    private func editReview<Result>(_ edit: (inout ReviewSession) -> Result) -> Result {
-        var next = reviewSession
-        let result = edit(&next)
-        reviewSession = next
-        if next.review != review {
-            if let note = next.review.note, note != review.note { expireNote(note) }
-            review = next.review
-        }
-        if next.words != draftWords { draftWords = next.words }
-        return result
-    }
-
-    private func expireNote(_ note: String) {
-        reviewNoteTimer?.cancel()
-        reviewNoteTimer = Task { [weak self] in
-            try? await Task.sleep(for: Review.noteDuration)
-            guard !Task.isCancelled else { return }
-            self?.editReview { $0.noteExpired(note) }
-        }
-    }
 }
 
 // MARK: - CallKit
@@ -1417,14 +897,9 @@ extension CallController: CXProviderDelegate {
                 trace(.callkit, "perform mute muted=\(muted) for a call that is over", id, level: .info)
                 return action.fail()
             }
-            let decision = review.callKitMute(muted, reportedByApp: appMuteActions.remove(actionID) != nil)
-            trace(.callkit, "perform mute muted=\(muted) \(decision)", id, level: decision == .acknowledge ? .info : .default)
-            switch decision {
-            case .acknowledge: action.fulfill()
-            case .refuse: action.fail()
-            case .apply:
+            if appMuteActions.remove(actionID) != nil { action.fulfill() } else {
                 _ = Task {
-                    if await muteByHand(muted, for: id) { action.fulfill() } else { action.fail() }
+                    if await applyMute(muted, for: id) { action.fulfill() } else { action.fail() }
                 }
             }
         }
@@ -1435,9 +910,6 @@ extension CallController: CXProviderDelegate {
     }
 
     private func audioActivated(by activator: String) {
-        #if DEBUG && targetEnvironment(simulator)
-        VoiceDebug.sampleDrained = VoiceSample.isIdle
-        #endif
         trace(.callkit, "audio session activated by=\(activator)")
         call?.activationTimer?.cancel()
         setEngine(.default)
@@ -1539,7 +1011,7 @@ extension CallController: RoomDelegate {
     private static func attributeSummary(_ current: [String: String], changed: [String: String], names: VoiceProtocol.Names) -> String {
         let keys = [
             VoiceProtocol.agentStateAttribute, names.thinkingAttribute, names.updatingAttribute, names.commandsAttribute,
-            names.reviewAttribute, names.protocolAttribute, names.voiceAttribute,
+            names.protocolAttribute, names.voiceAttribute,
         ].compactMap(\.self)
         func name(_ key: String) -> Substring { key.split(separator: ".").last ?? "" }
         let values = keys.map { key in
@@ -1610,139 +1082,6 @@ private enum SettingsStore {
     }
 }
 
-/// The caller's turn mode pick (hands-free or Manual), kept for the next call.
-private enum TurnModeStore {
-    private static let key = "voice-turn-mode"
-
-    static func load() -> TurnMode {
-        UserDefaults.standard.string(forKey: key).flatMap(TurnMode.init(rawValue:)) ?? .auto
-    }
-
-    static func save(_ mode: TurnMode) {
-        UserDefaults.standard.set(mode.rawValue, forKey: key)
-    }
-}
-
-// MARK: - Keychain
-
-/// The call links hold their lines' bearer tokens: kept on this device only, readable after the first unlock so a
-/// launch in the background, or a call already running when the phone locks, can still read them. One item holds
-/// every line; the single link older versions kept moves into it on first load.
-private enum LineStore {
-    private static let service = Bundle.main.bundleIdentifier ?? "HeyDan"
-    private static let account = "voice-lines"
-    private static let legacyAccount = "call-link"
-
-    enum Load {
-        case loaded(VoiceLines)
-        /// Before the first unlock since boot: the item is there but out of reach until then.
-        case locked
-        /// Neither absent nor readable: it must not be overwritten.
-        case unreadable
-    }
-
-    static func load() -> Load {
-        switch read(account) {
-        case let .found(data):
-            guard let lines = try? JSONDecoder().decode(VoiceLines.self, from: data) else { return setAside(data) }
-            let unreadable = lines.unreadableCount
-            CallLog.log(
-                .store, "keychain lines loaded lines=\(lines.entries.count) unreadable=\(unreadable)",
-                level: unreadable > 0 ? .error : .default
-            )
-            return .loaded(lines)
-        case let .failed(status):
-            return status == errSecInteractionNotAllowed ? .locked : .unreadable
-        case .absent:
-            break
-        }
-        switch read(legacyAccount) {
-        case .absent:
-            return .loaded(VoiceLines())
-        case let .failed(status):
-            return status == errSecInteractionNotAllowed ? .locked : .unreadable
-        case let .found(legacy):
-            let lines = VoiceLines(legacyLink: String(decoding: legacy, as: UTF8.self))
-            let saved = save(lines)
-            if saved { delete(legacyAccount) }
-            CallLog.log(.store, "keychain migrated call-link lines=\(lines.entries.count) saved=\(saved)", level: saved ? .default : .error)
-            return .loaded(lines)
-        }
-    }
-
-    /// An item that holds no list of lines at all is copied to an account of its own, never read again but never
-    /// lost, and the lines start empty; while the copy fails the item stays as it is and nothing is saved over it.
-    private static func setAside(_ data: Data) -> Load {
-        let backup = "\(account)-unreadable-\(Int(Date().timeIntervalSince1970))"
-        let status = SecItemAdd(
-            query(backup).merging([
-                kSecValueData as String: data,
-                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            ]) { $1 } as CFDictionary,
-            nil
-        )
-        guard status == errSecSuccess else {
-            CallLog.log(.store, "keychain lines unreadable, set aside failed status=\(status)", level: .error)
-            return .unreadable
-        }
-        CallLog.log(.store, "keychain lines unreadable: set aside as \(backup), lines start empty")
-        delete(account)
-        return .loaded(VoiceLines())
-    }
-
-    static func save(_ lines: VoiceLines) -> Bool {
-        guard let data = try? JSONEncoder().encode(lines) else {
-            CallLog.log(.store, "keychain save failed: lines did not encode", level: .error)
-            return false
-        }
-        let fields: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
-        let updated = SecItemUpdate(query(account) as CFDictionary, fields as CFDictionary)
-        let added = updated == errSecItemNotFound
-        let status = added ? SecItemAdd(query(account).merging(fields) { $1 } as CFDictionary, nil) : updated
-        CallLog.log(
-            .store, "keychain save \(added ? "add" : "update") status=\(status) lines=\(lines.entries.count)",
-            level: status == errSecSuccess ? .default : .error
-        )
-        return status == errSecSuccess
-    }
-
-    private static func query(_ account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-    }
-
-    private enum Read {
-        case found(Data)
-        /// The normal answer for a phone with no lines yet, or none from an older version.
-        case absent
-        case failed(OSStatus)
-    }
-
-    private static func read(_ account: String) -> Read {
-        var lookup = query(account)
-        lookup[kSecReturnData as String] = true
-        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(lookup as CFDictionary, &item)
-        if status == errSecItemNotFound { return .absent }
-        guard status == errSecSuccess, let data = item as? Data else {
-            CallLog.log(.store, "keychain load \(account) status=\(status)", level: .error)
-            return .failed(status)
-        }
-        return .found(data)
-    }
-
-    private static func delete(_ account: String) {
-        let status = SecItemDelete(query(account) as CFDictionary)
-        CallLog.log(.store, "keychain delete \(account) status=\(status)", level: status == errSecSuccess ? .default : .error)
-    }
-}
 
 // MARK: - Live voice
 
@@ -1750,37 +1089,10 @@ extension CallController {
     var liveVoiceService: (any VoicePickerService)? { call?.target.voicePickerService }
 
     var liveCallID: UUID? {
-        #if DEBUG && targetEnvironment(simulator)
-        if let previewVoice { return previewVoice == .ended ? nil : Self.previewVoiceCallID }
-        #endif
         return call?.id
     }
 
     func requestVoice(_ choice: TTSChoice, for id: UUID) async -> VoiceRequestOutcome {
-        #if DEBUG && targetEnvironment(simulator)
-        if let previewVoice {
-            guard previewVoice != .ended, id == liveCallID else { return .over }
-            if previewVoice == .refused { return .refused(reason: "tts_invalid") }
-            previewVoiceUpdate?.cancel()
-            // As the worker does: each state goes out with ids at once, then again with names.
-            let names = Duration.milliseconds(500)
-            if let state = liveVoice { liveVoice = CallVoiceState(active: state.active, pending: choice, gen: 8) }
-            previewVoiceUpdate = Task { [weak self] in
-                do { try await Task.sleep(for: names) } catch { return }
-                guard let self, liveCallID == id, let state = liveVoice else { return }
-                liveVoice = CallVoiceState(active: state.active, activeDetails: PickerFixture.details(state.active), pending: choice,
-                                           pendingDetails: PickerFixture.details(choice), gen: 8)
-                do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
-                guard liveCallID == id else { return }
-                liveVoice = CallVoiceState(active: choice, gen: 8)
-                do { try await Task.sleep(for: names) } catch { return }
-                guard liveCallID == id else { return }
-                liveVoice = CallVoiceState(active: choice, activeDetails: PickerFixture.details(choice), gen: 8)
-                previewVoiceUpdate = nil
-            }
-            return .queued(gen: 8)
-        }
-        #endif
         guard call?.id == id else { return .over }
         guard liveVoice != nil, let method = call?.names?.settingsMethod else { return .unsupported }
         guard call?.voice?.inFlight == false else {

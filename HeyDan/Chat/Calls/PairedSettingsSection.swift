@@ -9,7 +9,16 @@ struct PairedSettingsSection: View {
     @State private var notifications = false
     var close: (() -> Void)?
     private var pairings: Pairings { .shared }
-    private var call: CallController { .shared }
+    @AppStorage("defaultCallAgent") private var defaultAgent = ""
+
+    private var callAgents: [AgentEntity] {
+        pairings.entries.filter { $0.features.contains("calls") }.flatMap { entry in
+            entry.agents.map { AgentEntity(entry: entry, agent: $0) }
+        }
+    }
+    private var defaultName: String {
+        defaultAgent.isEmpty ? "First on active host" : callAgents.first { $0.id.uuidString == defaultAgent }?.agent ?? "Unavailable"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,16 +53,15 @@ struct PairedSettingsSection: View {
                         }
                     }
                     SettingsSection("Calls") {
-                        NavigationLink { VoiceLinesSettings(showsPairedHosts: false, onCall: close) } label: {
-                            SettingsRow(title: "Voice lines", icon: "phone", detail: "\(call.lines.entries.count)", navigates: true)
-                        }
                         Menu {
-                            Button("Hands-free") { Task { await call.setTurnMode(.auto) } }
-                            Button("Manual") { Task { await call.setTurnMode(.review) } }
-                                .disabled(!call.review.available && call.isCallActive)
+                            Picker("Default agent", selection: $defaultAgent) {
+                                Text("First agent on active host").tag("")
+                                ForEach(callAgents, id: \.id) { agent in
+                                    Text("\(agent.agent) · \(agent.source)").tag(agent.id.uuidString)
+                                }
+                            }
                         } label: {
-                            SettingsRow(title: "Turn mode", icon: "hand.raised",
-                                        detail: call.review.mode == .auto ? "Hands-free" : "Manual", navigates: true)
+                            SettingsRow(title: "Default agent", icon: "phone", detail: defaultName, navigates: true)
                         }
                     }
                 }

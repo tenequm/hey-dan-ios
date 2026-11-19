@@ -72,13 +72,6 @@ import XCTest
         capture("unpair-confirm", showing: app.buttons["Cancel"])
     }
 
-    func testVoiceLines() {
-        let session = ScreenCaptureSession(paired: false)
-        defer { session.finish() }
-        session.show("lines")
-        capture("voice-lines", showing: session.app.buttons["Call Dan"])
-    }
-
     func testThread() {
         let session = ScreenCaptureSession()
         defer { session.finish() }
@@ -148,7 +141,7 @@ import XCTest
     func testCallCover() {
         let session = ScreenCaptureSession()
         defer { session.finish() }
-        for phase in ["connecting", "speaking", "failed", "listening", "thinking", "muted", "reconnecting", "manual", "draft"] {
+        for phase in ["connecting", "speaking", "failed", "listening", "thinking", "muted", "reconnecting"] {
             session.show("call", phase: phase)
             capture(phase == "speaking" ? "call-live" : "call-" + phase, showing: session.app.buttons["chat.call.close"])
             if phase == "speaking" {

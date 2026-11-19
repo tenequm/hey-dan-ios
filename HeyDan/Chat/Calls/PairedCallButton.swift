@@ -10,14 +10,14 @@ struct PairedCallButton: View {
     var body: some View {
         if callsEnabled {
             Button {
-                if call.pairedCallTarget != nil, call.isCallActive {
+                if call.isCallActive {
                     call.showsPairedCall = true
                     return
                 }
                 Task { _ = await call.start(target: CallTarget(paired: target, service: service)) }
             } label: { ThreadCallLabel() }
             .buttonStyle(.plain)
-            .disabled(call.isCallActive ? call.pairedCallTarget == nil : !target.conversation.canCall)
+            .disabled(!call.isCallActive && !target.conversation.canCall)
             .accessibilityIdentifier("chat.call")
         }
     }
@@ -30,8 +30,10 @@ struct PairedCallCover: View {
     var body: some View {
         ContentView(pairedTarget: target, minimize: { dismiss() })
         .onAppear {
-            if let paired = target.paired, ChatController.shared.host == paired.host {
-                ChatController.shared.openConversation(paired.conversation.id)
+            let paired = target.paired
+            if Pairings.shared.entries.contains(where: { $0.host == paired.host && $0.deviceId == paired.deviceId }) {
+                if Pairings.shared.active?.host != paired.host { try? Pairings.shared.setActive(host: paired.host) }
+                if ChatController.shared.host == paired.host { ChatController.shared.openConversation(paired.conversation.id) }
             }
         }
     }

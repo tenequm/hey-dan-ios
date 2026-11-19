@@ -3,22 +3,17 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(\.theme) private var theme
-    var pairedTarget: CallTarget?
+    let pairedTarget: CallTarget
     var minimize: (() -> Void)?
     @Environment(CallController.self) private var call
-    @State private var showsSettings = false
     @State private var presentsCallOptions = false
     @State private var optionsHeight: CGFloat = 240
     @State private var optionsVoice: VoiceSettingsModel?
     @State private var voiceTarget: VoiceTarget?
-    @State private var optionsDestination: OptionsDestination?
+    @State private var pendingVoice: VoiceTarget?
     @State private var settingsBusy = false
     /// Right after "call" the same key reads "cancel": taps are ignored for a moment so a double tap cannot cancel.
     @State private var cancelArmed = false
-    /// The review key action last armed: a key that just changed what it does ignores taps for a moment.
-    @State private var leftArmedAs: String?
-    @State private var rightArmedAs: String?
-    @ScaledMetric private var muteWidth: CGFloat = 124
     @State private var preview = Preview.fromEnvironment()
 
     private struct VoiceTarget: Identifiable {
@@ -28,19 +23,11 @@ struct ContentView: View {
         let callID: UUID?
     }
 
-    private enum OptionsDestination {
-        case voice(VoiceTarget)
-        case settings
-    }
-
     var body: some View {
         VStack(spacing: theme.space.s4) {
             header
             screen
             controls
-            if let rv = reviewKeys {
-                HStack(spacing: theme.space.s3_5) { reviewKeyPair(rv) }
-            }
         }
         .padding(.horizontal, theme.space.s4)
         .padding(.bottom, theme.space.s3)
@@ -49,44 +36,18 @@ struct ContentView: View {
         .foregroundStyle(theme.color.textPrimary)
         .preferredColorScheme(.dark)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .sheet(isPresented: $showsSettings) {
-            NavigationStack { PairedSettingsSection(close: { showsSettings = false }) }
-        }
         .sheet(isPresented: $presentsCallOptions, onDismiss: {
-            switch optionsDestination {
-            case let .voice(target): voiceTarget = target
-            case .settings: showsSettings = true
-            case nil: break
-            }
-            optionsDestination = nil
+            voiceTarget = pendingVoice
+            pendingVoice = nil
         }) { callOptions }
         .sheet(item: $voiceTarget) { target in
             VoicePickerSheet(model: target.model, agentName: target.agentName, callID: target.callID)
-        }
-        // Only once the pairings are read: a paired phone with no saved line shows the conversation list, not Settings.
-        .onChange(of: Pairings.shared.state, initial: true) { _, state in
-            if state == .none, preview == nil, pairedTarget == nil, call.line == nil, !call.isCallActive {
-                showsSettings = true
-            }
-        }
-        .onAppear {
-            #if DEBUG && targetEnvironment(simulator)
-            if ProcessInfo.processInfo.environment["HEYDAN_PREVIEW_SETTINGS"] == "1" { showsSettings = true }
-            #endif
         }
         .task(id: isSettingUp) {
             cancelArmed = false
             guard isSettingUp else { return }
             try? await Task.sleep(for: .milliseconds(700))
             if !Task.isCancelled { cancelArmed = true }
-        }
-        .task(id: leftIdentity) {
-            try? await Task.sleep(for: ReviewView.rearm)
-            if !Task.isCancelled { leftArmedAs = leftIdentity }
-        }
-        .task(id: rightIdentity) {
-            try? await Task.sleep(for: ReviewView.rearm)
-            if !Task.isCancelled { rightArmedAs = rightIdentity }
         }
     }
 
@@ -97,7 +58,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 Text(displayName).textRole(theme.type.headline, theme.weight.semibold)
                 HStack(spacing: theme.space.s1) {
-                    if let host = pairedTarget?.paired?.host.host() { Text(host) }
+                    if let host = pairedTarget.paired.host.host() { Text(host) }
                     if let liveSince, isCallActive {
                         Text(liveSince, style: .timer).monospacedDigit().fixedSize()
                     } else { Text(callLabel) }
@@ -113,7 +74,7 @@ struct ContentView: View {
         }
     }
 
-    private var displayName: String { pairedTarget?.paired?.conversation.agent.name ?? call.agentName }
+    private var displayName: String { pairedTarget.paired.conversation.agent.name }
 
     // MARK: Screen
 
@@ -134,24 +95,12 @@ struct ContentView: View {
                     .accessibilityHidden(true)
             }
             hint
-            let panel = reviewKeys?.panel
-            if let panel {
-                DraftPanel(
-                    panel: panel,
-                    standInWords: preview?.draftWords,
-                    note: review.note,
-                    keep: keepWords,
-                    copyable: review.ended,
-                    endCall: reviewKeys?.endable == true && isLive ? { call.hangUp() } : nil
-                )
-            }
             TranscriptPane(
-                standIn: preview?.transcript,
+                standIn: preview?.transcript, agentName: displayName,
                 start: liveSince,
                 awake: onCall && commands?.wake == true && commands?.waiting == false,
                 frozen: preview?.caret ?? false,
-                // A draft on screen is the thing to read: no empty state competes with it.
-                empty: panel == nil && !hintIsError ? emptyDescription : nil
+                empty: hintIsError ? nil : emptyDescription
             )
         }
         .padding(.horizontal, theme.space.s2)
@@ -159,9 +108,8 @@ struct ContentView: View {
     }
 
     private var emptyDescription: String {
-        let agent = call.agentName
+        let agent = displayName
         if onCall {
-            if review.isOn { return "Sent turns show here." }
             if isMuted { return "Unmute to speak." }
             return waitingWake ? "Say \"\(wakePhrase)\" to start." : "Speak when ready."
         }
@@ -173,12 +121,11 @@ struct ContentView: View {
     }
 
     private var chip: some View {
-        CallStateChip(label: reviewReadout.map { asWritten($0.chip, keep: keepWords) } ?? chipText,
-                      dot: chipColor)
+        CallStateChip(label: chipText, dot: chipColor)
     }
 
     private var chipColor: Color {
-        if hintIsError || reviewReadout?.tone == .error { return theme.color.danger }
+        if hintIsError { return theme.color.danger }
         if phase == .connecting || phase == .reconnecting { return theme.color.warning }
         if isMuted { return theme.color.iconMuted }
         if phase == .live(.speaking) { return theme.color.accent }
@@ -188,16 +135,7 @@ struct ContentView: View {
 
     @ViewBuilder private var hint: some View {
         Group {
-            if let rv = reviewReadout {
-                if reviewPhase == .thinking, let thinkingSince {
-                    TimelineView(.periodic(from: thinkingSince, by: 1)) { context in
-                        let waited = Int(context.date.timeIntervalSince(thinkingSince))
-                        Text(asWritten(reviewView(waited: waited)?.hint ?? rv.hint, keep: keepWords))
-                    }
-                } else {
-                    Text(asWritten(rv.hint, keep: keepWords))
-                }
-            } else if case .live(.thinking) = phase, let thinkingSince {
+            if case .live(.thinking) = phase, let thinkingSince {
                 TimelineView(.periodic(from: thinkingSince, by: 1)) { context in
                     let waited = clock(context.date.timeIntervalSince(thinkingSince), pad: false)
                     Text("\(isMuted ? "unmute to keep talking" : "you can keep talking") · waiting \(waited)")
@@ -221,7 +159,6 @@ struct ContentView: View {
     }
 
     private var chipText: String {
-        if switchingToReview { return asWritten("Switching to \(Review.modeName(.review))", keep: keepWords) }
         if case .live(.listening) = phase, isMuted { return "mic muted" }
         if waitingWake { return "say \"\(wakePhrase)\"" }
         return switch phase {
@@ -238,7 +175,7 @@ struct ContentView: View {
     private var hintText: String {
         if case .live(.listening) = phase, isMuted { return "your microphone is muted." }
         return switch phase {
-        case .idle: hasLine ? "press the action button or tap call." : "add your call link in settings."
+        case .idle: "Tap call to start."
         case .connecting: "setting up the call."
         case .reconnecting: "wait before speaking. if this lasts, check that tailscale is connected."
         case .live(.listening): listeningHint
@@ -266,7 +203,7 @@ struct ContentView: View {
 
     private var controls: some View {
         VStack(spacing: theme.space.s2) {
-            if hintIsError && reviewKeys == nil {
+            if hintIsError {
                 HStack(spacing: theme.space.s3) {
                     optionsControl.fixedSize()
                     Button { Task { await startDisplayedCall() } } label: {
@@ -276,17 +213,12 @@ struct ContentView: View {
                             .foregroundStyle(theme.color.onAccent)
                     }
                     .accessibilityIdentifier(AXID.keysCall)
-                    .disabled(!hasLine)
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
                     HStack { controlButtons }
                     ScrollView(.horizontal) { HStack { controlButtons } }
                 }
-            }
-            if reviewKeys?.panel == nil, let note = review.note {
-                Text(asWritten(note, keep: keepWords)).textRole(theme.type.caption)
-                    .foregroundStyle(theme.color.textSecondary)
             }
             if hintIsError, let minimize {
                 Button(action: minimize) {
@@ -300,28 +232,23 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var controlButtons: some View {
-        if reviewKeys == nil {
-            Button { call.setMuted(!isMuted) } label: {
-                CallControlLabel(title: isMuted ? "Unmute" : "Mute", symbol: isMuted ? "mic.slash" : "mic")
-            }
-            .disabled(!isCallActive || switchingToReview)
-            .accessibilityLabel(isMuted ? "Unmute microphone" : "Mute microphone")
-            .accessibilityValue(micLabel)
+        Button { call.setMuted(!isMuted) } label: {
+            CallControlLabel(title: isMuted ? "Unmute" : "Mute", symbol: isMuted ? "mic.slash" : "mic")
         }
-        modeControl
+        .disabled(!isCallActive)
+        .accessibilityLabel(isMuted ? "Unmute microphone" : "Mute microphone")
+        .accessibilityValue(micLabel)
         optionsControl
 
-        if reviewKeys == nil {
-            Button {
-                if isCallActive { call.hangUp() } else { Task { await startDisplayedCall() } }
-            } label: {
-                CallControlLabel(title: callKey.title.capitalized, symbol: isCallActive ? "phone.down.fill" : "phone.fill",
-                                 danger: isCallActive)
-            }
-            .accessibilityIdentifier(AXID.keysCall)
-            .accessibilityLabel(callKey.spoken)
-            .disabled((!isCallActive && !hasLine) || (isSettingUp && !cancelArmed))
+        Button {
+            if isCallActive { call.hangUp() } else { Task { await startDisplayedCall() } }
+        } label: {
+            CallControlLabel(title: callKey.title.capitalized, symbol: isCallActive ? "phone.down.fill" : "phone.fill",
+                             danger: isCallActive)
         }
+        .accessibilityIdentifier(AXID.keysCall)
+        .accessibilityLabel(callKey.spoken)
+        .disabled(isSettingUp && !cancelArmed)
     }
 
     private var optionsControl: some View {
@@ -334,67 +261,17 @@ struct ContentView: View {
         .accessibilityIdentifier(AXID.controlsOptions)
     }
 
-    private var modeControl: some View {
-        Menu {
-            Picker("Turn mode", selection: Binding(
-                get: { review.mode },
-                set: { mode in Task { await call.setTurnMode(mode) } }
-            )) {
-                ForEach([TurnMode.auto, .review], id: \.self) { mode in
-                    LabeledContent {
-                        Text(modeCaption(mode)).lineLimit(1)
-                    } label: {
-                        Text(modeTitle(mode))
-                    }
-                    .tag(mode)
-                    .disabled(mode == .review && !review.available && review.mode != .review)
-                }
-            }
-        } label: {
-            CallControlLabel(title: modeLabel, symbol: "hand.raised")
-        }
-        .disabled(modeDisabled)
-        .accessibilityIdentifier(AXID.controlsMode)
-        .accessibilityLabel("Turn mode")
-        .accessibilityValue(modeLabel)
-        .accessibilityHint(modeCaption(pendingMode ?? review.mode))
-    }
-
-    private var pendingMode: TurnMode? { review.pending?.op == .mode ? review.pending?.to : nil }
-
-    private var modeLabel: String {
-        pendingMode == nil ? modeTitle(review.mode) : "Switching..."
-    }
-
-    /// The control row capitalizes hands-free, which `Review.modeName` writes lowercase.
-    private func modeTitle(_ mode: TurnMode) -> String { mode == .auto ? "Hands-free" : Review.modeName(mode) }
-
     /// A redial starts from the conversation as the list has it now; the host still decides whether it may call.
     private func startDisplayedCall() async {
-        if let target = pairedTarget, let paired = target.paired, let service = target.service {
-            let chat = ChatController.shared
-            let live = chat.host == paired.host ? chat.conversation(paired.conversation.id) : nil
-            _ = await call.start(target: CallTarget(paired: PairedCallTarget(host: paired.host, deviceId: paired.deviceId,
-                conversation: live ?? paired.conversation), service: service))
-        } else { _ = await call.start(lineID: call.shownLineID) }
+        let paired = pairedTarget.paired
+        let chat = ChatController.shared
+        let live = chat.host == paired.host ? chat.conversation(paired.conversation.id) : nil
+        _ = await call.start(target: CallTarget(paired: PairedCallTarget(host: paired.host, deviceId: paired.deviceId,
+            conversation: live ?? paired.conversation), service: pairedTarget.service))
     }
 
     private var voiceService: (any VoicePickerService)? {
-        if let service = call.liveVoiceService { return service }
-        if let pairedTarget { return pairedTarget.voicePickerService }
-        return (call.shownLineID.flatMap(call.lines.entry)?.line ?? call.line).map(VoiceSettingsModel.lineService)
-    }
-
-    private var modeDisabled: Bool {
-        phase == .connecting || (reviewKeys.map(\.modeDisabled) ?? (review.pending != nil || phase == .reconnecting))
-    }
-
-    private func modeCaption(_ mode: TurnMode) -> String {
-        Review.modeCaption(
-            mode, commands: commands != nil || !isLive, words: commandWords,
-            wake: commands?.wake ?? call.settingsPicks.wake,
-            pauseSends: commands?.pauseSends ?? call.settingsPicks.pauseSends
-        )
+        call.liveVoiceService ?? pairedTarget.voicePickerService
     }
 
     private var callOptions: some View {
@@ -414,7 +291,7 @@ struct ContentView: View {
                     Button {
                         guard let model = optionsVoice else { return }
                         let picker = model.loading ? VoiceSettingsModel(service: model.service) : model
-                        optionsDestination = .voice(VoiceTarget(model: picker, agentName: displayName, callID: call.liveCallID))
+                        pendingVoice = VoiceTarget(model: picker, agentName: displayName, callID: call.liveCallID)
                         presentsCallOptions = false
                     } label: {
                         SettingsRow(title: "Voice", icon: "waveform", detail: optionsVoiceName, navigates: true)
@@ -437,18 +314,6 @@ struct ContentView: View {
                     .padding(.trailing, theme.space.s4)
                     .disabled(settingsBusy || !canChangeTyping)
                     .accessibilityIdentifier(AXID.optionsTyping)
-                }
-                if pairedTarget == nil {
-                    SettingsSection {
-                        Button {
-                            optionsDestination = .settings
-                            presentsCallOptions = false
-                        } label: {
-                            SettingsRow(title: "Voice lines and paired hosts", icon: "phone", navigates: true)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier(AXID.optionsSettings)
-                    }
                 }
             }
             .foregroundStyle(theme.color.textPrimary)
@@ -487,63 +352,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Keys
-
-    /// Review relabels the same two caps: discard is the quiet choice next to send, every other left key keeps the accent.
-    @ViewBuilder private func reviewKeyPair(_ rv: ReviewView) -> some View {
-        let primaryDisabled = (!isCallActive && !hasLine) || (isSettingUp && !cancelArmed)
-        let leftArmed = (leftArmedAs ?? leftIdentity) == leftIdentity
-        let rightArmed = (rightArmedAs ?? rightIdentity) == rightIdentity
-        VStack(spacing: theme.space.s1_5) {
-            Button(asWritten(rv.left.label, keep: [])) { run(rv.left.action) }
-                .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-                .tint(rv.left.action == .discard ? theme.color.secondaryFill : theme.color.accent)
-                .accessibilityIdentifier(AXID.keysCall)
-                .disabled(rv.left.disabled || !leftArmed || ((rv.left.action == .call || rv.left.action == .cancel) && primaryDisabled))
-            keyLabel(Text(review.ended && review.draft != nil ? "draft kept" : callLabel))
-        }
-        VStack(spacing: theme.space.s1_5) {
-            Button {
-                run(rv.right.action)
-            } label: {
-                HStack(spacing: theme.space.s1_5) {
-                    Image(systemName: rv.right.action == .done ? "stop.fill" : rv.right.action == .send ? "arrow.up" : "mic.fill")
-                        .font(.system(size: rv.right.action == .done ? theme.type.caption.size : theme.type.body.size, weight: theme.weight.semibold))
-                    Text(asWritten(rv.right.label, keep: []))
-                }
-            }
-            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-            .tint(rv.right.action == .send && !rv.right.disabled ? theme.color.accent : theme.color.surfaceGrouped)
-            .disabled(rv.right.disabled || !rightArmed)
-            keyLabel(HStack(spacing: theme.space.s1_5) {
-                Circle().fill(rv.capturing || review.micError == .stop ? theme.color.statusConnected : theme.color.iconMuted)
-                    .frame(width: theme.space.s2, height: theme.space.s2)
-                Text(asWritten(rv.mic, keep: []))
-            })
-        }
-        .frame(width: min(muteWidth, 180))
-    }
-
-    private func run(_ action: ReviewView.Action) {
-        switch action {
-        case .call: Task { await startDisplayedCall() }
-        case .cancel, .end: call.hangUp()
-        case .discard: Task { await call.discard() }
-        case .talk: Task { await call.talk() }
-        case .done: Task { await call.done() }
-        case .send: Task { await call.send() }
-        }
-    }
-
-    private func keyLabel(_ content: some View) -> some View {
-        content
-            .textRole(theme.type.micro)
-            .spacing(0.06, size: 11)
-            .foregroundStyle(theme.color.textSecondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-    }
-
     /// The page's primary key: what it shows, and what VoiceOver says.
     private var callKey: (title: String, spoken: String) {
         if onCall { return ("end", "End call") }
@@ -567,66 +375,13 @@ struct ContentView: View {
         case .reconnecting where onCall: "on call"
         case .connecting, .reconnecting: "connecting"
         case let .ended(ending) where isFailure(ending): "not connected"
-        default: hasLine ? "ready" : "not connected"
+        default: "ready"
         }
-    }
-
-    // MARK: Review mode
-
-    private var review: Review { preview?.review ?? call.review }
-
-    /// Words the lowercase chrome keeps as written: the mode's name and the wake phrase.
-    private var keepWords: [String] { [Review.modeName(.review), wakePhrase] }
-
-    /// The page's phase: a reconnect mid-call keeps the call live, with its own overlay.
-    private var reviewPhase: ReviewView.Phase {
-        switch phase {
-        case .idle: .idle
-        case .connecting: .connecting
-        case .reconnecting: onCall ? .listening : .connecting
-        case .live(.listening): .listening
-        case .live(.thinking): .thinking
-        case .live(.speaking): .talking
-        case let .ended(ending): isFailure(ending) ? .error : .ended
-        }
-    }
-
-    /// Keys, readout and draft panel while review speaks for the call; nil in hands-free. The words being heard stay
-    /// out of it: `DraftPanel` reads them itself, so a caption re-renders only the panel.
-    private func reviewView(waited: Int = 0) -> ReviewView? {
-        guard review.isOn else { return nil }
-        return ReviewView(
-            phase: reviewPhase, agentName: call.agentName, reconnecting: phase == .reconnecting && onCall, waited: waited,
-            review: review, words: "", micOn: onCall && !isMuted
-        )
-    }
-
-    private var reviewKeys: ReviewView? { reviewView() }
-
-    /// The review view speaks for the readout while the call runs, and for a draft kept after it.
-    private var reviewReadout: ReviewView? {
-        guard let rv = reviewKeys, reviewPhase != .error else { return nil }
-        switch reviewPhase {
-        case .ended: return review.ended && review.draft != nil ? rv : nil
-        default: return rv
-        }
-    }
-
-    /// Hands-free asked to become Manual: the worker has not taken it yet.
-    private var switchingToReview: Bool { !review.isOn && review.pending?.op == .mode && review.pending?.to == .review }
-
-    private var leftIdentity: String {
-        ReviewView.keyIdentity(reviewKeys?.left.action ?? (isCallActive ? .end : nil), draft: review.draft?.id)
-    }
-
-    private var rightIdentity: String {
-        reviewKeys.map { "\($0.right.action):\(review.draft.map { String($0.id) } ?? "")" } ?? "auto"
     }
 
     // MARK: State
 
-    private var name: String { call.agentName.lowercased() }
-    private var hasLine: Bool { pairedTarget != nil || call.line != nil || preview != nil }
+    private var name: String { displayName.lowercased() }
     private var phase: CallController.Phase { preview?.phase ?? call.phase }
     private var isMuted: Bool { preview?.muted ?? call.isMuted }
     private var liveSince: Date? { preview.map(\.liveSince) ?? call.liveSince }
@@ -641,7 +396,7 @@ struct ContentView: View {
     private var commandWords: CommandWords { preview == nil ? call.commandWords : .builtIn }
 
     /// The phrase that opens a turn with the wake switch on, as the worker names it, in its written case.
-    private var wakePhrase: String { commands?.phrase ?? "Hey \(call.agentName)" }
+    private var wakePhrase: String { commands?.phrase ?? "Hey \(displayName)" }
 
     /// Auto mode with the wake switch, before the phrase: the line is open but nothing is taken.
     private var waitingWake: Bool {
@@ -688,9 +443,6 @@ private func clock(_ seconds: TimeInterval, pad: Bool = true) -> String {
     return pad ? String(format: "%02d:", minutes) + rest : "\(minutes):\(rest)"
 }
 
-// MARK: - Review mode
-
-/// The review draft under the readout: dashed, never styled as sent, its header outside its own scroller.
 struct CallStateChip: View {
     @Environment(\.theme) private var theme
     let label: String
@@ -727,131 +479,13 @@ private struct CallControlLabel: View {
     }
 }
 
-private struct DraftPanel: View {
-    @Environment(\.theme) private var theme
-    @Environment(CallController.self) private var call
-    let panel: ReviewView.Panel
-    /// A preview's stand-in for the words being heard.
-    let standInWords: String?
-    /// Why the last operation did not happen, shown on the draft rather than under the switch.
-    let note: String?
-    let keep: [String]
-    /// A draft kept after the call copies.
-    let copyable: Bool
-    /// Ending the call is on offer next to an open draft (the keys are discard and send); it drops the draft.
-    let endCall: (() -> Void)?
-
-    @State private var bodyHeight: CGFloat = 0
-    @State private var copied = false
-    @ScaledMetric private var maxBody: CGFloat = 220
-
-    private var hearing: Bool { panel.tone == .hearing || panel.tone == .finishing }
-    /// The words being heard: the panel's text while a recording is open. Read only here, so a caption re-renders only
-    /// the panel.
-    private var words: String { standInWords ?? call.draftWords }
-
-    var body: some View {
-        let text = hearing ? words : panel.text
-        VStack(alignment: .leading, spacing: 0) {
-            FlowLayout(spacing: theme.space.s2_5, lineSpacing: theme.space.s0_5) {
-                Text(panel.title)
-                    .foregroundStyle(titleInk)
-                    .accessibilityAddTraits(.updatesFrequently)
-                if let note = panel.note { Text(asWritten(note, keep: keep)) }
-                if copyable, !text.isEmpty {
-                    PanelButton(title: copied ? "copied" : "copy", systemImage: "doc.on.doc") {
-                        UIPasteboard.general.string = text
-                        copied = true
-                    }
-                }
-                if let endCall { PanelButton(title: "end call", systemImage: "phone.down", action: endCall) }
-            }
-            .textRole(theme.type.micro)
-            .spacing(0.04, size: 11)
-            .foregroundStyle(theme.color.textSecondary)
-            .padding(EdgeInsets(top: theme.space.s2, leading: theme.space.s3, bottom: theme.space.s1, trailing: theme.space.s3))
-            if let note {
-                Text(asWritten(note, keep: keep))
-                    .textRole(theme.type.micro)
-                    .foregroundStyle(theme.color.accentText)
-                    .padding(EdgeInsets(top: 0, leading: theme.space.s3, bottom: theme.space.s1, trailing: theme.space.s3))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ScrollView {
-                Group {
-                    if text.isEmpty {
-                        Text(panel.tone == .hearing ? "Speak now…" : panel.tone == .finishing ? "…" : "No words.")
-                            .foregroundStyle(theme.color.textSecondary)
-                    } else {
-                        Text(text)
-                            .foregroundStyle(hearing ? theme.color.textSecondary : theme.color.textPrimary)
-                            .textSelection(.enabled)
-                    }
-                }
-                .textRole(theme.type.headline)
-                .lineHeight(.multiple(factor: 1.5))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(EdgeInsets(top: 0, leading: theme.space.s3, bottom: theme.space.s2_5, trailing: theme.space.s3))
-                .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
-            }
-            // A frozen draft opens at its first word; heard words follow the tail.
-            .defaultScrollAnchor(hearing ? .bottom : .top, for: .sizeChanges)
-            .defaultScrollAnchor(hearing ? .bottom : .top, for: .initialOffset)
-            .id(panel.title)
-            .frame(height: min(max(bodyHeight, 34), maxBody))
-            .scrollBounceBehavior(.basedOnSize)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Review draft")
-        .task(id: copied) {
-            guard copied else { return }
-            try? await Task.sleep(for: .seconds(2))
-            copied = false
-        }
-    }
-
-    private var titleInk: Color {
-        switch panel.tone {
-        case .draft: theme.color.accentText
-        case .failed, .long, .empty: theme.color.danger
-        case .hearing, .finishing: theme.color.textPrimary
-        }
-    }
-}
-
-private struct PanelButton: View {
-    @Environment(\.theme) private var theme
-    let title: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: theme.space.s1_5) {
-                Image(systemName: systemImage).font(.system(size: theme.type.micro.size))
-                Text(title)
-            }
-            .foregroundStyle(theme.color.textPrimary)
-            .padding(.horizontal, theme.space.s2)
-            .padding(.vertical, theme.space.s0_5)
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color.textPrimary, lineWidth: 1))
-            .padding(.vertical, theme.space.s2)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// The delivery notice and the transcript: the only views that read the call's transcript, so a caption re-runs
 /// them and not the whole screen.
 private struct TranscriptPane: View {
     @Environment(\.theme) private var theme
     @Environment(CallController.self) private var call
     /// A preview's stand-in, shown in place of the call's transcript.
     let standIn: Transcript?
+    let agentName: String
     let start: Date?
     let awake: Bool
     let frozen: Bool
@@ -870,7 +504,7 @@ private struct TranscriptPane: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             TranscriptConsole(
-                transcript: transcript, agentName: call.agentName, start: start, awake: awake, frozen: frozen, empty: empty
+                transcript: transcript, agentName: agentName, start: start, awake: awake, frozen: frozen, empty: empty
             )
         }
     }
@@ -1174,7 +808,6 @@ private struct CaptionLine: View {
 
     private func label(_ mark: Transcript.Mark) -> String {
         switch mark {
-        case .sending: "sending"
         case .sent: "sent"
         case .dropped(.command): line.command?.kind == .discard ? "nothing to discard" : "nothing to send"
         case .dropped(.asleep): "went back to sleep"
@@ -1198,7 +831,7 @@ private struct CaptionLine: View {
 
     private func style(_ mark: Transcript.Mark) -> MarkTag.Style {
         switch mark {
-        case .sending, .sent: .sent
+        case .sent: .sent
         case .dropped: .dropped
         case .lost: .lost
         }
@@ -1243,9 +876,6 @@ private struct Preview {
     var muted = false
     var transcript = Transcript()
     var commands: CommandSettings?
-    /// Manual's state, and the words of its open recording.
-    var review: Review?
-    var draftWords = ""
     /// The newest words keep their caret, as if still arriving.
     var caret = false
     /// An ended call that had been live.
@@ -1280,17 +910,11 @@ private struct Preview {
             case "muted": (.live(.listening), true)
             case "ended": (.ended(.byCaller), false)
             case "left": (.ended(.init(cause: .remote, message: "Dan left the call.")), false)
-            case "failed": (.ended(.failure(.unreachable)), false)
-            // Manual: between recordings the microphone is off, as the app keeps it.
-            case "manual", "finishing", "draft", "notsent", "toolong": (.live(.listening), true)
-            case "recording": (.live(.listening), false)
-            case "manual-speaking": (.live(.speaking), true)
-            case "kept": (.ended(.init(cause: .remote, message: "The voice service dropped the call.")), false)
+            case "failed": (.ended(.failure(.pairedTransport)), false)
             default: nil
             }
             guard let phase else { return nil }
             var preview = Preview(phase: phase.0, muted: phase.muted || mutedVariant)
-            if let manual = ManualStage(rawValue: name) { return manualSample(manual, preview: preview) }
             let stage: Stage? = switch name {
             case "waiting": .waiting
             case "thinking": .thinking
@@ -1316,60 +940,6 @@ private struct Preview {
     }
 
     #if DEBUG && targetEnvironment(simulator)
-        /// Manual mode's stages: between turns, a recording, its transcript finishing, a draft (or one that could not
-        /// finish, or is too long), a reply over the turn, and a draft kept after the call dropped.
-        private enum ManualStage: String {
-            case manual, recording, finishing, draft, notsent, toolong, kept
-            case speaking = "manual-speaking"
-        }
-
-        private static func manualSample(_ stage: ManualStage, preview: Preview) -> Preview {
-            var preview = preview
-            let start = preview.start
-            func at(_ seconds: TimeInterval) -> Date { start.addingTimeInterval(seconds) }
-            var transcript = Transcript()
-            let backup = "Can you check whether the backup ran last night?"
-            transcript.apply(.status(TurnStatus(turn: 1, status: .sending, text: backup, draft: 1)), at: at(6))
-            transcript.apply(.status(TurnStatus(turn: 1, status: .sent, text: backup)), at: at(7))
-            transcript.apply(ReplyInfo(reply: 1, turn: 1), at: at(9))
-            transcript.caption(segment: "SA_1", text: "It finished at 3:12 with no errors, 41 gigabytes copied.", isFinal: true, fromCaller: false, at: at(9))
-
-            var session = ReviewSession(pick: .review)
-            session.startCall()
-            var scratch = Transcript()
-            var seq = 0
-            func state(_ draft: Draft?) {
-                seq += 1
-                _ = session.receive(ReviewState(seq: seq, mode: .review, draft: draft), transcript: &scratch, micOn: false)
-            }
-            state(nil)
-            let heard = "Add eggs and oat milk to the shopping list, and remind me to call the plumber"
-            let draft = "Add eggs and oat milk to the shopping list, and remind me to call the plumber tomorrow at nine."
-            switch stage {
-            case .manual: break
-            case .recording, .finishing:
-                _ = session.beginTalk()
-                state(Draft(id: 2, state: .recording))
-                _ = session.settle(ReviewReply(payload: #"{"gen":1,"ok":true,"seq":\#(seq),"draft":2}"#), agentName: "Dan")
-                _ = session.caption(segment: "SR_1", text: heard, knownToTranscript: false)
-                if stage == .finishing { state(Draft(id: 2, state: .finishing)) }
-            case .draft, .kept: state(Draft(id: 2, state: .ready, text: draft))
-            case .speaking: state(Draft(id: 2, state: .ready, text: draft, reason: .agent))
-            case .notsent: state(Draft(id: 2, state: .failed, text: heard))
-            case .toolong: state(Draft(id: 2, state: .ready, text: String(repeating: draft + " ", count: 90), tooLong: true))
-            }
-            if stage == .kept {
-                session.endCall(byCaller: false)
-                preview.wasLive = true
-                transcript.end()
-            }
-            preview.review = session.review
-            preview.draftWords = session.words
-            preview.transcript = transcript
-            if stage != .kept { preview.commands = CommandSettings(picks: .defaults) }
-            return preview
-        }
-
         /// How far into the sample call the screenshot stops.
         private enum Stage { case waiting, thinking, speaking, listening }
 
@@ -1414,244 +984,4 @@ private struct Preview {
             return transcript
         }
     #endif
-}
-
-/// The saved voice lines: pick the one the Action Button calls, ask a host who answers, delete, add.
-struct VoiceLinesSettings: View {
-    var showsPairedHosts = true
-    var onCall: (() -> Void)?
-    @Environment(\.theme) private var theme
-    @Environment(CallController.self) private var call
-    @Environment(\.dismiss) private var dismiss
-    @State private var link = ""
-    @FocusState private var linkFocused: Bool
-    @State private var note: Note?
-    /// The line whose host is being asked who answers.
-    @State private var naming: UUID?
-    @State private var deleting: VoiceLines.Entry?
-    @State private var voiceLine: VoiceLines.Entry?
-
-    private enum Note: Equatable {
-        case invalid, notSaved, unreadable, asking
-        case named(String)
-        case unnamed(host: String, reason: String)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: theme.space.s4) {
-            ZStack {
-                Text("Voice lines")
-                    .textRole(theme.type.headline, theme.weight.medium)
-                    .spacing(-0.01, size: 17)
-                HStack {
-                    GlassIconButton(title: "close", systemImage: "chevron.left") { dismiss() }
-                    Spacer()
-                    if Pairings.shared.active == nil {
-                        GlassIconButton(title: "Add a call link", systemImage: "plus") { linkFocused = true }
-                    }
-                }
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: theme.space.s6) {
-                    if showsPairedHosts, Pairings.shared.active != nil { PairedHostSettingsRows() }
-                    linesSection
-                    addSection
-                    if showsPairedHosts, Pairings.shared.active == nil { PairedHostSettingsRows() }
-                }
-                .padding(.bottom, theme.space.s5)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            if Pairings.shared.active == nil, let selected = call.lines.selected {
-                Button {
-                    if let onCall { onCall() } else { dismiss() }
-                    Task { _ = await call.start(lineID: selected.id) }
-                } label: {
-                    Label("Call \(selected.name)", systemImage: "phone.fill")
-                        .textRole(theme.type.body, theme.weight.semibold)
-                        .frame(maxWidth: .infinity, minHeight: theme.control.touchTarget)
-                        .background(theme.color.accent, in: Capsule())
-                        .foregroundStyle(theme.color.onAccent)
-                }
-                .disabled(call.isCallActive)
-                .padding(.bottom, theme.space.s2)
-            }
-        }
-        .padding(.horizontal, theme.space.s5)
-        .padding(.top, theme.space.s3)
-        .foregroundStyle(theme.color.textPrimary)
-        .toolbarVisibility(.hidden, for: .navigationBar)
-        .presentationDetents(Pairings.shared.active == nil ? [.large] : [.medium, .large])
-        .presentationBackground(theme.color.surfaceSheet)
-        .preferredColorScheme(.dark)
-        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .confirmationDialog(
-            "Delete the line to \(deleting?.name ?? "")?", item: $deleting, titleVisibility: .visible
-        ) { entry in
-            Button("Delete", role: .destructive) {
-                call.removeLine(entry.id)
-                note = nil
-            }
-        } message: { _ in
-            Text("Its call link leaves this phone. Shortcuts that call this line stop working.")
-        }
-        .sheet(item: $voiceLine) { entry in
-            VoicePickerSheet(service: VoiceSettingsModel.lineService(entry.line), agentName: entry.name, callID: nil)
-        }
-    }
-
-    // MARK: Lines
-
-    private var linesSection: some View {
-        VStack(alignment: .leading, spacing: theme.space.s2) {
-            label("Saved lines")
-            if call.lines.entries.isEmpty {
-                Text("no lines yet. add the call link nanoclaw gave you below.")
-                    .textRole(theme.type.caption)
-                    .foregroundStyle(theme.color.textSecondary)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(call.lines.entries) { entry in row(entry) }
-                }
-                .background(theme.color.surfaceGrouped, in: RoundedRectangle(cornerRadius: theme.radius.l))
-                Text("the picked line is the one the action button and \"talk to hey dan\" call. a shortcut can call any line by name.")
-                    .textRole(theme.type.micro)
-                    .lineSpacing(theme.space.s1)
-                    .foregroundStyle(theme.color.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func row(_ entry: VoiceLines.Entry) -> some View {
-        let picked = entry.id == call.lines.selected?.id
-        return HStack(spacing: theme.space.s1) {
-            Button {
-                call.selectLine(entry.id)
-            } label: {
-                HStack(spacing: theme.space.s3) {
-                    VStack(alignment: .leading, spacing: theme.space.s0_5) {
-                        Text(entry.agent ?? "Unnamed line")
-                            .textRole(theme.type.body, theme.weight.medium)
-                            .foregroundStyle(entry.agent == nil ? theme.color.textSecondary : theme.color.textPrimary)
-                        Text(entry.line.host)
-                            .textRole(theme.type.micro)
-                            .foregroundStyle(theme.color.textSecondary)
-                    }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    Spacer(minLength: 0)
-                    if picked {
-                        Image(systemName: "checkmark").foregroundStyle(theme.color.accentText)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .frame(minHeight: theme.control.touchTarget)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(entry.name), \(entry.line.host)")
-            .accessibilityAddTraits(picked ? .isSelected : [])
-            .accessibilityHint(picked ? "" : "Makes this the line the Action Button calls.")
-            Menu {
-                Button("Voice...", systemImage: "waveform") { voiceLine = entry }
-                Button("Ask who answers", systemImage: "arrow.clockwise") { ask(entry) }
-                    .disabled(naming != nil)
-                Button("Delete...", systemImage: "trash", role: .destructive) { deleting = entry }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: theme.type.body.size))
-                    .foregroundStyle(theme.color.textSecondary.opacity(naming == entry.id ? 0.4 : 1))
-                    .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Actions for \(entry.name)")
-        }
-        .padding(.leading, theme.space.s3)
-        .padding(.trailing, theme.space.s0_5)
-        .padding(.vertical, theme.space.s1)
-    }
-
-    // MARK: Add
-
-    private var addSection: some View {
-        VStack(alignment: .leading, spacing: theme.space.s2) {
-            label("Add a call link")
-            HStack(spacing: theme.space.s2_5) {
-                SecureField(
-                    "",
-                    text: $link,
-                    prompt: Text("https://voice.example.com/voice?t=...").foregroundStyle(theme.color.placeholder)
-                )
-                .textRole(theme.type.footnote)
-                .foregroundStyle(theme.color.textPrimary)
-                .tint(theme.color.accentText)
-                .textContentType(.URL)
-                .focused($linkFocused)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.done)
-                .onSubmit(add)
-                .padding(.horizontal, theme.space.s3)
-                .frame(height: 46)
-                .background(theme.color.surfaceInput, in: RoundedRectangle(cornerRadius: theme.radius.field))
-                Button("add", action: add)
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(theme.color.accent)
-                    .frame(width: 72)
-                    .disabled(link.isEmpty)
-            }
-            noteText
-                .textRole(theme.type.caption)
-                .lineSpacing(theme.space.s1)
-                .foregroundStyle(theme.color.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder private var noteText: some View {
-        switch note {
-        case .invalid:
-            Text("that is not a call link. it looks like https://<host>/voice?t=<token>.").foregroundStyle(theme.color.danger)
-        case .notSaved:
-            Text("the keychain did not take the link. try again.").foregroundStyle(theme.color.danger)
-        case .unreadable:
-            Text("the saved lines could not be read from the keychain, so nothing is saved over them. restart the phone, then add the link again.")
-                .foregroundStyle(theme.color.danger)
-        case .asking:
-            Text("asking the host who answers…")
-        case let .named(agent):
-            Text("\(agent.lowercased()) answers this line.")
-        case let .unnamed(host, reason):
-            Text("saved, but \(host) did not say who answers: \(reason.lowercased()) the first call names it.")
-        case nil:
-            Text("paste a voice line link nanoclaw gave you. links stay in the keychain, on this phone only.")
-        }
-    }
-
-    private func label(_ text: String) -> some View {
-        Text(text)
-            .textRole(theme.type.micro)
-            .spacing(0.06, size: 11)
-            .foregroundStyle(theme.color.textSecondary)
-    }
-
-    private func add() {
-        guard !link.isEmpty else { return }
-        guard VoiceLine(callLink: link) != nil else { return note = .invalid }
-        guard let id = call.saveCallLink(link) else { return note = call.linesUnreadable ? .unreadable : .notSaved }
-        link = ""
-        if let entry = call.lines.entry(id) { ask(entry) }
-    }
-
-    private func ask(_ entry: VoiceLines.Entry) {
-        naming = entry.id
-        note = .asking
-        Task {
-            do throws(CallFailure) {
-                note = .named(try await call.nameLine(entry.id))
-            } catch {
-                note = .unnamed(host: entry.line.host, reason: error.message)
-            }
-            naming = nil
-        }
-    }
 }

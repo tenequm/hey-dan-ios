@@ -1,8 +1,5 @@
 import Foundation
 
-/// The worker's in-call messages, as nanoclaw's `src/channels/voice-mode-protocol.ts` (protocol 6) and, before it,
-/// `voice-livekit-protocol.ts` (protocol 4) define them and its browser call page reads them. A shape or value this app
-/// does not know is ignored, as the page ignores it.
 public extension VoiceProtocol {
     /// Captions of both sides, as LiveKit text streams: the caller's per turn segment, interim then final; the
     /// agent's one final per spoken line.
@@ -11,30 +8,23 @@ public extension VoiceProtocol {
     static let transcriptionFinalAttribute = "lk.transcription_final"
     static let transcribedTrackAttribute = "lk.transcribed_track_id"
 
-    /// The protocol the app asks for on token start (`v`). A protocol 6 host refuses a start without it; a protocol 4
-    /// host reads only `t` and answers without naming its protocol.
     static let requestedVersion = 6
 
-    /// The worker's attribute, topic and RPC names on one host protocol: `nanoclaw.voice.*` on 4,
-    /// `nanoclaw.voice-mode.*` on 6. Fields and values are the same on both.
     struct Names: Sendable, Equatable {
         public let version: Int
-        private let prefix: String
-        /// The protocol 6 namespace; a protocol 5 host already used it but named no protocol in its grant.
-        private static let voiceModePrefix = "nanoclaw.voice-mode"
 
         /// "1" while the host's agent works on the caller's turn.
         public let thinkingAttribute: String
         /// "1" when the worker cannot serve the host's protocol.
         public let updatingAttribute: String
-        /// The protocol the worker speaks; nil on 4, which set none.
+        /// The protocol announced by the worker.
         public let protocolAttribute: String?
         public let voiceAttribute: String?
         /// `TurnMessage`s: what became of each caller turn, words the worker dropped, speech it did not hear.
         public let turnTopic: String
         /// One `ReplyInfo` right before each line the worker speaks, and again after one it could not.
         public let replyTopic: String
-        /// One `ReviewState` whenever the worker's turn state (auto mode's wake state included) changes.
+        /// The worker publishes hands-free wake changes on the review topic.
         public let reviewTopic: String
         public let streamTopics: [String]
         /// One of `commandsVersions` when the worker understands spoken commands and the settings RPC.
@@ -44,23 +34,18 @@ public extension VoiceProtocol {
         /// On a caller caption, both or neither: the command its text ends in (`send`, `discard`), and the words before it.
         public let captionCommandAttribute: String
         public let captionWordsAttribute: String
-        /// "1" when the worker runs review mode (Manual); the app offers it only then.
-        public let reviewAttribute: String
-        /// Takes a `SettingsRequest` from the caller only, answers a `ReviewReply`.
+        /// Takes a `SettingsRequest` from the caller only, answers a `WorkerReply`.
         public let settingsMethod: String
 
         /// Nil for a protocol this app does not speak.
         public init?(version: Int) {
-            switch version {
-            case 4: prefix = "nanoclaw.voice"
-            case 6: prefix = Self.voiceModePrefix
-            default: return nil
-            }
+            guard version == VoiceProtocol.requestedVersion else { return nil }
+            let prefix = "nanoclaw.voice-mode"
             self.version = version
             thinkingAttribute = "\(prefix).thinking"
             updatingAttribute = "\(prefix).updating"
-            protocolAttribute = version == 4 ? nil : "\(prefix).protocol"
-            voiceAttribute = version == 4 ? nil : "\(prefix).voice"
+            protocolAttribute = "\(prefix).protocol"
+            voiceAttribute = "\(prefix).voice"
             turnTopic = "\(prefix).turn"
             replyTopic = "\(prefix).reply"
             reviewTopic = "\(prefix).review"
@@ -69,19 +54,10 @@ public extension VoiceProtocol {
             commandWordsAttribute = "\(prefix).command-words"
             captionCommandAttribute = "\(prefix).command"
             captionWordsAttribute = "\(prefix).words"
-            reviewAttribute = "\(prefix).review"
             settingsMethod = "\(prefix).settings"
         }
 
-        /// The worker's RPC method for a review operation. A `mode` request naming no mode only makes the worker send
-        /// its `ReviewState` again.
-        public func method(_ op: Review.Op) -> String { "\(prefix).\(op.rawValue)" }
-
-        /// A protocol 5 host names no protocol in its grant, so it reads as 4, but its worker sets
-        /// `nanoclaw.voice-mode.*` attributes: a call this app cannot serve.
-        public func isProtocol5Worker(_ attributes: [String: String]) -> Bool {
-            version == 4 && attributes.keys.contains { $0.hasPrefix("\(Self.voiceModePrefix).") }
-        }
+        public let stateMethod = "nanoclaw.voice-mode.mode"
 
         /// Nil until the worker's session has said what it is doing.
         public func activity(_ attributes: [String: String]) -> AgentActivity? {
@@ -118,11 +94,6 @@ public extension VoiceProtocol {
     static func settingsAckTimeout(send: Int) -> TimeInterval {
         send == 1 ? firstSettingsAckTimeout : rpcAckTimeout
     }
-    /// A worker sets its attributes right after its session starts, an older one in more than one go; without them
-    /// after this long it has none. An offer that comes later still counts.
-    static let agentAttributeGrace: Duration = .seconds(8)
-    /// The host takes a caller turn of at most this many UTF-8 bytes; a longer review draft cannot be sent.
-    static let maxTurnTextBytes = 8 * 1024
     /// Handlers of streams sent back to back finish within milliseconds of each other: this bounds that skew with
     /// room to spare and stays below what a reader of the captions notices.
     static let streamOrderHold: Duration = .milliseconds(100)
@@ -176,15 +147,12 @@ public struct TurnStatus: Codable, Sendable, Equatable {
     public let reason: Reason?
     /// The final transcript, when there is one.
     public let text: String?
-    /// On a sent review draft's `sending`: its draft id.
-    public let draft: Int?
 
-    public init(turn: Int, status: Status, reason: Reason? = nil, text: String? = nil, draft: Int? = nil) {
+    public init(turn: Int, status: Status, reason: Reason? = nil, text: String? = nil) {
         self.turn = turn
         self.status = status
         self.reason = reason
         self.text = text
-        self.draft = draft
     }
 
     public init(from decoder: any Decoder) throws {
@@ -193,7 +161,6 @@ public struct TurnStatus: Codable, Sendable, Equatable {
         status = try container.decode(Status.self, forKey: .status)
         reason = try container.decodeIfPresent(String.self, forKey: .reason).flatMap(Reason.init(rawValue:))
         text = try container.decodeIfPresent(String.self, forKey: .text)
-        draft = try container.decodeIfPresent(Int.self, forKey: .draft)
     }
 }
 
@@ -363,91 +330,10 @@ public struct ReplyInfo: Codable, Sendable, Equatable {
     }
 }
 
-/// The worker's turn state: the mode, review mode's draft and auto mode's wake switch. `seq` grows with every
-/// change, the newest wins.
-public struct ReviewState: Decodable, Sendable, Equatable {
-    public enum Mode: String, Codable, Sendable {
-        /// Hands-free: a pause or a spoken command sends the turn.
-        case auto
-        /// Manual: talk, done, then send or discard the draft.
-        case review
-    }
-
+/// The worker includes hands-free wake state in its turn-state stream.
+public struct WorkerTurnState: Decodable, Sendable {
     public let seq: Int
-    public let mode: Mode
-    public let draft: Draft?
-    /// Talk is setting up the recording's transcription: talk stays off meanwhile. Absent from an older worker.
-    public let preparing: Bool
-    /// Auto mode's wake switch, from a worker that understands spoken commands.
     public let wake: WakeState?
-
-    public init(seq: Int, mode: Mode, draft: Draft? = nil, preparing: Bool = false, wake: WakeState? = nil) {
-        self.seq = seq
-        self.mode = mode
-        self.draft = draft
-        self.preparing = preparing
-        self.wake = wake
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        seq = try container.decode(Int.self, forKey: .seq)
-        mode = try container.decode(Mode.self, forKey: .mode)
-        draft = try container.decodeIfPresent(Draft.self, forKey: .draft)
-        preparing = try container.decodeIfPresent(Bool.self, forKey: .preparing) ?? false
-        wake = try container.decodeIfPresent(WakeState.self, forKey: .wake)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case seq, mode, draft, preparing, wake
-    }
-}
-
-public typealias TurnMode = ReviewState.Mode
-
-/// One review turn as the worker holds it: `recording` from talk to done, `finishing` while the transcription is
-/// flushed, then frozen: `ready` to send, `empty` (nothing heard) or `failed` (`text` unverified).
-public struct Draft: Decodable, Sendable, Equatable {
-    public enum State: String, Decodable, Sendable {
-        case recording, finishing, ready, empty, failed
-    }
-
-    /// Why it stopped without done.
-    public enum Reason: String, Decodable, Sendable {
-        /// A reply took the channel.
-        case agent
-        /// An open auto turn the caller switched to review.
-        case `switch`
-    }
-
-    public let id: Int
-    public var state: State
-    public var text: String
-    /// Over `VoiceProtocol.maxTurnTextBytes`: it cannot be sent.
-    public var tooLong: Bool
-    /// Nil when none was given or this app does not know it.
-    public var reason: Reason?
-
-    public init(id: Int, state: State, text: String = "", tooLong: Bool = false, reason: Reason? = nil) {
-        self.id = id
-        self.state = state
-        self.text = text
-        self.tooLong = tooLong
-        self.reason = reason
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        state = try container.decode(State.self, forKey: .state)
-        text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
-        tooLong = try container.decodeIfPresent(Bool.self, forKey: .tooLong) ?? false
-        reason = try container.decodeIfPresent(String.self, forKey: .reason).flatMap(Reason.init(rawValue:))
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, state, text, tooLong, reason
-    }
 }
 
 /// Auto mode's wake switch as the worker runs it.
@@ -500,26 +386,6 @@ public struct SettingsRequest: Encodable, Sendable, Equatable {
     public var payload: String { rpcPayload(self) }
 }
 
-/// A review RPC's payload (`mode`, `talk`, `done`, `send`, `discard`); `gen` is the app's own operation counter,
-/// echoed back, and `draft` names the draft an operation is for.
-public struct ReviewRequest: Encodable, Sendable, Equatable {
-    public let gen: Int
-    public let draft: Int?
-    /// For `mode`: the mode to switch to; nil, the worker only sends its state again.
-    public let mode: TurnMode?
-    /// With `mode`: the newest worker turn number seen, to hear of a turn auto mode sent meanwhile.
-    public let afterTurn: Int?
-
-    public init(gen: Int, draft: Int? = nil, mode: TurnMode? = nil, afterTurn: Int? = nil) {
-        self.gen = gen
-        self.draft = draft
-        self.mode = mode
-        self.afterTurn = afterTurn
-    }
-
-    public var payload: String { rpcPayload(self) }
-}
-
 /// An RPC payload as the worker reads it: JSON with sorted keys.
 internal func rpcPayload(_ request: some Encodable) -> String {
     let encoder = JSONEncoder()
@@ -527,19 +393,11 @@ internal func rpcPayload(_ request: some Encodable) -> String {
     return String(decoding: (try? encoder.encode(request)) ?? Data("{}".utf8), as: UTF8.self)
 }
 
-/// The worker's answer to a review or settings RPC; `seq` is the `ReviewState` that shows what it did.
-public struct ReviewReply: Decodable, Sendable, Equatable {
+/// The worker acknowledges settings and state requests with their generation and sequence.
+public struct WorkerReply: Decodable, Sendable, Equatable {
     public let gen: Int
     public let ok: Bool
     public let seq: Int
-    /// The draft `talk` opened.
-    public let draft: Int?
-    /// The turn number a sent draft got.
-    public let turn: Int?
-    /// On a switch to review: a turn auto mode had already sent after `afterTurn`.
-    public let submitted: Int?
-    /// Why nothing happened: `stale`, `recording`, `finishing`, `draft_open`, `agent_speaking`, `not_review`,
-    /// `unsendable`, `closed`.
     public let error: String?
 
     /// Nil when the payload is not a reply.
