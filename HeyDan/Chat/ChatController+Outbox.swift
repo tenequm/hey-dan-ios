@@ -12,14 +12,6 @@ extension ChatController {
         if queued, tappedActive { keepDeliveringInBackground() }
         return queued
     }
-    func enqueueReply(_ text: String, conversationId: String, entry: Pairings.Entry) async -> Bool {
-        if !ready { await loadTask?.value }
-        guard host == entry.host, pairing?.deviceId == entry.deviceId else { return false }
-        let queued = await enqueue(text: text, attachments: [], conversationId: conversationId)
-        if queued { keepDeliveringInBackground() }
-        return queued
-    }
-
     private func enqueue(text: String, attachments: [StagedAttachment], conversationId: String) async -> Bool {
         guard ready, let host, let pairing else { sendFailure = AppError.transport(.unavailable).message; return false }
         guard text.utf8.count <= Outbox.maximumTextBytes, attachments.count <= Outbox.maximumFiles else {
@@ -81,8 +73,9 @@ extension ChatController {
         for entry in removed { outbox.remove(clientId: entry.request.clientId); durableIDs.remove(entry.request.clientId) }
         let entries = outbox.entries
         guard entries != savedEntries || !removed.isEmpty else { return }
-        try await files.save(entries, host: host, deviceId: pairing.deviceId)
-        savedEntries = entries
+        let token = generation
+        try await files.update(from: savedEntries, to: entries, host: host, deviceId: pairing.deviceId)
+        if token == generation { savedEntries = entries }
         try await files.removeCopies(removed, host: host, deviceId: pairing.deviceId)
     }
     /// Delivery runs in the foreground, and keeps draining under a background task once the app leaves it.
@@ -94,6 +87,15 @@ extension ChatController {
         let runID = UUID()
         runnerID = runID
         runner = Task {
+            do {
+                let replies = try await files.takeDeferredReplies(host: host, deviceId: pairing.deviceId)
+                guard token == generation else { return }
+                for entry in replies where !durableIDs.contains(entry.request.clientId) {
+                    outbox.enqueue(entry)
+                    savedEntries.append(entry)
+                    durableIDs.insert(entry.request.clientId)
+                }
+            } catch { await handle(error, token: token) }
             await deliver(token: token, host: host, deviceId: pairing.deviceId)
             // Only the current runner: a stale one cancelled by a pairing switch must not end the new run's task.
             if token == generation, runnerID == runID {

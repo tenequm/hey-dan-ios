@@ -544,7 +544,7 @@ private final class SaveGate: @unchecked Sendable {
     func release() { released.signal() }
 }
 
-private actor ScriptedAppService: AppService {
+actor ScriptedAppService: AppService {
     let base = FixtureAppService()
     var failures: [String: [AppError]] = [:]
     var sentIDs: [String] = []

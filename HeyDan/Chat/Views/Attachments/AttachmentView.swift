@@ -113,7 +113,7 @@ struct AttachmentView: View {
         }
         .quickLookPreview($previewURL)
         .sheet(isPresented: $sharing) {
-            if let loadedURL { AttachmentShareSheet(url: loadedURL).presentationDetents([.medium, .large]) }
+            if let loadedURL { ActivitySheet(item: loadedURL).presentationDetents([.medium, .large]) }
         }
         .task(id: "\(file.id):\(attempt):\(displayScale)") {
             guard file.kind == .image || localURL != nil || requested else { return }
@@ -157,11 +157,11 @@ struct AttachmentView: View {
     }
 }
 
-private struct AttachmentShareSheet: UIViewControllerRepresentable {
-    let url: URL
+struct ActivitySheet<Item>: UIViewControllerRepresentable {
+    let item: Item
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        UIActivityViewController(activityItems: [item], applicationActivities: nil)
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}

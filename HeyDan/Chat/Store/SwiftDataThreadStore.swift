@@ -131,6 +131,9 @@ actor SwiftDataThreadStore: ThreadStore {
             return ThreadSnapshot()
         }
     }
+    func itemOrders(_ ids: [String], conversationId: String, host: URL, deviceId: String) async throws -> [String: Int64] {
+        try await worker(host: host).itemOrders(ids, conversationId: conversationId, deviceId: deviceId)
+    }
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws {
         let began = ContinuousClock.now
         let worker = try await worker(host: host)
@@ -143,6 +146,13 @@ actor SwiftDataThreadStore: ThreadStore {
 }
 
 @ModelActor actor ThreadStoreWorker {
+    func itemOrders(_ ids: [String], conversationId: String, deviceId: String) throws -> [String: Int64] {
+        let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(predicate: #Predicate {
+            $0.deviceId == deviceId && $0.conversationId == conversationId && $0.kind != "conversation" && ids.contains($0.entityId)
+        }))
+        return Dictionary(uniqueKeysWithValues: records.map { ($0.entityId, $0.order) })
+    }
+
     func load(deviceId: String) throws -> ThreadSnapshot {
         let records = try modelContext.fetch(FetchDescriptor<CachedThreadEntity>(
             predicate: #Predicate { $0.deviceId == deviceId }, sortBy: [SortDescriptor(\.order)]))

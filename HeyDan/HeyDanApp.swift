@@ -63,7 +63,8 @@ struct HeyDanApp: App {
                 .environment(\.pairingConfirmation, $pairedHost)
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     Self.removeLegacyLinks()
-                    ChatController.shared.setActive(phase != .background)
+                    if phase == .active { ChatController.shared.setActive(true) }
+                    if phase == .background { ChatController.shared.setActive(false) }
                     if phase == .active, CallController.shared.openActiveConversation() { pairedHost = nil }
                 }
                 .sensoryFeedback(trigger: CallController.shared.phase) { old, new in

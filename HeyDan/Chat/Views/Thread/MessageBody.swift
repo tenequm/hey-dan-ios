@@ -3,14 +3,17 @@ import MarkdownView
 
 struct MessageBody: View {
     let text: String
+    var offersMessageActions = false
+    @State private var sharing = false
     @Environment(\.theme) private var theme
     @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
     var body: some View {
-        SelectableMarkdown(text: text, theme: markdownTheme)
+        SelectableMarkdown(text: text, theme: markdownTheme, share: offersMessageActions ? { sharing = true } : nil)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityLabel(text)
+            .sheet(isPresented: $sharing) { ActivitySheet(item: text) }
     }
 
     private var markdownTheme: MarkdownTheme {
@@ -54,6 +57,7 @@ struct MessageBody: View {
 private struct SelectableMarkdown: UIViewRepresentable {
     let text: String
     let theme: MarkdownTheme
+    let share: (() -> Void)?
     @Environment(\.openURL) private var openURL
 
     final class Coordinator {
@@ -64,13 +68,15 @@ private struct SelectableMarkdown: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> MarkdownTextView {
-        let view = MarkdownTextView()
+    func makeUIView(context: Context) -> MessageMarkdownView {
+        let view = MessageMarkdownView()
         view.setContentCompressionResistancePriority(.required, for: .vertical)
         return view
     }
 
-    func updateUIView(_ view: MarkdownTextView, context: Context) {
+    func updateUIView(_ view: MessageMarkdownView, context: Context) {
+        view.messageSource = text
+        view.shareMessage = share
         view.linkHandler = { payload, _, _ in
             let url: URL? = switch payload {
             case .url(let url): url
@@ -87,11 +93,27 @@ private struct SelectableMarkdown: UIViewRepresentable {
         }
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: MarkdownTextView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: MessageMarkdownView, context: Context) -> CGSize? {
         if proposal.width == 0 { return .zero }
         if let width = proposal.width, width.isFinite, width > 0 { context.coordinator.width = width }
         let width = context.coordinator.width
         guard width > 0 else { return nil }
         return CGSize(width: width, height: ceil(uiView.boundingSize(for: width).height))
+    }
+}
+
+private final class MessageMarkdownView: MarkdownTextView {
+    var messageSource = ""
+    var shareMessage: (() -> Void)?
+
+    override func textLabelView(_ label: TextLabelView, editMenuForSelection selection: NSRange,
+                                suggestedActions: [UIMenuElement]) -> UIMenu? {
+        guard let shareMessage else { return super.textLabelView(label, editMenuForSelection: selection, suggestedActions: suggestedActions) }
+        let copy = UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [messageSource] _ in
+            UIPasteboard.general.string = messageSource
+        }
+        copy.accessibilityIdentifier = "chat.menu.copy"
+        let share = UIAction(title: "Share", image: UIImage(systemName: "square.and.arrow.up")) { _ in shareMessage() }
+        return UIMenu(children: [copy, share, UIMenu(title: "Selection", children: suggestedActions)])
     }
 }

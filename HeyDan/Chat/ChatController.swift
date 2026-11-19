@@ -13,7 +13,9 @@ import UIKit
         }
         #endif
         Task { @MainActor in _ = Pairings.shared }
-        return controller ?? ChatController(store: SwiftDataThreadStore())
+        let chat = controller ?? ChatController(store: SwiftDataThreadStore())
+        chat.active = UIApplication.shared.applicationState == .active
+        return chat
     }()
     enum ConnectionState: Sendable { case disconnected, connecting, connected, reconnecting }
     private(set) var pairing: PairResponse?
@@ -80,7 +82,7 @@ import UIKit
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var protectedTask: Task<Void, Never>?
 
-    init(service: (any AppService)? = nil, store: any ThreadStore, files: OutboxFile = OutboxFile(), monitorsNetwork: Bool = true) {
+    init(service: (any AppService)? = nil, store: any ThreadStore, files: OutboxFile = .shared, monitorsNetwork: Bool = true) {
         self.service = service ?? SignedClient()
         self.store = store
         self.files = files

@@ -20,6 +20,7 @@ struct ThreadSnapshot: Sendable {
 /// Persistence scoped by host and device, separately from the outbox.
 protocol ThreadStore: Sendable {
     func load(host: URL, deviceId: String) async throws -> ThreadSnapshot
+    func itemOrders(_ ids: [String], conversationId: String, host: URL, deviceId: String) async throws -> [String: Int64]
     func save(_ snapshot: ThreadSnapshot, host: URL, deviceId: String) async throws
     func clear(host: URL, deviceId: String) async throws
 }

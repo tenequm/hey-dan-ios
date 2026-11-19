@@ -16,7 +16,7 @@ final class SignedClient: AppService {
     #endif
 
     init(host: URL = URL(string: "https://app.example.com")!, deviceId: String? = nil,
-         configuration: URLSessionConfiguration = .ephemeral,
+         configuration: URLSessionConfiguration = .ephemeral, requestTimeout: TimeInterval = 20,
          signer: @escaping @Sendable (Data, URL) throws -> Data = { try DeviceKey().sign($0, host: $1) }) {
         #if DEBUG
         _ = Self.launched
@@ -24,7 +24,7 @@ final class SignedClient: AppService {
         self.host = host
         self.deviceId = deviceId
         self.signer = signer
-        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForRequest = requestTimeout
         api = URLSession(configuration: configuration, delegate: TransferDelegate(), delegateQueue: nil)
         let stream = URLSessionConfiguration.ephemeral
         stream.timeoutIntervalForRequest = 60
