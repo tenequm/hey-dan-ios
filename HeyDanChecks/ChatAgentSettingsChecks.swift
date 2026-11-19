@@ -42,11 +42,10 @@ import XCTest
 
         chip.tap()
         app.buttons["Default - Sonnet 5.5"].tap()
-        let inherited = app.buttons["Default"]
-        reveal(inherited, in: app)
-        inherited.tap()
         save(in: app)
-        XCTAssertTrue(chip.wait(for: \.label, toEqual: "Model, Default - Sonnet 5.5, effort Default", timeout: 5))
+        XCTAssertTrue(chip.wait(for: \.label, toEqual: "Model, Default - Sonnet 5.5, effort Extra high", timeout: 5))
+        chip.tap()
+        XCTAssertFalse(app.buttons["Default"].exists)
     }
 
     func testCompactSendsAndRefreshesOnIdle() {

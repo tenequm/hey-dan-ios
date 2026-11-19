@@ -247,7 +247,8 @@ private struct CheckFailure: Error { let label: String }
     #expect(hello.features.contains("agent-status") && hello.features.contains("agent-settings"))
     let status = try fixtureDecode(AgentStatusResponse.self, #require(fixtures["agentStatusResponse"])).status
     #expect(status.agent.model.id == nil)
-    #expect(status.agent.chipLabel == "Default - Sonnet 5.5")
+    #expect(status.agent.chipLabel == "Sonnet 5.5 - High")
+    #expect(status.agent.effort == nil && status.agent.effectiveEffort == "high")
     #expect(status.session.contextTokens == nil)
     let request = try fixtureDecode(AgentSettingsRequest.self, #require(fixtures["agentSettingsRequest"]))
     let saved = try fixtureDecode(AgentSettingsResponse.self, #require(fixtures["agentSettingsResponse"])).agent

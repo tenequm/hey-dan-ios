@@ -207,6 +207,8 @@ nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
         public var model: Model
         public let defaultModel: Model
         public var effort: String?
+        /// The host's level for an agent without its own (`NANOCLAW_DEFAULT_EFFORT`).
+        public let defaultEffort: String?
         public let provider: String?
         public let canEdit: Bool
         public var configUpdatedAt: String?
@@ -215,23 +217,27 @@ nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
             defaultModel.id == nil ? "Provider default" : "Default - " + defaultModel.displayName
         }
 
+        /// The level the agent runs at: its own, else the host default.
+        public var effectiveEffort: String? { effort ?? defaultEffort }
+
         public var chipLabel: String {
-            if model.id == nil { return inheritedLabel }
-            return [model.displayName, effort.map(AgentStatus.effortName)].compactMap { $0 }.joined(separator: " - ")
+            let name = model.id == nil ? (defaultModel.id == nil ? inheritedLabel : defaultModel.displayName) : model.displayName
+            return [name, effectiveEffort.map(AgentStatus.effortName)].compactMap { $0 }.joined(separator: " - ")
         }
 
         public var spokenChipLabel: String {
             let name = model.id == nil ? inheritedLabel : model.displayName
-            return "Model, " + name + ", effort " + (effort.map(AgentStatus.effortName) ?? "Default")
+            return "Model, " + name + (effectiveEffort.map { ", effort " + AgentStatus.effortName($0) } ?? "")
         }
 
         public init(id: String, name: String, model: Model, defaultModel: Model, effort: String?,
-                    provider: String?, canEdit: Bool, configUpdatedAt: String?) {
+                    defaultEffort: String? = nil, provider: String?, canEdit: Bool, configUpdatedAt: String?) {
             self.id = id
             self.name = name
             self.model = model
             self.defaultModel = defaultModel
             self.effort = effort
+            self.defaultEffort = defaultEffort
             self.provider = provider
             self.canEdit = canEdit
             self.configUpdatedAt = configUpdatedAt

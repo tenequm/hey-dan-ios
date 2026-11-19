@@ -56,9 +56,9 @@ struct AgentSettingsSheet: View {
                     }
                 }
                 Section("Effort") {
-                    option("Default", selected: effort == .inherited) { effortChoice = .inherited }
                     ForEach(status.options.efforts, id: \.self) { level in
-                        option(AgentStatus.effortName(level), selected: effort == .value(level)) { effortChoice = .value(level) }
+                        option(AgentStatus.effortName(level), selected: effort == .value(level)
+                            || (effort == .inherited && level == status.agent.defaultEffort)) { effortChoice = .value(level) }
                     }
                 }
                 if let description = status.session.usageDescription() {

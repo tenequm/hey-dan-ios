@@ -117,7 +117,7 @@ actor FixtureAppService: AppService {
 
     private func settings(for agent: Agent) -> AgentStatus.Settings {
         settings[agent.id] ?? .init(id: agent.id, name: agent.name, model: .init(id: nil, label: nil),
-            defaultModel: Self.modelOptions[0], effort: "high", provider: "claude",
+            defaultModel: Self.modelOptions[0], effort: "high", defaultEffort: "high", provider: "claude",
             canEdit: scenario != "read-only", configUpdatedAt: nil)
     }
 
