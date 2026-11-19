@@ -97,7 +97,7 @@ actor FixtureAppService: AppService {
         return Status(kind: .status, conversationId: conversation.id, rev: 1, state: .working, label: "Working", at: 0)
     }
     private var includesQuestion: Bool { !FixtureContent.capturing || scenario == "question" || scenario == "full" }
-    private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.unread) }
+    private var badge: Badge { Badge(kind: .badge, rev: conversation.seq, unreadTotal: conversation.hidden == true ? 0 : conversation.unread) }
     private func event<T: Encodable>(_ kind: Kind, _ value: T, id: Int64? = nil) throws(AppError) -> AppEvent {
         do { return AppEvent(kind: kind, id: id, data: try JSONEncoder().encode(value)) }
         catch { throw .transport(.invalidResponse) }
@@ -107,11 +107,27 @@ actor FixtureAppService: AppService {
     }
     func hello() async throws(AppError) -> HelloResponse {
         HelloResponse(protocol: 1, minProtocol: 1, voiceProtocol: 6,
-            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker"], serverTime: 0)
+            features: scenario == "text-only" ? [] : ["files", "calls", "push", "voice-picker", "agents", "unread"], serverTime: 0)
     }
     func pair(_ request: PairRequest) async throws(AppError) -> PairResponse { Self.pairing }
+    private var candidate: AgentCandidate {
+        AgentCandidate(id: conversation.agent.id, name: conversation.agent.name, chat: "Team", shown: conversation.hidden != true)
+    }
+    func agents() async throws(AppError) -> AgentsResponse { AgentsResponse(agents: [candidate]) }
+    func setAgent(id: String, request: AgentVisibilityRequest) async throws(AppError) -> AgentResponse {
+        guard id == candidate.id else { throw .server(status: 404, body: ErrorBody(error: "not_found", message: "Agent unavailable.")) }
+        if request.shown != candidate.shown {
+            sequence += 1
+            conversation.seq = sequence
+            conversation.hidden = !request.shown
+            try publish(event(.conversation, conversation, id: sequence))
+            if request.shown { try publish(event(.status, status)) }
+            try publish(event(.badge, badge))
+        }
+        return AgentResponse(agent: candidate)
+    }
     func conversations() async throws(AppError) -> ConversationsResponse {
-        ConversationsResponse(conversations: [conversation], statuses: [status], badge: badge, seq: sequence)
+        ConversationsResponse(conversations: candidate.shown ? [conversation] : [], statuses: candidate.shown ? [status] : [], badge: badge, seq: sequence)
     }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage {
         var items = messages.filter { (query.before == nil || $0.order < query.before!) && (query.after == nil || $0.order > query.after!) }.map(ThreadEntity.message)
@@ -147,10 +163,22 @@ actor FixtureAppService: AppService {
         try publish(event(.message, reply, id: sequence))
     }
     func markRead(conversationId: String, request: ReadRequest) async throws(AppError) -> ReadResponse {
-        sequence += 1
-        conversation.seq = sequence
         conversation.readOrder = max(conversation.readOrder, request.order)
         conversation.unread = 0
+        return try publishReadState()
+    }
+    func markUnread(conversationId: String) async throws(AppError) -> ReadResponse {
+        let newest = messages.filter { $0.role == .agent }.map(\.order).max()
+        guard let order = [newest, includesQuestion ? question.order : nil].compactMap({ $0 }).max() else {
+            throw .server(status: 409, body: ErrorBody(error: "nothing_unread", message: "There is nothing to mark unread."))
+        }
+        conversation.readOrder = order - 1
+        conversation.unread = 1
+        return try publishReadState()
+    }
+    private func publishReadState() throws(AppError) -> ReadResponse {
+        sequence += 1
+        conversation.seq = sequence
         try publish(event(.conversation, conversation, id: sequence))
         try publish(event(.badge, badge))
         return ReadResponse(conversation: conversation, badge: badge)
@@ -171,12 +199,12 @@ actor FixtureAppService: AppService {
         let pair = AsyncThrowingStream<AppEvent, any Error>.makeStream()
         let id = UUID()
         var snapshot = [try event(.conversation, conversation, id: conversation.seq)]
-        if includesQuestion { snapshot.append(try event(.question, question, id: question.seq)) }
-        for message in messages { snapshot.append(try event(.message, message, id: message.seq)) }
+        if candidate.shown && includesQuestion { snapshot.append(try event(.question, question, id: question.seq)) }
+        for message in messages where candidate.shown { snapshot.append(try event(.message, message, id: message.seq)) }
         for item in snapshot.sorted(by: { ($0.id ?? 0) < ($1.id ?? 0) }) where (item.id ?? 0) > query.after {
             pair.continuation.yield(item)
         }
-        pair.continuation.yield(try event(.status, status))
+        if candidate.shown { pair.continuation.yield(try event(.status, status)) }
         pair.continuation.yield(try event(.badge, badge))
         pair.continuation.yield(try event(.synchronized, Synchronized(seq: sequence)))
         listeners[id] = pair.continuation

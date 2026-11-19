@@ -178,3 +178,20 @@ private struct CheckFailure: Error { let label: String }
         #expect(try JSONDecoder().decode(CardChart.self, from: JSONEncoder().encode(chart)) == chart)
     }
 }
+
+@Test func agentsAndUnreadWireFixtures() throws {
+    let f = try coreFixtures()
+    let hello = try fixtureDecode(HelloResponse.self, #require(f["hello"]))
+    #expect(hello.features.contains("agents") && hello.features.contains("unread"))
+    let list = try fixtureDecode(AgentsResponse.self, #require(f["agentsResponse"]))
+    #expect(list.agents.contains { $0.chat != nil && $0.shown })
+    let request = try fixtureDecode(AgentVisibilityRequest.self, #require(f["setAgentRequest"]))
+    let response = try fixtureDecode(AgentResponse.self, #require(f["setAgentResponse"]))
+    #expect(response.agent.shown == request.shown)
+    let unread = try fixtureDecode(ReadResponse.self, #require(f["unreadResponse"]))
+    #expect(unread.conversation.unread > 0 && unread.badge.unreadTotal >= unread.conversation.unread)
+    let errors = try #require(f["errors"] as? [String: [String: Any]])
+    let conflict = try #require(errors["nothingUnread"])
+    #expect(conflict["status"] as? Int == 409)
+    #expect(try fixtureDecode(ErrorBody.self, #require(conflict["body"])).error == "nothing_unread")
+}
