@@ -127,7 +127,7 @@ struct MessageRow: View {
             let outgoing = message.role == .user
             VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
                 if outgoing {
-                    if !message.text.isEmpty && !message.files.contains(where: { $0.kind == .audio && ($0.transcript?.text == message.text || $0.transcript == nil) }) {
+                    if !message.text.isEmpty {
                         Text(message.text).textSelection(.enabled).modifier(UserBubble())
                     }
                 } else if let card = visibleCard {
@@ -139,7 +139,7 @@ struct MessageRow: View {
                 }
                 ForEach(message.files, id: \.id) { file in
                     if outgoing, file.kind == .audio {
-                        VoiceMessageView(file: file, durationMs: file.durationMs, messageText: message.text)
+                        VoiceMessageView(file: file, durationMs: file.durationMs)
                             .modifier(UserBubble())
                     } else {
                         AttachmentView(file: file)

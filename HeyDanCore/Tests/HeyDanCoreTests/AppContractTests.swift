@@ -220,3 +220,23 @@ private struct CheckFailure: Error { let label: String }
     let legacy = try fixtureDecode(FileInitRequest.self, #require(fixtures["fileInitRequest"]))
     #expect(legacy.durationMs == nil)
 }
+
+@Test func unknownTranscriptStateKeepsTheVoiceMessage() throws {
+    let fixtures = try coreFixtures()
+    let send = try #require(fixtures["sendResponse"] as? [String: Any])
+    var message = try #require(send["message"] as? [String: Any])
+    let voice = try #require(fixtures["voiceMessages"] as? [String: Any])
+    var file = try #require(voice["pendingFile"] as? [String: Any])
+    file["transcript"] = ["state": "unavailable"]
+    message["text"] = ""
+    message["files"] = [file]
+    let entity = try fixtureDecode(ThreadEntity.self, message)
+    guard case .message(let decoded) = entity else {
+        Issue.record("Voice attachment made its message unreadable")
+        return
+    }
+    let attachment = try #require(decoded.files.first)
+    #expect(attachment.transcript?.state == .unknown("unavailable"))
+    let encoded = try JSONEncoder().encode(attachment.transcript?.state)
+    #expect(try JSONDecoder().decode(String.self, from: encoded) == "unavailable")
+}

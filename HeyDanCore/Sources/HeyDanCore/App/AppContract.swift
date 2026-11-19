@@ -314,7 +314,28 @@ nonisolated public struct FileAttachment: Sendable, Equatable, Codable {
     public var transcript: Transcript?
 
     public struct Transcript: Sendable, Equatable, Codable {
-        public enum State: String, Sendable, Codable { case pending, done, failed }
+        public enum State: RawRepresentable, Sendable, Equatable, Codable {
+            case pending, done, failed
+            case unknown(String)
+
+            public init(rawValue: String) {
+                switch rawValue {
+                case "pending": self = .pending
+                case "done": self = .done
+                case "failed": self = .failed
+                default: self = .unknown(rawValue)
+                }
+            }
+
+            public var rawValue: String {
+                switch self {
+                case .pending: "pending"
+                case .done: "done"
+                case .failed: "failed"
+                case .unknown(let value): value
+                }
+            }
+        }
         public var state: State
         public var text: String?
         public init(state: State, text: String? = nil) {

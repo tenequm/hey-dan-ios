@@ -57,7 +57,9 @@ final class ChatComposerChecks: XCTestCase {
         XCTAssertFalse(app.buttons["chat.voice.play"].exists)
 
         mic.tap()
-        XCTAssertTrue(app.staticTexts["0:03"].waitForExistence(timeout: 10))
+        let status = app.descendants(matching: .any).matching(identifier: "composer.recording.status")
+        XCTAssertTrue(status.matching(NSPredicate(format: "value >= %@", "0:10")).firstMatch.waitForExistence(timeout: 20))
+        XCTAssertEqual(status.firstMatch.label, "Recording")
         send.tap()
         XCTAssertTrue(app.staticTexts["Transcribing..."].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Recorded fixture message."].waitForExistence(timeout: 15))
@@ -67,6 +69,26 @@ final class ChatComposerChecks: XCTestCase {
         XCTAssertTrue(play.wait(for: \.label, toEqual: "Pause voice message", timeout: 5))
         play.tap()
         XCTAssertEqual(play.label, "Play voice message")
+        play.tap()
+        XCTAssertTrue(play.wait(for: \.label, toEqual: "Pause voice message", timeout: 5))
+    }
+
+    @MainActor func testBackgroundStagesVoiceMessage() throws {
+        let app = try launch()
+        app.buttons["composer.record"].tap()
+        let status = app.descendants(matching: .any).matching(identifier: "composer.recording.status")
+        XCTAssertTrue(status.matching(NSPredicate(format: "value >= %@", "0:02")).firstMatch.waitForExistence(timeout: 10))
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
+        app.activate()
+        let remove = app.buttons["composer.remove"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Recording stopped. Send or remove your voice message."].exists)
+        XCTAssertTrue(app.buttons["composer.send"].isEnabled)
+        XCTAssertFalse(app.buttons["chat.voice.play"].exists)
+        remove.tap()
+        XCTAssertTrue(app.buttons["composer.record"].waitForExistence(timeout: 5))
+        XCTAssertFalse(remove.exists)
     }
 
     @MainActor func testFixtureImageAndPDFOpen() throws {

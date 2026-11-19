@@ -23,7 +23,7 @@ struct VoiceWaveform: View {
 
 @MainActor @Observable final class VoiceMessagePlayback: NSObject, AVAudioPlayerDelegate {
     static let shared = VoiceMessagePlayback()
-    var recording = false
+    var recording: VoiceRecording?
     private(set) var fileID: String?
     private(set) var playing = false
     private(set) var loading = false
@@ -31,11 +31,22 @@ struct VoiceWaveform: View {
     private var player: AVAudioPlayer?
     private var task: Task<Void, Never>?
 
+    private var ownsSession = false
+    private var interruption: NotificationCenter.ObservationToken?
+
+    override private init() {
+        super.init()
+        interruption = NotificationCenter.default.addObserver(of: AVAudioSession.sharedInstance(), for: .didBecomeInactive) { [weak self] message in
+            guard case .systemInterruption = message.deactivationResult, let self else { return }
+            recording?.finish(.interrupted)
+            if loading { stop() } else { pause() }
+        }
+    }
+
     func toggle(_ file: FileAttachment) {
-        guard !recording, !CallController.shared.isCallActive else { return }
+        guard recording == nil, !CallController.shared.isCallActive else { return }
         if fileID == file.id, let player {
-            if playing { player.pause(); playing = false }
-            else { playing = player.play() }
+            if playing { pause() } else { play(player, fileID: file.id) }
             return
         }
         stop()
@@ -47,20 +58,43 @@ struct VoiceWaveform: View {
                 try Task.checkCancellation()
                 guard !CallController.shared.isCallActive else { stop(); return }
                 let audio = try AVAudioPlayer(contentsOf: url)
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .default)
                 player = audio
                 audio.delegate = self
-                try session.setActive(true)
-                guard audio.play() else { throw CocoaError(.fileReadUnknown) }
-                playing = true
                 loading = false
+                play(audio, fileID: file.id)
             } catch {
                 guard !Task.isCancelled else { return }
                 stop()
                 failedID = file.id
             }
         }
+    }
+
+    private func play(_ audio: AVAudioPlayer, fileID: String) {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
+            ownsSession = true
+            guard audio.play() else { throw CocoaError(.fileReadUnknown) }
+            playing = true
+        } catch {
+            stop()
+            failedID = fileID
+        }
+    }
+
+    private func pause() {
+        player?.pause()
+        playing = false
+        releaseSession()
+    }
+
+    private func releaseSession() {
+        guard ownsSession else { return }
+        ownsSession = false
+        do { try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+        catch { CallLog.log(.audio, "voice playback release failed", level: .error) }
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -77,9 +111,7 @@ struct VoiceWaveform: View {
         task?.cancel()
         task = nil
         player?.stop()
-        if player != nil, !CallController.shared.isCallActive {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        }
+        releaseSession()
         player = nil
         fileID = nil
         playing = false
@@ -93,7 +125,6 @@ struct VoiceMessageView: View {
     @Environment(\.scenePhase) private var scenePhase
     var file: FileAttachment?
     let durationMs: Int?
-    var messageText = ""
     private let playback = VoiceMessagePlayback.shared
     private var selected: Bool { file != nil && playback.fileID == file?.id }
 
@@ -101,13 +132,13 @@ struct VoiceMessageView: View {
         VStack(alignment: .leading, spacing: theme.space.s1) {
             switch file?.transcript?.state {
             case .done:
-                Text(file?.transcript?.text ?? messageText).textSelection(.enabled)
+                Text(file?.transcript?.text ?? "Voice message").textSelection(.enabled)
             case .failed:
                 Text("Couldn't transcribe. The agent got the audio.").foregroundStyle(theme.color.textTertiary)
             case .pending:
                 Text("Transcribing...").foregroundStyle(theme.color.textTertiary)
-            case nil:
-                Text(messageText.isEmpty ? "Voice message" : messageText)
+            case .unknown, nil:
+                Text("Voice message")
             }
             Button {
                 if let file { playback.toggle(file) }
@@ -130,7 +161,7 @@ struct VoiceMessageView: View {
             .accessibilityLabel(selected && playback.playing ? "Pause voice message" : "Play voice message")
             .accessibilityValue(durationMs.map(voiceDuration) ?? "")
             .accessibilityIdentifier("chat.voice.play")
-            .disabled(file == nil || playback.recording || CallController.shared.isCallActive)
+            .disabled(file == nil || playback.recording != nil || CallController.shared.isCallActive)
             if let file, playback.failedID == file.id {
                 Text("Could not play the recording. Tap play to retry.")
                     .textRole(theme.type.caption).foregroundStyle(theme.color.danger)
@@ -138,6 +169,5 @@ struct VoiceMessageView: View {
         }
         .onDisappear { if selected { playback.stop() } }
         .onChange(of: scenePhase) { if selected && scenePhase == .background { playback.stop() } }
-        .onChange(of: CallController.shared.isCallActive) { if selected && CallController.shared.isCallActive { playback.stop() } }
     }
 }

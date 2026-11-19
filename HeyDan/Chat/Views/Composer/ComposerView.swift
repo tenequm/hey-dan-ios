@@ -39,6 +39,7 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !attachments.isEmpty {
                 StagedAttachmentTray(attachments: attachments) { attachment in
+                    importFailure = nil
                     attachments.removeAll { $0.fileURL == attachment.fileURL }
                     AttachmentStaging.remove(attachment)
                     draftFiles.urls.remove(attachment.fileURL)
@@ -55,15 +56,18 @@ struct ComposerView: View {
                     .padding(.horizontal, theme.space.s3).padding(.top, theme.space.s2)
             }
             if recording {
-                VoiceRecorder(dismiss: { reason in
+                VoiceRecorder { result in
                     recording = false
-                    importFailure = reason
-                }, send: { attachment in
-                    recording = false
-                    attachments = [attachment]
-                    draftFiles.urls.insert(attachment.fileURL)
-                    queueMessage()
-                })
+                    switch result {
+                    case .dismissed(let note):
+                        importFailure = note
+                    case .send(let attachment), .staged(let attachment):
+                        attachments.append(attachment)
+                        draftFiles.urls.insert(attachment.fileURL)
+                        if case .send = result { queueMessage() }
+                        else { importFailure = "Recording stopped. Send or remove your voice message." }
+                    }
+                }
             } else {
                 composerControls
             }
