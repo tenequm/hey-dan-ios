@@ -1,3 +1,4 @@
+import AppIntentsTesting
 import XCTest
 
 @MainActor final class ChatCallChecks: XCTestCase {
@@ -9,18 +10,6 @@ import XCTest
         let call = app.buttons["chat.call"]
         XCTAssertTrue(call.waitForExistence(timeout: 10))
         return (app, call)
-    }
-
-    func testSavedLineOptionsOpenSettings() {
-        let app = XCUIApplication()
-        app.launchEnvironment["HEYDAN_PREVIEW_LINES"] = "Stan"
-        app.launchForChecks()
-        XCTAssertTrue(app.staticTexts["Stan"].waitForExistence(timeout: 10))
-        app.buttons["controls.options"].tap()
-        let settings = app.buttons["options.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.tap()
-        XCTAssertTrue(app.buttons["Pair a host"].waitForExistence(timeout: 5))
     }
 
     func testFixtureCallRefusal() {
@@ -41,12 +30,6 @@ import XCTest
         host.tap()
         XCTAssertTrue(app.buttons["Unpair"].waitForExistence(timeout: 5))
         app.buttons["chat.settings.host.back"].tap()
-        let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Voice lines")).firstMatch
-        lines.tap()
-        XCTAssertTrue(app.staticTexts["Saved lines"].waitForExistence(timeout: 5))
-        XCTAssertFalse(host.exists)
-        XCTAssertFalse(lines.exists)
-        app.buttons["close"].tap()
         // One control per tap: a tap on Voice opens the picker and nothing else in its row.
         app.buttons["Voice: Taylor"].tap()
         XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 10))
@@ -81,24 +64,86 @@ import XCTest
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }
 
-    func testFixtureCallCoverShowsTheRefusal() {
-        let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1"])
+    func testCallStaysInThread() {
+        let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"])
+        let feed = app.scrollViews["chat.thread"]
+        let composer = app.descendants(matching: .any)["composer.text"].firstMatch
         call.tap()
-        let refusal = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@", "calls are unavailable in this preview")).firstMatch
-        XCTAssertTrue(refusal.waitForExistence(timeout: 30))
-        let close = app.buttons["chat.call.close"]
-        XCTAssertTrue(close.isHittable)
-        XCTAssertEqual(close.label, "Close")
-        XCTAssertGreaterThanOrEqual(close.frame.height, 44)
-        XCTAssertTrue(app.buttons["keys.call"].isEnabled)
+        let end = app.buttons["keys.call"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        XCTAssertTrue(feed.exists)
+        XCTAssertTrue(app.navigationBars["Taylor"].exists)
+        XCTAssertTrue(feed.descendants(matching: .any)["chat.call.caption"].firstMatch.exists)
+        XCTAssertFalse(call.exists)
+        XCTAssertFalse(composer.exists)
+        shot("thread-call-mode")
+        app.buttons["controls.mute"].tap()
+        XCTAssertEqual(app.buttons["controls.mute"].label, "Unmute")
         app.buttons["controls.options"].tap()
-        XCTAssertFalse(app.buttons["options.settings"].exists)
+        XCTAssertTrue(app.switches["options.typing"].firstMatch.waitForExistence(timeout: 5))
+        shot("thread-call-options")
+        XCTAssertTrue(app.buttons["options.voice"].isEnabled)
         app.buttons["options.voice"].tap()
         XCTAssertTrue(app.staticTexts["picker.title"].waitForExistence(timeout: 5))
         app.buttons["picker.close"].tap()
-        close.tap()
+        app.navigationBars["Taylor"].buttons.element(boundBy: 0).tap()
+        let activeRow = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(activeRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(activeRow.label.contains("On call"))
+        app.buttons["chat.conversation.conv_second"].tap()
+        XCTAssertTrue(call.waitForExistence(timeout: 5))
+        XCTAssertFalse(call.isEnabled)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Taylor"].exists)
+        end.tap()
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(call.exists)
+        XCTAssertFalse(app.buttons["Call again"].exists)
+    }
+
+    func testDefaultAgentControlOpensItsThread() async throws {
+        let app = XCUIApplication()
+        // The id of the second fixture agent in the same preference the Settings picker writes.
+        app.launchArguments = ["-defaultCallAgent", "D74EE161-D39B-8676-8284-073F5027332F"]
+        app.launchEnvironment = ["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"]
+        app.launchForChecks()
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
+        XCUIDevice.shared.press(.home)
+        let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
+        try await IntentDefinitions(bundleIdentifier: bundle).intents["CallDefaultAgentIntent"].makeIntent().run()
+        app.activate()
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
-        XCTAssertTrue(call.isHittable)
-        XCTAssertTrue(call.isEnabled)
+        XCTAssertTrue(app.navigationBars["Alex"].exists)
+        XCTAssertTrue(app.buttons["keys.call"].exists)
+        app.buttons["keys.call"].tap()
+    }
+
+    func testBackgroundControlReachesPairedCallAdmission() async throws {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])
+        XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
+        XCUIDevice.shared.press(.home)
+        let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
+        do {
+            try await IntentDefinitions(bundleIdentifier: bundle).intents["CallDefaultAgentIntent"].makeIntent().run()
+            XCTFail("The fixture host refuses admission")
+        } catch {}
+        app.activate()
+        let reason = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "calls are unavailable in this preview"))
+        XCTAssertTrue(reason.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Call again"].exists)
+    }
+
+    func testFailureOffersCallAgainInThread() {
+        let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1"])
+        call.tap()
+        let retry = app.buttons["Call again"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        let reason = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "calls are unavailable in this preview"))
+        XCTAssertTrue(reason.firstMatch.exists)
+        XCTAssertTrue(app.scrollViews["chat.thread"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["composer.text"].firstMatch.exists)
+        XCTAssertTrue(retry.isEnabled)
     }
 }

@@ -9,7 +9,6 @@ struct PairedSettingsSection: View {
     @State private var notifications = false
     var close: (() -> Void)?
     private var pairings: Pairings { .shared }
-    private var call: CallController { .shared }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,19 +40,6 @@ struct PairedSettingsSection: View {
                                     AgentVoiceRow(agent: agent, entry: entry)
                                 }
                             }
-                        }
-                    }
-                    SettingsSection("Calls") {
-                        NavigationLink { VoiceLinesSettings(showsPairedHosts: false, onCall: close) } label: {
-                            SettingsRow(title: "Voice lines", icon: "phone", detail: "\(call.lines.entries.count)", navigates: true)
-                        }
-                        Menu {
-                            Button("Hands-free") { Task { await call.setTurnMode(.auto) } }
-                            Button("Manual") { Task { await call.setTurnMode(.review) } }
-                                .disabled(!call.review.available && call.isCallActive)
-                        } label: {
-                            SettingsRow(title: "Turn mode", icon: "hand.raised",
-                                        detail: call.review.mode == .auto ? "Hands-free" : "Manual", navigates: true)
                         }
                     }
                 }

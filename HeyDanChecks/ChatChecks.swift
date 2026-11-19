@@ -219,11 +219,11 @@ final class ChatChecks: XCTestCase {
         XCTAssertTrue(call.waitForExistence(timeout: 10))
         XCTAssertTrue(call.isEnabled)
         call.tap()
-        let close = app.buttons["chat.call.close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 20))
-        let until = Date().addingTimeInterval(80)
-        while Date() < until { RunLoop.current.run(until: Date().addingTimeInterval(1)) }
-        close.tap()
+        let end = app.buttons["keys.call"]
+        XCTAssertTrue(end.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.scrollViews["chat.thread"].exists)
+        XCTAssertTrue(end.waitForNonExistence(timeout: 80))
+        XCTAssertTrue(app.descendants(matching: .any)["composer.text"].firstMatch.exists)
         XCTAssertTrue(app.scrollViews["chat.thread"].waitForExistence(timeout: 10))
     }
 

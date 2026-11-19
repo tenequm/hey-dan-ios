@@ -324,19 +324,6 @@ final class HeyDanChecks: XCTestCase {
         shot("gender-gemini-female")
     }
 
-    func testCallOptions() throws {
-        for phase in ["waiting", "manual", "connecting"] {
-            fixture("saved", voice: "pending", phase: phase)
-            XCTAssertTrue(element(ID.controlsMode).waitForExistence(timeout: 5))
-            element(ID.controlsOptions).tap()
-            XCTAssertTrue(element(ID.optionsTyping).waitForExistence(timeout: 5))
-            XCTAssertEqual(element(ID.optionsTyping).isEnabled, phase != "connecting")
-            XCTAssertTrue(app.staticTexts["Call options"].exists)
-            assertText(ID.optionsVoice, "Alnilam")
-            shot("options-\(phase)")
-        }
-    }
-
     func testVoicePickerSaves() throws {
         guard let restore = env["HEYDAN_TTS_RESTORE"], !restore.isEmpty,
               let data = restore.data(using: .utf8),
@@ -465,7 +452,7 @@ final class HeyDanChecks: XCTestCase {
     }
 
     private enum ID {
-        static let controlsMode = "controls.mode", optionsVoice = "options.voice",
+        static let optionsVoice = "options.voice",
             controlsOptions = "controls.options", keysCall = "keys.call",
             optionsTyping = "options.typing", pickerTitle = "picker.title",
             pickerClose = "picker.close", pickerSaved = "picker.saved", pickerLive = "picker.live", pickerNext = "picker.next",

@@ -6,6 +6,19 @@ import WidgetKit
 struct HeyDanActivityBundle: WidgetBundle {
     var body: some Widget {
         CallActivityWidget()
+        CallDefaultAgentControl()
+    }
+}
+
+struct CallDefaultAgentControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "CallDefaultAgent") {
+            ControlWidgetButton(action: CallDefaultAgentIntent()) {
+                Label("Call Default agent", systemImage: "phone")
+            }
+        }
+        .displayName("Call Default agent")
+        .description("Start a call with your default paired agent.")
     }
 }
 

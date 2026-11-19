@@ -48,12 +48,16 @@ struct HeyDanApp: App {
                 #endif
             }
                 .environment(\.pairingConfirmation, $pairedHost)
-                .onChange(of: scenePhase, initial: true) { _, phase in ChatController.shared.setActive(phase != .background) }
-                .fullScreenCover(isPresented: Binding(
-                    get: { CallController.shared.showsPairedCall },
-                    set: { if $0 { CallController.shared.showsPairedCall = true } else { CallController.shared.closePairedCall() } }
-                )) {
-                    if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
+                .onChange(of: scenePhase, initial: true) { _, phase in
+                    ChatController.shared.setActive(phase != .background)
+                    if phase == .active, CallController.shared.openActiveConversation() { pairedHost = nil }
+                }
+                .sensoryFeedback(trigger: CallController.shared.phase) { old, new in
+                    switch new {
+                    case .live where old == .connecting: .success
+                    case .ended(let ending): ending.cause == .caller ? .impact(weight: .light) : .error
+                    default: nil
+                    }
                 }
                 .environment(\.theme, Theme.dark)
                 .preferredColorScheme(.dark)
@@ -83,15 +87,7 @@ struct HeyDanApp: App {
         } else if ChatController.shared.pairing != nil {
             ConversationList()
         } else {
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["HEYDAN_SHOW_PAIRING"] == "1"
-                || ProcessInfo.processInfo.environment["HEYDAN_PAIR_LINK"] != nil
-                || ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_CHAT"] == "1" {
-                PairingView()
-            } else { ContentView() }
-            #else
-            ContentView()
-            #endif
+            PairingView()
         }
     }
 
@@ -724,6 +720,20 @@ enum IntentCall {
             .intent, "wait done phase=\(controller.phase.logName) ms=\(CallLog.ms(since: began))", level: failed == nil ? .default : .error
         )
         if let failed { throw notStarted(failed, inBackground) }
+    }
+
+    static func run(agentID: UUID?, inBackground: Bool) async throws {
+        if CallController.shared.openActiveConversation() { return }
+        try await readyPairings()
+        let pairings = Pairings.shared
+        let preferred = agentID ?? UserDefaults.standard.string(forKey: "defaultCallAgent").flatMap(UUID.init(uuidString:))
+        let automatic = pairings.active.flatMap { entry in
+            entry.agents.first.map { PairedAgentID.make(host: entry.host, agentId: $0.id) }
+        }
+        guard let id = preferred ?? automatic, pairings.entries.contains(where: { entry in
+            entry.features.contains("calls") && entry.agents.contains { PairedAgentID.make(host: entry.host, agentId: $0.id) == id }
+        }) else { throw CallNotStarted(message: "Choose an available paired agent in Settings or Shortcuts.") }
+        try await run(lineID: id, inBackground: inBackground)
     }
 
     static func readyPairings() async throws {

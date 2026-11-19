@@ -15,7 +15,23 @@ final class CallController: NSObject {
     static let shared = CallController()
 
     private(set) var pairedCallTarget: CallTarget?
-    var showsPairedCall = false
+    private(set) var captionOrder: Int64 = 0
+
+    func matches(_ target: PairedCallTarget) -> Bool {
+        guard let paired = pairedCallTarget?.paired else { return false }
+        return paired.host == target.host && paired.deviceId == target.deviceId && paired.conversation.id == target.conversation.id
+    }
+
+    @discardableResult
+    func openActiveConversation() -> Bool {
+        guard isCallActive, let paired = pairedCallTarget?.paired,
+              Pairings.shared.entries.contains(where: { $0.host == paired.host && $0.deviceId == paired.deviceId }) else { return false }
+        if Pairings.shared.active?.host != paired.host {
+            do { try Pairings.shared.setActive(host: paired.host) } catch { return false }
+        }
+        ChatController.shared.openConversation(paired.conversation.id)
+        return true
+    }
 
     enum Phase: Equatable {
         case idle
@@ -92,6 +108,9 @@ final class CallController: NSObject {
     private(set) var liveVoice: CallVoiceState?
 
     #if DEBUG && targetEnvironment(simulator)
+    private var fixtureCall: Bool {
+        call?.target.service is FixtureAppService && ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"] == "1"
+    }
     private enum PreviewVoice: String { case pending, active, ended, refused }
     private var previewVoice: PreviewVoice?
     private var previewVoiceUpdate: Task<Void, Never>?
@@ -287,16 +306,20 @@ final class CallController: NSObject {
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
         pairedCallTarget = target.paired == nil ? nil : target
-        showsPairedCall = target.paired != nil
         call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
         liveVoice = nil
         if let paired = target.paired { agentName = paired.conversation.agent.name }
         phase = .connecting
+        openActiveConversation()
+        captionOrder = ChatController.shared.thread.compactMap(\.order).max() ?? target.paired?.conversation.readOrder ?? 0
         transcript = Transcript()
         commands = nil
         commandWords = .builtIn
-        editReview { $0.startCall() }
+        editReview {
+            if target.paired != nil { $0 = ReviewSession(pick: .auto) }
+            $0.startCall()
+        }
         if target.line != nil {
             trace(.call, "claim line=\(Self.short(shownLineID)) mode=\(reviewSession.pick.rawValue) paired=false")
         } else {
@@ -318,6 +341,13 @@ final class CallController: NSObject {
         #endif
         // Manual never opens the microphone before talk: the track is published muted.
         if review.mode == .review { isMuted = true }
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall {
+            phase = .live(.speaking)
+            transcript.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now)
+            return id
+        }
+        #endif
         await place(id, on: target)
         return id
     }
@@ -388,6 +418,9 @@ final class CallController: NSObject {
 
     func hangUp() {
         guard let id = call?.id else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall { return finish(id, .byCaller, endedBy: nil) }
+        #endif
         trace(.call, "hangup asked")
         Task {
             do { try await callKit.request(CXTransaction(action: CXEndCallAction(call: id))) } catch {
@@ -400,6 +433,9 @@ final class CallController: NSObject {
 
     func setMuted(_ muted: Bool) {
         guard let id = call?.id else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall { isMuted = muted; return }
+        #endif
         trace(.call, "mute asked muted=\(muted)")
         Task { try? await callKit.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) }
     }
@@ -666,22 +702,6 @@ final class CallController: NSObject {
         isMuted = false
         lastEnded = (id, ending)
         phase = .ended(ending)
-        if ended.target.paired != nil, !showsPairedCall { showSavedLine() }
-    }
-
-    /// Dismisses a paired call's screen. Once that call is over, the root screen is about the saved line again: its
-    /// name, an idle phase and an empty transcript, so its Call key and its words agree.
-    func closePairedCall() {
-        showsPairedCall = false
-        if !isCallActive { showSavedLine() }
-    }
-
-    private func showSavedLine() {
-        showLine(shownLineID.flatMap(lines.entry))
-        if case .ended = phase {
-            phase = .idle
-            transcript = Transcript()
-        }
     }
 
     private func endOnHost(_ target: CallTarget, callId: String, reason: VoiceLine.EndReason? = nil) {
@@ -1162,6 +1182,7 @@ extension CallController {
     /// Hands-free or Manual. Outside a call it is only the pick for the next one; mid-call the worker has to take it,
     /// and then it is the pick too.
     func setTurnMode(_ mode: TurnMode) async {
+        if call?.target.paired != nil { return }
         guard let id = call?.id else {
             if editReview({ $0.pickMode(mode) }) {
                 TurnModeStore.save(mode)

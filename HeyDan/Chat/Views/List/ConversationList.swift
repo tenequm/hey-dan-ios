@@ -64,7 +64,7 @@ struct ConversationList: View {
                                     .padding(.bottom, theme.space.s1_5)
                                     ForEach(conversations, id: \.id) { conversation in
                                         Button { chat.openConversation(conversation.id) } label: {
-                                            ConversationRow(conversation: conversation, status: chat.statuses[conversation.id])
+                                            ConversationRow(conversation: conversation, status: chat.statuses[conversation.id], onCall: onCall(conversation))
                                         }
                                         .buttonStyle(.plain)
                                         .opacity(chat.connectionState == .reconnecting ? 0.55 : 1)
@@ -113,6 +113,12 @@ struct ConversationList: View {
         }
         .padding(.leading, theme.space.s5).padding(.trailing, theme.space.s4)
         .padding(.vertical, theme.space.s1_5)
+    }
+
+    private func onCall(_ conversation: Conversation) -> Bool {
+        guard let host = chat.host, let pairing = chat.pairing else { return false }
+        let target = PairedCallTarget(host: host, deviceId: pairing.deviceId, conversation: conversation)
+        return CallController.shared.isCallActive && CallController.shared.matches(target)
     }
 
     private var connectionNotice: String {
@@ -193,6 +199,7 @@ struct ConversationRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let conversation: Conversation
     var status: Status?
+    var onCall = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: theme.space.s1) {
@@ -216,7 +223,9 @@ struct ConversationRow: View {
     }
 
     @ViewBuilder private var trailing: some View {
-        if let status, status.state == .working {
+        if onCall {
+            Label("On call", systemImage: "phone.fill").foregroundStyle(theme.color.accentText)
+        } else if let status, status.state == .working {
             HStack(spacing: theme.space.s1) {
                 if reduceMotion { Image(systemName: "circle.dashed") }
                 else { ProgressView().controlSize(.mini).tint(theme.color.statusWorking) }
@@ -236,7 +245,8 @@ struct ConversationRow: View {
 
     private var accessibilitySummary: String {
         var parts = [conversation.agent.name]
-        if status?.state == .working { parts.append(status?.label ?? "Working") }
+        if onCall { parts.append("On call") }
+        else if status?.state == .working { parts.append(status?.label ?? "Working") }
         else if status?.state == .waiting { parts.append("Input") }
         else if conversation.unread > 0, conversation.lastMessage?.role == .agent { parts.append("Done") }
         if let preview = conversation.lastMessage?.preview { parts.append(preview) }

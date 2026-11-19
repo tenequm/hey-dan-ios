@@ -17,6 +17,26 @@ private final class FixtureBundle {}
     private let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
         agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
 
+    func testLiveCaptionYieldsToTheHostTurn() {
+        var transcript = Transcript()
+        let start = Date(timeIntervalSince1970: 100)
+        transcript.caption(segment: "one", text: "Ready", isFinal: false, fromCaller: true, at: start)
+        var message = Message(kind: .message, id: "first", conversationId: conversation.id, order: 8, seq: 10,
+                              role: .user, text: "Ready?", files: [], reactions: [], voice: .caller, createdAt: 100_001)
+        func visible() -> String? { transcript.liveCaption(in: [.entity(.message(message))], after: 7)?.text }
+        XCTAssertNil(visible())
+        message.order = 7
+        XCTAssertEqual(visible(), "Ready")
+        message.order = 8
+        message.voice = .spoken
+        XCTAssertEqual(visible(), "Ready")
+        message.createdAt = 99_900
+        transcript.caption(segment: "two", text: "Ready", isFinal: true, fromCaller: false, at: start)
+        XCTAssertNil(visible())
+        transcript.caption(segment: "three", text: "Ready", isFinal: true, fromCaller: false, at: start.addingTimeInterval(2))
+        XCTAssertEqual(visible(), "Ready")
+    }
+
     /// The signed start, end and cancel as the contract fixtures write them, and the fixture grant decoded.
     func testPairedRequestsMatchTheContract() async throws {
         let grantBody = try fixture("callGrant")
