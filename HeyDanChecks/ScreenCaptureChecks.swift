@@ -138,18 +138,15 @@ import XCTest
         capture("thread-composing", showing: field)
     }
 
-    func testCallCover() {
-        let session = ScreenCaptureSession()
+    func testThreadCall() {
+        let session = ScreenCaptureSession(environment: ["HEYDAN_FIXTURE_LIVE_CALL": "1"])
         defer { session.finish() }
-        for phase in ["connecting", "speaking", "failed", "listening", "thinking", "muted", "reconnecting"] {
-            session.show("call", phase: phase)
-            capture(phase == "speaking" ? "call-live" : "call-" + phase, showing: session.app.buttons["chat.call.close"])
-            if phase == "speaking" {
-                session.app.buttons["controls.options"].tap()
-                capture("call-options", showing: session.app.switches["options.typing"].firstMatch)
-                session.app.buttons["Close"].firstMatch.tap()
-            }
-        }
+        session.openThread("spoken")
+        let app = session.app
+        app.buttons["chat.call"].tap()
+        capture("thread-call", showing: app.buttons["keys.call"])
+        app.buttons["controls.options"].tap()
+        capture("thread-call-options", showing: app.switches["options.typing"].firstMatch)
     }
 
     func testLockScreenNotification() {
@@ -181,15 +178,15 @@ import XCTest
         app.launchForChecks()
     }
 
-    func show(_ family: String, scenario: String? = nil, phase: String? = nil) {
+    func show(_ family: String, scenario: String? = nil) {
         let id = UUID().uuidString
-        let fields = ["id": id, "family": family, "scenario": scenario, "phase": phase]
+        let fields = ["id": id, "family": family, "scenario": scenario]
         XCTAssertNoThrow(try JSONEncoder().encode(fields).write(to: request, options: .atomic))
         let ready = request.appendingPathExtension("ready")
         let deadline = Date.now.addingTimeInterval(10)
         while (try? String(contentsOf: ready, encoding: .utf8)) != id {
             guard Date.now < deadline else {
-                XCTFail("Missing fixture: \(family)/\(scenario ?? phase ?? "default")")
+                XCTFail("Missing fixture: \(family)/\(scenario ?? "default")")
                 return
             }
             RunLoop.current.run(until: Date.now.addingTimeInterval(0.05))

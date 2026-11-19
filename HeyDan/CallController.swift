@@ -15,7 +15,24 @@ final class CallController: NSObject {
     static let shared = CallController()
 
     private(set) var pairedCallTarget: CallTarget?
-    var showsPairedCall = false
+    private(set) var captionOrder: Int64 = 0
+
+    func matches(_ target: PairedCallTarget) -> Bool {
+        guard let paired = pairedCallTarget?.paired else { return false }
+        return paired.host == target.host && paired.deviceId == target.deviceId && paired.conversation.id == target.conversation.id
+    }
+
+    @discardableResult
+    func openActiveConversation() -> Bool {
+        guard isCallActive, let paired = pairedCallTarget?.paired,
+              Pairings.shared.entries.contains(where: { $0.host == paired.host && $0.deviceId == paired.deviceId }) else { return false }
+        if Pairings.shared.active?.host != paired.host {
+            do { try Pairings.shared.setActive(host: paired.host) } catch { return false }
+        }
+        ChatController.shared.openConversation(paired.conversation.id)
+        return true
+    }
+
 
     enum Phase: Equatable {
         case idle
@@ -185,12 +202,13 @@ final class CallController: NSObject {
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
         pairedCallTarget = target
-        showsPairedCall = true
         call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
         liveVoice = nil
         agentName = target.paired.conversation.agent.name
         phase = .connecting
+        openActiveConversation()
+        captionOrder = ChatController.shared.thread.compactMap(\.order).max() ?? target.paired.conversation.readOrder
         transcript = Transcript()
         commands = nil
         commandWords = .builtIn
@@ -202,6 +220,13 @@ final class CallController: NSObject {
                 try? await Task.sleep(for: .seconds(seconds))
                 if self?.call?.id == id { self?.hangUp() }
             }
+        }
+        #endif
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall {
+            phase = .live(.speaking)
+            transcript.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now)
+            return id
         }
         #endif
         await place(id)
@@ -243,8 +268,17 @@ final class CallController: NSObject {
         return lastEnded.ending
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    private var fixtureCall: Bool {
+        call?.target.service is FixtureAppService && ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"] == "1"
+    }
+    #endif
+
     func hangUp() {
         guard let id = call?.id else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall { return finish(id, .byCaller, endedBy: nil) }
+        #endif
         trace(.call, "hangup asked")
         Task {
             do { try await callKit.request(CXTransaction(action: CXEndCallAction(call: id))) } catch {
@@ -257,6 +291,9 @@ final class CallController: NSObject {
 
     func setMuted(_ muted: Bool) {
         guard let id = call?.id else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall { isMuted = muted; return }
+        #endif
         trace(.call, "mute asked muted=\(muted)")
         Task { try? await callKit.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) }
     }
@@ -512,10 +549,6 @@ final class CallController: NSObject {
         isMuted = false
         lastEnded = (id, ending)
         phase = .ended(ending)
-    }
-
-    func closePairedCall() {
-        showsPairedCall = false
     }
 
     @ObservationIgnored private var hostEnd: Task<Void, Never>?

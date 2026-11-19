@@ -9,6 +9,7 @@ struct ComposerView: View {
     let send: (String, [StagedAttachment]) async -> Bool
     /// Why the last send did not queue.
     var failure: String? = nil
+    var isInCall = false
     @State var text = ""
     @State var attachments: [StagedAttachment] = []
     @State private var draftFiles = AttachmentDraftFiles()
@@ -31,6 +32,10 @@ struct ComposerView: View {
     }
 
     var body: some View {
+        if !isInCall { composer }
+    }
+
+    private var composer: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !attachments.isEmpty {
                 StagedAttachmentTray(attachments: attachments) { attachment in

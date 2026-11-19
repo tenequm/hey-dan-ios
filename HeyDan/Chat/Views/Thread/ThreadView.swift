@@ -9,16 +9,29 @@ struct ThreadView: View {
     @State private var answerFailure: (questionID: String, message: String)?
     private var live: Conversation { chat.conversation(conversation.id) ?? conversation }
 
+    private var call: CallController { .shared }
+    private var target: PairedCallTarget? {
+        guard let host = chat.host, let device = chat.pairing?.deviceId else { return nil }
+        return PairedCallTarget(host: host, deviceId: device, conversation: live)
+    }
+
+    private var callTarget: CallTarget? {
+        guard let target, call.matches(target) else { return nil }
+        return call.pairedCallTarget
+    }
+
     var body: some View {
+        let activeTarget = call.isCallActive ? callTarget : nil
         ThreadContent(
             rows: chat.rows,
             agentName: conversation.agent.name,
-            status: chat.statuses[conversation.id],
+            status: activeTarget == nil ? chat.statuses[conversation.id] : nil,
+            caption: activeTarget == nil ? nil : call.transcript.liveCaption(in: chat.rows, after: call.captionOrder),
             outboxStates: chat.outboxStates,
             hasMoreBefore: chat.hasMoreBefore,
             errorMessage: answerFailure?.message,
             errorQuestionID: answerFailure?.questionID,
-            active: scenePhase == .active && !CallController.shared.showsPairedCall,
+            active: scenePhase == .active,
             answer: { id, value in
                 answerFailure = nil
                 Task { answerFailure = await chat.answer(questionId: id, value: value).map { (id, $0) } }
@@ -35,10 +48,31 @@ struct ThreadView: View {
             }
         }
         .safeAreaBar(edge: .bottom) {
-            ComposerView(send: { text, attachments in
-                await chat.send(text: text, attachments: attachments)
-            }, failure: chat.sendFailure)
-            .id(conversation.id)
+            VStack(spacing: 0) {
+                if let activeTarget {
+                    ThreadCallBar(target: activeTarget)
+                } else if callTarget != nil, case let .ended(ending) = call.phase, ending.cause != .caller, let target {
+                    HStack {
+                        Label(ending.message, systemImage: "exclamationmark.circle")
+                        Spacer()
+                        Button("Call again") {
+                            Task { _ = await call.start(target: CallTarget(paired: target, service: chat.service)) }
+                        }
+                        .disabled(!live.canCall || !chat.features.contains("calls"))
+                    }
+                    .textRole(theme.type.footnote, theme.weight.medium)
+                    .foregroundStyle(theme.color.danger)
+                    .padding(.vertical, theme.space.s3).padding(.horizontal, theme.space.s3_5)
+                    .background(theme.color.dangerSurface, in: RoundedRectangle(cornerRadius: theme.radius.l))
+                    .overlay { RoundedRectangle(cornerRadius: theme.radius.l).strokeBorder(theme.color.dangerBorder).allowsHitTesting(false) }
+                    .padding(.horizontal, theme.space.s3).padding(.bottom, theme.space.s1_5)
+                }
+                // Keep the draft and its staged files alive across a call.
+                ComposerView(send: { text, attachments in
+                    await chat.send(text: text, attachments: attachments)
+                }, failure: chat.sendFailure, isInCall: activeTarget != nil)
+                .id(conversation.id)
+            }
         }
         .safeAreaBar(edge: .top) {
             if chat.features.contains("calls"), !live.canCall, let refusal = live.callRefusal {
@@ -56,13 +90,21 @@ struct ThreadView: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
                     Text(conversation.agent.name).textRole(theme.type.headline, theme.weight.semibold)
-                    if let host = chat.host?.host() {
+                    if activeTarget != nil {
+                        HStack(spacing: 0) {
+                            Text("On call · ")
+                            CallElapsed(since: call.liveSince)
+                        }
+                        .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
+                    } else if let host = chat.host?.host() {
                         Text(host).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
                     }
                 }
                 .lineLimit(1)
             }
-            ToolbarItemGroup(placement: .topBarTrailing) { ThreadCallButton(conversation: conversation) }
+            if activeTarget == nil {
+                ToolbarItemGroup(placement: .topBarTrailing) { ThreadCallButton(conversation: conversation) }
+            }
         }
         .tint(theme.color.accentText)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
@@ -74,6 +116,7 @@ struct ThreadContent: View {
     let rows: [ThreadRow]
     var agentName: String?
     var status: Status?
+    var caption: Transcript.Line?
     var outboxStates: [String: Outbox.State] = [:]
     var hasMoreBefore = false
     var errorMessage: String?
@@ -119,6 +162,7 @@ struct ThreadContent: View {
                     case .entity(.unknown): EmptyView()
                     }
                 }
+                if let caption { LiveCaptionRow(line: caption) }
                 if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()

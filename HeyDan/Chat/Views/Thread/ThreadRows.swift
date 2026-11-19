@@ -54,6 +54,57 @@ private struct UserBubble: ViewModifier {
     }
 }
 
+extension Transcript {
+    func liveCaption(in rows: [ThreadRow], after order: Int64) -> Line? {
+        guard let line = lines.last, line.kind == .caption, !line.unspoken, !line.wakeOnly,
+              line.mark == nil || line.mark == .sent else { return nil }
+        let speaker: Voice = line.speaker == .caller ? .caller : .spoken
+        // The chat and the room deliver independently, and a host message can contain several caption segments.
+        func words(_ text: String) -> String {
+            text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: " ").lowercased()
+        }
+        let caption = words(line.text)
+        var matchingMessages = 0
+        for row in rows.reversed() {
+            guard case .entity(.message(let message)) = row, message.order > order else { continue }
+            let tagged = message.voice == speaker
+            // A Jev agent's saved reply has no spoken tag. Only its words can identify that reply.
+            guard tagged || (line.speaker == .agent && message.role == .agent && message.voice == nil) else { continue }
+            if tagged, Double(message.createdAt) / 1000 >= line.at.timeIntervalSince1970 { return nil }
+            if !caption.isEmpty, (" " + words(message.text) + " ").contains(" " + caption + " ") { matchingMessages += 1 }
+        }
+        if matchingMessages > 0 {
+            let occurrences = lines.filter { $0.speaker == line.speaker && words($0.text) == caption }.count
+            if matchingMessages >= occurrences { return nil }
+        }
+        return line
+    }
+}
+
+struct LiveCaptionRow: View {
+    @Environment(\.theme) private var theme
+    let line: Transcript.Line
+
+    var body: some View {
+        Group {
+            if line.speaker == .caller {
+                Text(line.text).modifier(UserBubble())
+                    .padding(.leading, theme.space.s10)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                VStack(alignment: .leading, spacing: theme.space.s1_5) {
+                    Text(line.text)
+                    Label("Speaking", systemImage: "speaker.wave.2").textRole(theme.type.caption)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .textRole(theme.type.body).foregroundStyle(theme.color.textSecondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.call.caption")
+    }
+}
+
 struct MessageRow: View {
     @Environment(\.theme) private var theme
     let message: Message

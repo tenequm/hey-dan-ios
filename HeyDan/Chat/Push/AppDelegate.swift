@@ -235,12 +235,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     private func receiveTap(_ data: PushData?) {
         pendingTap = data
-        if data == nil { ChatController.shared.closeConversation() }
+        if data == nil, !CallController.shared.openActiveConversation() { ChatController.shared.closeConversation() }
         routePendingTap()
     }
     private func routePendingTap() {
         guard Pairings.shared.state != .unreadable, let data = pendingTap else { return }
         pendingTap = nil
+        if CallController.shared.openActiveConversation() { return }
         guard let entry = Self.entry(for: data, in: Pairings.shared.entries) else {
             CallLog.log(.net, "push unknown_host")
             ChatController.shared.closeConversation()

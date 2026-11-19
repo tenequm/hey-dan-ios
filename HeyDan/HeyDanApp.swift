@@ -64,12 +64,14 @@ struct HeyDanApp: App {
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     Self.removeLegacyLinks()
                     ChatController.shared.setActive(phase != .background)
+                    if phase == .active, CallController.shared.openActiveConversation() { pairedHost = nil }
                 }
-                .fullScreenCover(isPresented: Binding(
-                    get: { CallController.shared.showsPairedCall },
-                    set: { if $0 { CallController.shared.showsPairedCall = true } else { CallController.shared.closePairedCall() } }
-                )) {
-                    if let target = CallController.shared.pairedCallTarget { PairedCallCover(target: target) }
+                .sensoryFeedback(trigger: CallController.shared.phase) { old, new in
+                    switch new {
+                    case .live where old == .connecting: .success
+                    case .ended(let ending): ending.cause == .caller ? .impact(weight: .light) : .error
+                    default: nil
+                    }
                 }
                 .environment(\.theme, Theme.dark)
                 .preferredColorScheme(.dark)

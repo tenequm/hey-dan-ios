@@ -7,13 +7,11 @@ import HeyDanCore
 struct ScreenCaptureFixture: View {
     let requestURL: URL
     @State private var request: Request?
-    static var phase: String?
 
     private struct Request: Decodable {
         let id: String
         let family: String
         let scenario: String?
-        let phase: String?
     }
 
     var body: some View {
@@ -30,7 +28,6 @@ struct ScreenCaptureFixture: View {
             while !Task.isCancelled {
                 if let data = try? Data(contentsOf: requestURL),
                    let next = try? JSONDecoder().decode(Request.self, from: data), next.id != request?.id {
-                    Self.phase = next.phase
                     if next.family == "chat" {
                         ChatController.shared.selectCaptureFixture(next.scenario, id: next.id)
                     }
@@ -47,10 +44,6 @@ struct ScreenCaptureFixture: View {
         case "list": ConversationListSpecimen(name: "List/" + (request.scenario ?? "Activity"))
         case "pairing": PairingView()
         case "paired": PairingView(paired: Pairings.shared.active)
-        case "call":
-            let target = PairedCallTarget(host: FixtureAppService.host, deviceId: FixtureAppService.pairing.deviceId,
-                                          conversation: FixtureContent.conversation)
-            PairedCallCover(target: CallTarget(paired: target, service: FixtureAppService()))
         default: EmptyView()
         }
     }

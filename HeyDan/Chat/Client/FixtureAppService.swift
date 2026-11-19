@@ -5,8 +5,11 @@ import HeyDanCore
 
 actor FixtureAppService: AppService {
     static let host = FixtureContent.capturing ? FixtureContent.host : URL(string: "https://app.example.com")!
+    static let secondAgent = Agent(id: "ag_second", name: "Alex")
+    static let hasSecondAgent = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"] == "1" && !FixtureContent.capturing
     static let pairing = PairResponse(deviceId: "dev_fixture", userName: FixtureContent.capturing ? "iPhone 17 Pro" : "Taylor tester",
-        agents: FixtureContent.capturing ? FixtureContent.agents : [Agent(id: "ag_taylor", name: "Taylor")], protocol: 1, serverTime: 0)
+        agents: FixtureContent.capturing ? FixtureContent.agents : [Agent(id: "ag_taylor", name: "Taylor")] + (hasSecondAgent ? [secondAgent] : []),
+        protocol: 1, serverTime: 0)
     let previewOutbox: [Outbox.Entry]
     private let scenario: String?
 
@@ -127,7 +130,12 @@ actor FixtureAppService: AppService {
         return AgentResponse(agent: candidate)
     }
     func conversations() async throws(AppError) -> ConversationsResponse {
-        ConversationsResponse(conversations: candidate.shown ? [conversation] : [], statuses: candidate.shown ? [status] : [], badge: badge, seq: sequence)
+        var conversations = candidate.shown ? [conversation] : []
+        if Self.hasSecondAgent {
+            conversations.append(Conversation(kind: .conversation, id: "conv_second", seq: 1,
+                agent: Self.secondAgent, unread: 0, readOrder: 0, canCall: true, createdAt: 0))
+        }
+        return ConversationsResponse(conversations: conversations, statuses: candidate.shown ? [status] : [], badge: badge, seq: sequence)
     }
     func history(conversationId: String, query: HistoryQuery) async throws(AppError) -> HistoryPage {
         var items = messages.filter { (query.before == nil || $0.order < query.before!) && (query.after == nil || $0.order > query.after!) }.map(ThreadEntity.message)

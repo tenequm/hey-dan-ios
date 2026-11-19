@@ -5,7 +5,7 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
 <p align="center">
   <img src="docs/screenshots/list.png" width="200" alt="Chat list with three agents: one working, one done, one waiting for input">
   <img src="docs/screenshots/thread.png" width="200" alt="A thread with a markdown reply, a code block and a photo">
-  <img src="docs/screenshots/call.png" width="200" alt="A call with the agent speaking, live captions and the Mute, Options and End controls">
+  <img src="docs/screenshots/call.png" width="200" alt="A call in the chat with a live caption, mute, options and end controls">
   <img src="docs/screenshots/push.png" width="200" alt="An agent's reply as a notification on the lock screen">
 </p>
 
@@ -32,8 +32,8 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
   fields, tables and charts. What you send offline goes out when the host is back.
 - **Replies on the lock screen** as communication notifications, with one unread badge across all your hosts.
 - **Calls** through CallKit, so they keep going on the lock screen: start one from a thread or the Action Button,
-  talk hands-free, follow live captions, and change the agent's voice
-  or the typing sound in the Call options sheet.
+  talk hands-free and follow live captions in the same thread. The call bar has mute, Call options and End.
+  Call options lets you change the agent's voice or the typing sound.
 - **Pairing** by one-time link: each host gets its own Secure Enclave key on the phone, and requests to the host are
   signed with it. Pair several hosts and pick the active one.
 - **Live Activity**: the call's agent, state and clock on the lock screen and in the Dynamic Island, with an end key.
