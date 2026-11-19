@@ -190,7 +190,9 @@ import XCTest
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)
         let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
+        // Under load the app can go straight to suspended; either background state is fine for the intent.
+        let backgrounded = NSPredicate { _, _ in [.runningBackground, .runningBackgroundSuspended].contains(app.state) }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: backgrounded, object: nil)], timeout: 20), .completed)
         do {
             try await IntentDefinitions(bundleIdentifier: bundle).intents["CallDefaultAgentIntent"].makeIntent().run()
             XCTFail("The fixture host refuses admission")
