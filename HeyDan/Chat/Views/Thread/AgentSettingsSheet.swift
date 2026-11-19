@@ -7,7 +7,7 @@ struct ContextRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(theme.color.composerBorder, lineWidth: 3)
+            Circle().stroke(theme.color.textSecondary.opacity(0.35), lineWidth: 3)
             if let usage = session.usageFraction {
                 Circle().trim(from: 0, to: min(1, usage))
                     .stroke(usage >= 0.8 ? theme.color.warning : theme.color.accentText,
@@ -25,21 +25,21 @@ struct AgentSettingsSheet: View {
     @Environment(\.theme) private var theme
     let status: AgentStatus
     let editable: Bool
-    let working: Bool
     let statusFailure: String?
     let save: (AgentSettingsRequest) async throws(AppError) -> Void
     let compact: () async -> Bool
-    @State private var modelChoice: String?
-    @State private var effortChoice: String?
+    @State private var modelChoice: AgentSettingsRequest.Field?
+    @State private var effortChoice: AgentSettingsRequest.Field?
     @State private var confirming = false
     @State private var submitting = false
     @State private var errorMessage: String?
+    @State private var detent: PresentationDetent = .large
 
-    private var model: String? { modelChoice ?? status.agent.model.id }
-    private var effort: String? { effortChoice ?? status.agent.effort }
+    private var model: AgentSettingsRequest.Field { modelChoice ?? .init(status.agent.model.id) }
+    private var effort: AgentSettingsRequest.Field { effortChoice ?? .init(status.agent.effort) }
     private var change: AgentSettingsRequest {
-        .init(model: model == status.agent.model.id ? nil : model,
-              effort: effort == status.agent.effort ? nil : effort)
+        .init(model: model == .init(status.agent.model.id) ? nil : model,
+              effort: effort == .init(status.agent.effort) ? nil : effort)
     }
     private var changed: Bool { change.model != nil || change.effort != nil }
 
@@ -47,19 +47,18 @@ struct AgentSettingsSheet: View {
         NavigationStack {
             Form {
                 Section("Model") {
-                    option(status.agent.inheritedLabel, selected: model == nil) { modelChoice = nil }
-                        // The host accepts model ids but has no write to clear a pinned model.
-                        .disabled(status.agent.model.id != nil)
+                    option(status.agent.inheritedLabel, selected: model == .inherited) { modelChoice = .inherited }
                     if let current = status.agent.model.id, !status.options.models.contains(where: { $0.id == current }) {
-                        option(status.agent.model.displayName, selected: model == current) { modelChoice = current }
+                        option(status.agent.model.displayName, selected: model == .value(current)) { modelChoice = .value(current) }
                     }
                     ForEach(status.options.models.filter { $0.id != nil }, id: \.id) { item in
-                        option(item.displayName, selected: model == item.id) { modelChoice = item.id }
+                        option(item.displayName, selected: model == .init(item.id)) { modelChoice = .init(item.id) }
                     }
                 }
                 Section("Effort") {
+                    option("Default", selected: effort == .inherited) { effortChoice = .inherited }
                     ForEach(status.options.efforts, id: \.self) { level in
-                        option(level.capitalized, selected: effort == level) { effortChoice = level }
+                        option(AgentStatus.effortName(level), selected: effort == .value(level)) { effortChoice = .value(level) }
                     }
                 }
                 if let description = status.session.usageDescription() {
@@ -68,17 +67,21 @@ struct AgentSettingsSheet: View {
                             ContextRing(session: status.session)
                             Text(description)
                         }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(status.session.usageDescription(spoken: true) ?? description)
                         if let fraction = status.session.usageFraction {
                             ProgressView(value: min(1, fraction))
                                 .tint(fraction >= 0.8 ? theme.color.warning : theme.color.accentText)
-                                .accessibilityLabel("Context used")
+                                .accessibilityHidden(true)
                         }
-                        Button("Compact now") {
-                            submitting = true
-                            Task {
-                                if await compact() { dismiss() }
-                                else { errorMessage = "Could not queue /compact. Try again." }
-                                submitting = false
+                        if status.agent.canEdit {
+                            Button("Compact now") {
+                                submitting = true
+                                Task {
+                                    if await compact() { dismiss() }
+                                    else { errorMessage = "Could not queue /compact. Try again." }
+                                    submitting = false
+                                }
                             }
                         }
                     }
@@ -101,18 +104,18 @@ struct AgentSettingsSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(changed && editable ? "Save" : "Done") {
                         guard changed, editable else { dismiss(); return }
-                        if working { confirming = true } else { submit() }
+                        confirming = true
                     }
                 }
             }
             .disabled(submitting)
             .interactiveDismissDisabled(submitting)
-            .alert("Changing the model stops the current reply.", isPresented: $confirming) {
+            .alert("Changes \(status.agent.name) in every chat. A reply in progress stops.", isPresented: $confirming) {
                 Button("Cancel", role: .cancel) {}
                 Button("Save", role: .destructive) { submit() }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
     }
 
@@ -121,7 +124,7 @@ struct AgentSettingsSheet: View {
             HStack {
                 Text(title).foregroundStyle(theme.color.textPrimary)
                 Spacer()
-                if selected { Image(systemName: "checkmark").foregroundStyle(theme.color.accentText) }
+                if selected { Image(systemName: "checkmark").foregroundStyle(theme.color.accentText).accessibilityHidden(true) }
             }
             .contentShape(Rectangle())
         }

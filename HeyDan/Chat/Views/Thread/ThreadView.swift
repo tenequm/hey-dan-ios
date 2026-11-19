@@ -32,6 +32,7 @@ struct ThreadView: View {
         ThreadContent(
             rows: chat.rows,
             agentName: conversation.agent.name,
+            compactedThrough: chat.compactedThrough[conversation.id],
             status: activeTarget == nil ? chat.statuses[conversation.id] : nil,
             showsCaptions: activeTarget != nil,
             outboxStates: chat.outboxStates,
@@ -105,19 +106,26 @@ struct ThreadView: View {
                 if supportsStatus {
                     Menu {
                         Button("Agent settings", systemImage: "slider.horizontal.3") { showsAgentSettings = true }
+                            .disabled(call.isCallActive)
                     } label: {
                         HStack(spacing: theme.space.s1) {
                             threadTitle
                             Image(systemName: "chevron.down").font(.caption2)
                         }
                     }
-                    .accessibilityLabel("Thread menu")
+                    .accessibilityLabel(conversation.agent.name)
+                    .accessibilityValue(headerValue)
+                    .accessibilityIdentifier("chat.thread.menu")
                 } else { threadTitle }
             }
             ToolbarItemGroup(placement: .topBarTrailing) { ThreadCallButton(conversation: conversation) }
         }
-        .onChange(of: chat.statuses[conversation.id]?.state) { previous, state in
-            if previous != nil, state == .idle { refresh += 1 }
+        .onChange(of: call.isCallActive) { _, active in
+            if active { showsAgentSettings = false }
+        }
+        .onChange(of: chat.statuses[conversation.id]) { previous, current in
+            if let current, current.state == .idle,
+               previous?.state != .idle || previous?.rev != current.rev { refresh += 1 }
         }
         .task(id: supportsStatus ? refresh : nil) {
             guard supportsStatus else { agentStatus = nil; statusFailure = nil; return }
@@ -127,7 +135,6 @@ struct ThreadView: View {
             if let agentStatus, supportsStatus {
                 AgentSettingsSheet(status: agentStatus,
                     editable: chat.features.contains("agent-settings") && agentStatus.agent.canEdit,
-                    working: chat.statuses[conversation.id]?.state == .working,
                     statusFailure: statusFailure, save: saveSettings, compact: compact)
             } else {
                 VStack(spacing: theme.space.s3) {
@@ -144,6 +151,14 @@ struct ThreadView: View {
         .tint(theme.color.accentText)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
+    private var headerValue: Text {
+        if call.isCallActive, callTarget != nil {
+            if let since = call.liveSince { return Text("On call, \(since, style: .timer)") }
+            return Text("On call, 0:00")
+        }
+        return Text(chat.host?.host() ?? "")
+    }
+
     private var threadTitle: some View {
         VStack(spacing: 0) {
             Text(conversation.agent.name).textRole(theme.type.headline, theme.weight.semibold)
@@ -167,6 +182,7 @@ struct ThreadView: View {
         do {
             let response = try await chat.service.agentStatus(conversationId: conversation.id)
             guard !Task.isCancelled, statusRequest == request else { return }
+            chat.observeContext(response.status.session, conversationID: conversation.id)
             agentStatus = response.status
         } catch {
             guard !Task.isCancelled, statusRequest == request else { return }
@@ -175,17 +191,19 @@ struct ThreadView: View {
     }
 
     private func saveSettings(_ request: AgentSettingsRequest) async throws(AppError) {
-        guard supportsStatus, chat.openConversationId == conversation.id,
-              chat.features.contains("agent-settings"), agentStatus?.agent.canEdit == true else { throw .notPaired }
+        guard !call.isCallActive else { throw .callActive }
+        guard chat.openConversationId == conversation.id else { throw .transport(.cancelled) }
+        guard supportsStatus,
+              chat.features.contains("agent-settings"), agentStatus?.agent.canEdit == true else { throw .limit("Agent settings are read-only.") }
         let generation = chat.generation
         let response = try await chat.service.updateSettings(agentId: conversation.agent.id, request: request)
-        guard generation == chat.generation, chat.openConversationId == conversation.id else { throw .notPaired }
+        guard generation == chat.generation, chat.openConversationId == conversation.id else { return }
         statusRequest = UUID()
         agentStatus?.agent = response.agent
     }
 
     private func compact() async -> Bool {
-        guard chat.openConversationId == conversation.id else { return false }
+        guard chat.openConversationId == conversation.id, agentStatus?.agent.canEdit == true else { return false }
         return await chat.send(text: "/compact")
     }
 
@@ -195,6 +213,7 @@ struct ThreadContent: View {
     @Environment(\.theme) private var theme
     let rows: [ThreadRow]
     var agentName: String?
+    var compactedThrough: Int64?
     var status: Status?
     var showsCaptions = false
     var outboxStates: [String: Outbox.State] = [:]
@@ -231,7 +250,7 @@ struct ThreadContent: View {
                 ForEach(rows, id: \.presentationID) { row in
                     switch row {
                     case .entity(.message(let message)):
-                        MessageRow(message: message, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
+                        MessageRow(message: message, compacted: compactedThrough.map { message.order <= $0 } ?? false, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
                             .id(row.presentationID)
                     case .entity(.question(let question)):
                         QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }

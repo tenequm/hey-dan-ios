@@ -15,6 +15,7 @@ actor FixtureAppService: AppService {
 
     init(scenario: String? = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"]) {
         self.scenario = scenario
+        if scenario == "idle" { currentState = .idle }
         let preview = ThreadPreviewValues.self
         if scenario == "message-menus" {
             previewOutbox = [Outbox.State.queued, .failed].map { state in
@@ -126,7 +127,7 @@ actor FixtureAppService: AppService {
             throw .server(status: 404, body: .init(error: "not_found", message: "Conversation unavailable."))
         }
         return .init(status: .init(agent: settings(for: agent),
-            session: .init(contextTokens: compacted.contains(conversationId) ? 18000 : 99000,
+            session: .init(contextTokens: compacted.contains(conversationId) ? nil : 99000,
                            contextWindow: 165000, turns: 8, outputTokens: 2400, queueDepth: 0),
             taskCount: 0, options: .init(models: Self.modelOptions, efforts: Self.efforts)))
     }
@@ -137,16 +138,26 @@ actor FixtureAppService: AppService {
             throw .server(status: 404, body: .init(error: "not_found", message: "Agent unavailable."))
         }
         var next = settings(for: agent)
-        guard next.canEdit else { throw .server(status: 403, body: .init(error: "forbidden", message: "Read only.")) }
-        if let model = request.model {
-            if let option = Self.modelOptions.first(where: { $0.id == model }) { next.model = option }
-            else { throw .server(status: 400, body: .init(error: "invalid_value", message: "Unknown model.")) }
+        guard next.canEdit, scenario != "permission-changed" else {
+            throw .server(status: 403, body: .init(error: "forbidden", message: "Admin access is required."))
         }
-        if let effort = request.effort {
-            guard Self.efforts.contains(effort) else {
+        switch request.model {
+        case .inherited: next.model = .init(id: nil, label: nil)
+        case .value(let id):
+            guard let option = Self.modelOptions.first(where: { $0.id == id }) else {
+                throw .server(status: 400, body: .init(error: "invalid_value", message: "Unknown model."))
+            }
+            next.model = option
+        case nil: break
+        }
+        switch request.effort {
+        case .inherited: next.effort = nil
+        case .value(let level):
+            guard Self.efforts.contains(level) else {
                 throw .server(status: 400, body: .init(error: "invalid_value", message: "Unknown effort."))
             }
-            next.effort = effort
+            next.effort = level
+        case nil: break
         }
         next.configUpdatedAt = Date.now.ISO8601Format()
         settings[agentId] = next
@@ -209,7 +220,7 @@ actor FixtureAppService: AppService {
             clientId: request.clientId, delivery: .stored, createdAt: 0)
         messages.append(stored)
         try publish(event(.message, stored, id: sequence))
-        if stored.text == "/compact", currentState != .working {
+        if stored.text == "/compact", scenario != "idle", currentState != .working {
             currentState = .working
             statusRev += 1
             try publish(event(.status, status))
@@ -245,6 +256,11 @@ actor FixtureAppService: AppService {
         if stored.text == "/compact" {
             compacted.insert(stored.conversationId)
             currentState = .idle
+            statusRev += 1
+            try publish(event(.status, status))
+            return
+        }
+        if compacted.remove(stored.conversationId) != nil {
             statusRev += 1
             try publish(event(.status, status))
         }

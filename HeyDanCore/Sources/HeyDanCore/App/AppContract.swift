@@ -217,7 +217,12 @@ nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
 
         public var chipLabel: String {
             if model.id == nil { return inheritedLabel }
-            return [model.displayName, effort?.capitalized].compactMap { $0 }.joined(separator: " - ")
+            return [model.displayName, effort.map(AgentStatus.effortName)].compactMap { $0 }.joined(separator: " - ")
+        }
+
+        public var spokenChipLabel: String {
+            let name = model.id == nil ? inheritedLabel : model.displayName
+            return "Model, " + name + ", effort " + (effort.map(AgentStatus.effortName) ?? "Default")
         }
 
         public init(id: String, name: String, model: Model, defaultModel: Model, effort: String?,
@@ -249,6 +254,10 @@ nonisolated public struct AgentStatus: Codable, Equatable, Sendable {
         }
     }
 
+    public static func effortName(_ effort: String) -> String {
+        ["low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"][effort] ?? effort
+    }
+
     public struct Options: Codable, Equatable, Sendable {
         public let models: [Model]
         public let efforts: [String]
@@ -278,16 +287,21 @@ extension AgentStatus.Session {
         return Double(max(0, contextTokens)) / Double(contextWindow)
     }
 
-    public func usageDescription(includingPercent: Bool = false) -> String? {
+    public func usageDescription(includingPercent: Bool = false, spoken: Bool = false) -> String? {
         guard let contextTokens else { return nil }
         func abbreviated(_ tokens: Int) -> String {
             let units = tokens >= 1_000_000 ? 1_000_000 : 1_000
             guard tokens >= units else { return String(tokens) }
             let value = (Double(tokens) / Double(units)).formatted(.number.precision(.fractionLength(0...1)))
+            if spoken { return value + (units == 1_000 ? " thousand" : " million") }
             return value + (units == 1_000 ? "k" : "M")
         }
         guard let contextWindow, let fraction = usageFraction else { return "\(abbreviated(contextTokens)) tokens used" }
         let counts = "\(abbreviated(contextTokens)) of \(abbreviated(contextWindow))"
+        if spoken {
+            let percent = (fraction * 100).rounded().formatted(.number.precision(.fractionLength(0)))
+            return "\(counts) tokens, \(percent) percent" + (fraction >= 0.8 ? ", nearly full" : "")
+        }
         return includingPercent ? "\(counts) tokens used (\((fraction * 100).rounded().formatted(.number.precision(.fractionLength(0))))%)" : "\(counts) used"
     }
 }
@@ -298,11 +312,39 @@ nonisolated public struct AgentStatusResponse: Codable, Sendable {
 }
 
 nonisolated public struct AgentSettingsRequest: Codable, Sendable {
-    public let model: String?
-    public let effort: String?
-    public init(model: String?, effort: String?) {
+    public enum Field: Codable, Equatable, Sendable {
+        case inherited
+        case value(String)
+
+        public init(_ value: String?) {
+            self = value.map(Self.value) ?? .inherited
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            self = container.decodeNil() ? .inherited : .value(try container.decode(String.self))
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .inherited: try container.encodeNil()
+            case .value(let value): try container.encode(value)
+            }
+        }
+    }
+
+    public let model: Field?
+    public let effort: Field?
+    public init(model: Field?, effort: Field?) {
         self.model = model
         self.effort = effort
+    }
+
+    public init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        model = fields.contains(.model) ? try fields.decode(Field.self, forKey: .model) : nil
+        effort = fields.contains(.effort) ? try fields.decode(Field.self, forKey: .effort) : nil
     }
 }
 

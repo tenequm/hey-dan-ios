@@ -251,7 +251,7 @@ private struct CheckFailure: Error { let label: String }
     #expect(status.session.contextTokens == nil)
     let request = try fixtureDecode(AgentSettingsRequest.self, #require(fixtures["agentSettingsRequest"]))
     let saved = try fixtureDecode(AgentSettingsResponse.self, #require(fixtures["agentSettingsResponse"])).agent
-    #expect(request.model == "opus")
+    #expect(request.model == .value("opus"))
     #expect(saved.model.id == "claude-opus-5")
     #expect(saved.chipLabel == "Opus 5 - High")
     let failures = try #require(fixtures["agentSettingsErrors"] as? [String: [String: Any]])
@@ -260,9 +260,22 @@ private struct CheckFailure: Error { let label: String }
         let failure = try #require(failures[name])
         #expect(try fixtureDecode(ErrorBody.self, #require(failure["body"])).error == code)
     }
-    #expect(saved.effort == request.effort)
-    let patch = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: nil, effort: "low"))) as? [String: String]
+    #expect(request.effort == .value(try #require(saved.effort)))
+    let patch = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: nil, effort: .value("low")))) as? [String: String]
     #expect(patch == ["effort": "low"])
+    let reset = try fixtureDecode(AgentSettingsRequest.self, #require(fixtures["agentSettingsResetRequest"]))
+    #expect(reset.model == .inherited && reset.effort == .inherited)
+    let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(reset)) as? [String: NSNull]
+    #expect(encoded?.keys.sorted() == ["effort", "model"])
+    let partial = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AgentSettingsRequest(model: .inherited, effort: nil))) as? [String: NSNull]
+    #expect(partial?.keys.sorted() == ["model"])
+    let response = try #require(fixtures["agentStatusResponse"] as? [String: Any])
+    var raw = try #require(response["status"] as? [String: Any])
+    for count: Any? in [NSNull(), nil] {
+        raw["taskCount"] = count
+        #expect(try fixtureDecode(AgentStatus.self, raw).taskCount == nil)
+    }
+    #expect(AgentStatus.effortName("xhigh") == "Extra high")
 }
 
 @Test func contextUsageFormatting() {
@@ -274,5 +287,6 @@ private struct CheckFailure: Error { let label: String }
     #expect(usage(84000, 165000).usageDescription(includingPercent: true) == "84k of 165k tokens used (51%)")
     #expect(usage(0, 1000000).usageDescription(includingPercent: true) == "0 of 1M tokens used (0%)")
     #expect(usage(432, 0).usageDescription() == "432 tokens used")
-    #expect(usage(80000, 100000).usageFraction == 0.8)
+    #expect(usage(99000, 165000).usageDescription(spoken: true) == "99 thousand of 165 thousand tokens, 60 percent")
+    #expect(usage(80000, 100000).usageDescription(spoken: true) == "80 thousand of 100 thousand tokens, 80 percent, nearly full")
 }

@@ -153,19 +153,22 @@ struct ComposerView: View {
                 .frame(minWidth: theme.control.touchTarget, minHeight: theme.control.touchTarget)
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel(label)
+            .disabled(CallController.shared.isCallActive)
+            .accessibilityLabel(agentStatus?.agent.spokenChipLabel ?? "Model settings")
             .accessibilityHint("Opens agent settings")
             .accessibilityIdentifier("composer.model")
             if expanded { Spacer(minLength: 0) }
-            if let agentStatus, let usage = agentStatus.session.usageDescription(includingPercent: true) {
+            if expanded, let agentStatus, let usage = agentStatus.session.usageDescription(includingPercent: true) {
                 Menu {
                     Text(usage)
-                    Button("Compact now") { Task { await compact() } }
+                    if agentStatus.agent.canEdit {
+                        Button("Compact now") { Task { await compact() } }
+                    }
                 } label: {
                     ContextRing(session: agentStatus.session)
                         .frame(width: theme.control.touchTarget, height: theme.control.touchTarget)
                 }
-                .accessibilityLabel(usage)
+                .accessibilityLabel(agentStatus.session.usageDescription(spoken: true) ?? usage)
                 .accessibilityIdentifier("composer.context")
             }
         }

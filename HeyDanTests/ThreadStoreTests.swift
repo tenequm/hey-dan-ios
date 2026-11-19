@@ -22,6 +22,33 @@ struct ThreadStoreTests {
             readOrder: 0, canCall: false, createdAt: 0)
     }
 
+    @MainActor @Test func compactCompletesOnlyAfterUsageDropsOrClears() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chat = await paired(FixtureAppService(), files: OutboxFile(root: root))
+        let id = "conv_taylor01"
+        await chat.refresh()
+        chat.openConversation(id)
+        func observe(_ tokens: Int?) {
+            chat.observeContext(.init(contextTokens: tokens, contextWindow: 165000, turns: nil,
+                                      outputTokens: nil, queueDepth: nil), conversationID: id)
+        }
+        func addCommand(order: Int64) {
+            chat.reducer.upsert(.message(.init(kind: .message, id: "cmd_\(order)", conversationId: id,
+                order: order, seq: order, role: .user, text: "/compact", files: [], reactions: [], createdAt: 0)))
+        }
+        observe(99000)
+        addCommand(order: 12)
+        observe(99000)
+        #expect(chat.compactedThrough[id] == nil)
+        observe(18000)
+        #expect(chat.compactedThrough[id] == 12)
+        addCommand(order: 13)
+        observe(20000)
+        #expect(chat.compactedThrough[id] == 12)
+        observe(nil)
+        #expect(chat.compactedThrough[id] == 13)
+    }
+
     @Test func cursorAndEntitiesSurviveIncrementalSaves() async throws {
         let store = SwiftDataThreadStore(inMemory: true)
         try await store.save(ThreadSnapshot(cursor: 10, conversations: [conversation(seq: 10)]), host: host, deviceId: "device")

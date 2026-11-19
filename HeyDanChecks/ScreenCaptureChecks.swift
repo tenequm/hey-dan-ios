@@ -140,7 +140,11 @@ import XCTest
         chip.tap()
         let model = app.buttons["Sonnet 5.5"]
         XCTAssertTrue(model.wait(for: \.isHittable, toEqual: true, timeout: 10))
-        capture("agent-settings", showing: model)
+        let compact = app.buttons["Compact now"]
+        for _ in 0..<3 where !compact.isHittable { app.swipeUp() }
+        XCTAssertTrue(app.buttons["Extra high"].isHittable)
+        XCTAssertTrue(compact.isHittable)
+        capture("agent-settings", showing: compact)
     }
 
     func testThreadCall() {
