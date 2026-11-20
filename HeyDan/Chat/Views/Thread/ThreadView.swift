@@ -67,6 +67,8 @@ struct ThreadView: View {
                         Button("Call again") {
                             Task { _ = await call.start(target: CallTarget(paired: target, service: chat.service)) }
                         }
+                        .buttonStyle(CallStartButtonStyle())
+                        .foregroundStyle(theme.color.accent)
                         .disabled(!live.canCall || !chat.features.contains("calls"))
                     }
                     .textRole(theme.type.footnote, theme.weight.medium)

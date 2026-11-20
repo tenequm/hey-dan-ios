@@ -1,6 +1,21 @@
 import SwiftUI
 import HeyDanCore
 
+extension CallController.Phase {
+    var callBarLabel: String {
+        switch self {
+        case .idle: ""
+        case .connecting: "Connecting..."
+        case .joining: "Joining..."
+        case .live(.listening): "Listening"
+        case .live(.speaking): "Speaking"
+        case .live(.thinking): "Thinking"
+        case .reconnecting: "Reconnecting"
+        case .ended(let ending): ending.message
+        }
+    }
+}
+
 struct ThreadCallBar: View {
     @Environment(\.theme) private var theme
     let target: CallTarget
@@ -25,16 +40,6 @@ struct ThreadCallBar: View {
         return false
     }
 
-    private var state: String {
-        switch call.phase {
-        case .live(.speaking): "Speaking"
-        case .live(.thinking): "Thinking"
-        case .live(.listening): "Listening"
-        case .reconnecting: "Reconnecting"
-        default: "Connecting"
-        }
-    }
-
     var body: some View {
         HStack(spacing: theme.space.s1) {
             GlassIconButton(title: call.isMuted ? "Unmute" : "Mute", systemImage: call.isMuted ? "mic.slash" : "mic") {
@@ -43,7 +48,7 @@ struct ThreadCallBar: View {
             .accessibilityIdentifier("controls.mute")
             Spacer(minLength: 0)
             Image(systemName: "waveform").foregroundStyle(theme.color.accent).accessibilityHidden(true)
-            Text(state).textRole(theme.type.label, theme.weight.medium)
+            Text(call.phase.callBarLabel).textRole(theme.type.label, theme.weight.medium).lineLimit(1)
             CallElapsed(since: call.liveSince)
                 .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             Spacer(minLength: 0)

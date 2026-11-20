@@ -46,6 +46,7 @@ final class CallController: NSObject {
     enum Phase: Equatable {
         case idle
         case connecting
+        case joining
         case live(VoiceProtocol.AgentActivity)
         case reconnecting
         case ended(Ending)
@@ -69,7 +70,7 @@ final class CallController: NSObject {
             trace(.call, "phase \(oldValue.logName) -> \(phase.logName)")
             switch phase {
             case .live: if liveSince == nil { liveSince = .now }
-            case .idle, .connecting:
+            case .idle, .connecting, .joining:
                 liveSince = nil
                 endedAt = nil
             case .ended:
@@ -106,7 +107,7 @@ final class CallController: NSObject {
 
     var isCallActive: Bool {
         switch phase {
-        case .connecting, .live, .reconnecting: true
+        case .connecting, .joining, .live, .reconnecting: true
         case .idle, .ended: false
         }
     }
@@ -142,6 +143,7 @@ final class CallController: NSObject {
         var agentTimer: Task<Void, Never>?
         /// Ends the call if CallKit never activates its audio session (`didActivate`), which iOS 27 sometimes skips.
         var activationTimer: Task<Void, Never>?
+        var connectingTone: AVAudioPlayer?
         var interimTimer: Task<Void, Never>?
         var streams = StreamOrder<StreamEvent>()
         var streamFlush: Task<Void, Never>?
@@ -165,6 +167,7 @@ final class CallController: NSObject {
     /// Created on the first call, not at launch: on iOS 27 a provider made right after unlock (an Action Button
     /// launch) can be left without `didActivate` (Apple developer forums thread 837211).
     @ObservationIgnored private var provider: CXProvider?
+    @ObservationIgnored private let startImpact = UIImpactFeedbackGenerator(style: .light)
     @ObservationIgnored private let callKit = CXCallController()
     /// Mute actions the app asked CallKit for to show a microphone it moved itself: their `perform` only fulfils them.
     @ObservationIgnored private var appMuteActions: Set<UUID> = []
@@ -202,11 +205,21 @@ final class CallController: NSObject {
         return provider
     }
 
-    func start(target: CallTarget) async -> UUID? {
+    func prepareStartImpact() { startImpact.prepare() }
+
+    @discardableResult
+    func acknowledgeStart() -> Bool {
+        guard !isCallActive, UIApplication.shared.applicationState != .background else { return false }
+        startImpact.impactOccurred()
+        return true
+    }
+
+    func start(target: CallTarget, acknowledged: Bool = false) async -> UUID? {
         guard !isCallActive else {
             trace(.call, "start refused: call active")
             return nil
         }
+        if !acknowledged { acknowledgeStart() }
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
         endingNotice = nil
@@ -273,7 +286,7 @@ final class CallController: NSObject {
     #endif
 
     /// Whether call `id` is still setting up.
-    func isConnecting(_ id: UUID) -> Bool { call?.id == id && phase == .connecting }
+    func isConnecting(_ id: UUID) -> Bool { call?.id == id && phase.isStarting }
 
     /// How call `id` failed; nil while it runs, when it ended otherwise, or when a later call ended since.
     func failure(of id: UUID) -> Ending? {
@@ -434,6 +447,8 @@ final class CallController: NSObject {
                 await listen(to: room, names: names, for: id)
                 let mic = try await microphone
                 guard call?.id == id else { return }
+                call?.connectingTone?.stop()
+                phase = .joining
                 let connecting = ContinuousClock.now
                 trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
                 do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
@@ -545,6 +560,7 @@ final class CallController: NSObject {
         call?.streamFlush?.cancel()
         for event in call?.streams.drain() ?? [] { apply(event, for: id) }
         guard let ended = call else { return }
+        ended.connectingTone?.stop()
         call = nil
         liveVoice = nil
         #if DEBUG && targetEnvironment(simulator)
@@ -634,10 +650,13 @@ extension CallController {
 }
 
 extension CallController.Phase {
+    var isStarting: Bool { self == .connecting || self == .joining }
+
     var logName: String {
         switch self {
         case .idle: "idle"
         case .connecting: "connecting"
+        case .joining: "joining"
         case let .live(activity): "live(\(activity))"
         case .reconnecting: "reconnecting"
         case let .ended(ending): "ended(\(ending.cause))"
@@ -993,8 +1012,15 @@ extension CallController: CXProviderDelegate {
     private func audioActivated(by activator: String) {
         guard call != nil else { return }
         trace(.callkit, "audio session activated by=\(activator)")
-        call?.activationTimer?.cancel()
         setEngine(.default)
+        guard let timer = call?.activationTimer else { return }
+        timer.cancel()
+        call?.activationTimer = nil
+        guard phase == .connecting,
+              let url = Bundle.main.url(forResource: "Connecting", withExtension: "wav"),
+              let tone = try? AVAudioPlayer(contentsOf: url) else { return }
+        call?.connectingTone = tone
+        if tone.play() { trace(.audio, "connecting tone started") }
     }
 
     #if targetEnvironment(simulator)
@@ -1020,7 +1046,10 @@ extension CallController: CXProviderDelegate {
     #endif
 
     nonisolated func provider(_: CXProvider, didDeactivate _: AVAudioSession) {
-        MainActor.assumeIsolated { trace(.callkit, "audio session deactivated") }
+        MainActor.assumeIsolated {
+            call?.connectingTone?.stop()
+            trace(.callkit, "audio session deactivated")
+        }
         setEngine(.none)
     }
 
