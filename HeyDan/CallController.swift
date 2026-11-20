@@ -454,8 +454,14 @@ final class CallController: NSObject {
                 call?.connectingTone?.stop()
                 phase = .joining
                 let connecting = ContinuousClock.now
-                trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
-                do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
+                let usesRelay = target.usesRelay
+                if usesRelay {
+                    PairedRelayICE.begin { [weak self] offered in
+                        Task { @MainActor in self?.trace(.room, "TURN offered=\(offered)", id) }
+                    }
+                }
+                trace(.room, "connect start ice=\(usesRelay ? "relay" : "all")", id)
+                do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: usesRelay ? .relay : .all)) } catch {
                     trace(.room, "connect failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: connecting))", id, level: .error)
                     throw CallFailure.pairedTransport
                 }
@@ -565,6 +571,7 @@ final class CallController: NSObject {
         call?.streamFlush?.cancel()
         for event in call?.streams.drain() ?? [] { apply(event, for: id) }
         guard let ended = call else { return }
+        PairedRelayICE.end()
         speech.end()
         ended.connectingTone?.stop()
         call = nil
