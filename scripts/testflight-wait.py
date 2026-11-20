@@ -1,14 +1,14 @@
 # /// script
 # dependencies = ["pyjwt[crypto]", "requests"]
 # ///
-"""Waits for App Store Connect to process TestFlight build `argv[1]` and fails loudly when it does not take it.
+"""Check the TestFlight marketing version before export or wait for an uploaded build to finish processing.
 
 Reads the API key from ASC_KEY_P8_B64 (base64 of the .p8), ASC_KEY_ID and ASC_ISSUER_ID; never prints them.
 ASC_APP_ID is the app's Apple ID in App Store Connect (App Information > Apple ID).
 """
-import base64, os, sys, time, jwt, requests
+import base64, os, sys, time
 
-APP = os.environ.get("ASC_APP_ID") or sys.exit("ASC_APP_ID is not set")
+APP = os.environ.get("ASC_APP_ID")
 API = "https://api.appstoreconnect.apple.com/v1"
 POLL = 30
 DEADLINE = time.monotonic() + 30 * 60
@@ -19,6 +19,9 @@ class Unreachable(Exception):
 
 
 def get(path, **params):
+    import jwt
+    import requests
+
     now = int(time.time())
     token = jwt.encode(
         {"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"},
@@ -38,7 +41,32 @@ def get(path, **params):
     if r.status_code != 200:
         errors = body.get("errors", []) if isinstance(body, dict) else []
         sys.exit(f"{path}: HTTP {r.status_code} {[e.get('code') for e in errors]}")
-    return body["data"]
+    return body
+
+
+def check_version(current, mode):
+    try:
+        builds = get("/builds", **{"filter[app]": APP, "filter[preReleaseVersion.platform]": "IOS",
+                                    "sort": "-uploadedDate", "limit": 1, "include": "preReleaseVersion",
+                                    "fields[preReleaseVersions]": "version"})
+    except Unreachable as e:
+        sys.exit(f"Could not check the latest TestFlight version: {e}")
+    if builds["data"] == []:
+        return
+    versions = [item["attributes"].get("version") for item in builds.get("included", [])
+                if item["type"] == "preReleaseVersions"]
+    if len(versions) != 1 or not versions[0]:
+        sys.exit("App Store Connect did not return the latest build's marketing version")
+    if current != versions[0]:
+        return
+    components = current.split(".")
+    components[-1] = str(int(components[-1]) + 1)
+    next_version = ".".join(components)
+    message = (f"MARKETING_VERSION {current} matches the latest TestFlight build. "
+               f"Set MARKETING_VERSION to {next_version} in project.yml or use 'just testflight upload same-version'.")
+    if mode not in ("dry", "same-version"):
+        sys.exit(message)
+    print(f"warning: {message}", file=sys.stderr)
 
 
 def wait(what, read, busy):
@@ -59,7 +87,7 @@ def wait(what, read, busy):
 def upload_state(build):
     # A retried upload leaves its earlier reservation behind with the same build number: the one that arrived counts.
     found = get(f"/apps/{APP}/buildUploads", **{"filter[cfBundleVersion]": build, "sort": "-uploadedDate", "limit": 200})
-    uploads = [u["attributes"] for u in found]
+    uploads = [u["attributes"] for u in found["data"]]
     if not uploads:
         return "NOT_LISTED", {}
     upload = max(uploads, key=lambda u: (u["uploadedDate"] is not None, u["createdDate"]))
@@ -84,7 +112,7 @@ def main():
         sys.exit(f"upload {build} ended {state}")
 
     def read_build():
-        builds = get("/builds", **{"filter[app]": APP, "filter[version]": build})
+        builds = get("/builds", **{"filter[app]": APP, "filter[version]": build})["data"]
         return builds[0]["attributes"]["processingState"] if builds else "NOT_LISTED"
 
     state = wait(f"build {build}", read_build, {"NOT_LISTED", "PROCESSING"})
@@ -93,4 +121,10 @@ def main():
         sys.exit(f"build {build} is {state}, not VALID")
 
 
-main()
+if __name__ == "__main__":
+    if not APP:
+        sys.exit("ASC_APP_ID is not set")
+    if sys.argv[1] == "check-version":
+        check_version(*sys.argv[2:])
+    else:
+        main()
