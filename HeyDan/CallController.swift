@@ -294,7 +294,7 @@ final class CallController: NSObject {
             do { try await request(EndConversationAction(conversationUUID: id)) } catch {
                 // iOS never knew the call (still asking for the mic) or no longer does; end it here.
                 trace(.callkit, "end transaction failed \(CallLog.describe(error))", id)
-                finish(id, .byCaller, endedBy: nil)
+                finish(id, .byCaller, endedBy: .failed)
             }
         }
     }
@@ -489,7 +489,16 @@ final class CallController: NSObject {
     }
 
     private func report(_ event: LiveCommunicationKit.Conversation.Event, for id: UUID) {
-        guard let conversation = manager.conversations.first(where: { $0.uuid == id }) else { return }
+        guard let conversation = manager.conversations.first(where: { $0.uuid == id }) else {
+            if case .conversationEnded = event {
+                trace(.callkit, "ended conversation missing, requesting end", id)
+                Task {
+                    do { try await request(EndConversationAction(conversationUUID: id)) }
+                    catch { trace(.callkit, "fallback end failed \(CallLog.describe(error))", id) }
+                }
+            }
+            return
+        }
         manager.reportConversationEvent(event, for: conversation)
     }
 
@@ -1069,8 +1078,13 @@ extension CallController: ConversationManagerDelegate {
         Task { @MainActor in await perform(pending) }
     }
 
-    private func perform(_ action: ConversationAction) async {
+    func perform(_ action: ConversationAction) async {
         let id = action.conversationUUID
+        if let end = action as? EndConversationAction {
+            end.fulfill(dateEnded: .now)
+            trace(.callkit, "perform end current=\(call?.id == id)", id)
+            return finish(id, .byCaller, endedBy: nil)
+        }
         guard call?.id == id else { return action.fail() }
         switch action {
         case let start as StartConversationAction:
@@ -1082,10 +1096,6 @@ extension CallController: ConversationManagerDelegate {
             activateAudioByHand()
             #endif
             connect(id)
-        case let end as EndConversationAction:
-            trace(.callkit, "perform end", id)
-            finish(id, .byCaller, endedBy: nil)
-            end.fulfill(dateEnded: .now)
         case let mute as MuteConversationAction:
             if await applyMute(mute.isMuted, for: id) { mute.fulfill() } else { mute.fail() }
         case let pause as PauseConversationAction:

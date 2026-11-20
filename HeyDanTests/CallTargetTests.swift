@@ -2,6 +2,7 @@ import AVFAudio
 import CryptoKit
 import Foundation
 import HeyDanCore
+import class LiveCommunicationKit.EndConversationAction
 import Intents
 import XCTest
 import Security
@@ -126,6 +127,12 @@ private final class FixtureBundle {}
             transcript.caption(segment: "two", text: "Again", isFinal: false, fromCaller: true, at: .now)
             XCTAssertNil(transcript.deliveryMarker)
         }
+    }
+
+    func testSystemEndCompletesForAnUnknownConversation() async {
+        let end = EndConversationAction(conversationUUID: UUID())
+        await CallController.shared.perform(end)
+        XCTAssertEqual(end.state, .complete)
     }
 
     func testListeningWaitsForCueAndPublishedMicInEitherOrder() {
