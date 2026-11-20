@@ -1,5 +1,5 @@
 import AVFAudio
-import CallKit
+import LiveCommunicationKit
 import HeyDanCore
 import LiveKit
 import Observation
@@ -7,7 +7,7 @@ import os
 import Security
 import UIKit
 
-/// One call at a time: CallKit owns its lifecycle (lock screen, AirPods, interruptions),
+/// One call at a time: iOS owns its lifecycle (lock screen, AirPods, interruptions),
 /// NanoClaw admits it and LiveKit carries the audio.
 @MainActor
 @Observable
@@ -128,20 +128,23 @@ final class CallController: NSObject {
         /// The caller's microphone, made before it is published so a mute asked for during setup holds from the start
         /// (at the mixer: see `syncMic`).
         var mic: LocalAudioTrack?
-        /// Setup published `mic`: until then the call cannot go live.
         var micPublished = false
         /// A pass of `syncMic` is under way; a mute asked for meanwhile is taken by its next round.
-        var micSyncing = false
+        var micSync: Task<Void, Error>?
+        var isPaused = false
         /// `room.connect` returned: only from then can the agent leave or the room end the call. A connect that
         /// times out makes the SDK report both while tearing the room down, and that is a failure to connect.
         var roomConnected = false
-        var reportedConnected = false
+        var cueTrack: RemoteAudioTrack?
+        var cuePlayback: ListeningCuePlayback?
+        var milestone: ConnectionMilestone?
+        var reportedConnected: Bool { milestone == .listeningCue }
         /// The host names why it ended the call in the room metadata; the SDK clears it before it reports the disconnect.
         var endReason: String?
         var grantTask: Task<CallTarget.Grant, Error>?
         var connectTask: Task<Void, Never>?
         var agentTimer: Task<Void, Never>?
-        /// Ends the call if CallKit never activates its audio session (`didActivate`), which iOS 27 sometimes skips.
+        /// Ends the call if iOS never activates its audio session (`didActivate`), which iOS 27 sometimes skips.
         var activationTimer: Task<Void, Never>?
         var connectingTone: AVAudioPlayer?
         var interimTimer: Task<Void, Never>?
@@ -164,13 +167,15 @@ final class CallController: NSObject {
     @ObservationIgnored private var call: ActiveCall?
     /// The last call that ended, and how: what an intent that started it reports.
     @ObservationIgnored private var lastEnded: (id: UUID, ending: Ending)?
-    /// Created on the first call, not at launch: on iOS 27 a provider made right after unlock (an Action Button
-    /// launch) can be left without `didActivate` (Apple developer forums thread 837211).
-    @ObservationIgnored private var provider: CXProvider?
+    @ObservationIgnored private lazy var manager: ConversationManager = {
+        let configuration = ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil,
+            maximumConversationGroups: 1, maximumConversationsPerConversationGroup: 1,
+            includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
+        let manager = ConversationManager(configuration: configuration)
+        manager.delegate = self
+        return manager
+    }()
     @ObservationIgnored private let startImpact = UIImpactFeedbackGenerator(style: .light)
-    @ObservationIgnored private let callKit = CXCallController()
-    /// Mute actions the app asked CallKit for to show a microphone it moved itself: their `perform` only fulfils them.
-    @ObservationIgnored private var appMuteActions: Set<UUID> = []
 
     /// DTX off on every publish, a republish after a full reconnect included: the worker times the caller's turn by
     /// the silence it hears.
@@ -181,28 +186,9 @@ final class CallController: NSObject {
     override private init() {
         super.init()
         CallActivity.follow(self)
-        // CallKit activates the audio session; LiveKit's engine runs only between didActivate and didDeactivate.
+        // iOS activates the audio session; LiveKit's engine runs only between didActivate and didDeactivate.
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         setEngine(.none)
-    }
-
-    private func callProvider() -> CXProvider {
-        if let provider {
-            // Re-pushing the configuration before each call is the documented workaround for a stale audio session.
-            provider.configuration = provider.configuration
-            return provider
-        }
-        let configuration = CXProviderConfiguration()
-        configuration.supportsVideo = false
-        configuration.maximumCallGroups = 1
-        configuration.maximumCallsPerCallGroup = 1
-        configuration.supportedHandleTypes = [.generic]
-        configuration.includesCallsInRecents = false
-        let provider = CXProvider(configuration: configuration)
-        // nil: delegate callbacks arrive on the main queue, which the delegate methods rely on.
-        provider.setDelegate(self, queue: nil)
-        self.provider = provider
-        return provider
     }
 
     func prepareStartImpact() { startImpact.prepare() }
@@ -267,12 +253,11 @@ final class CallController: NSObject {
         guard granted else { return finish(id, .failure(.microphoneDenied), endedBy: nil) }
         guard let current = call, current.id == id else { return }
         call?.grantTask = Task { try await requestGrant(current.target, for: id) }
-        _ = callProvider()
-        let start = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: agentName))
+        let handle = Handle(type: .generic, value: current.target.paired.agentHandle.uuidString, displayName: agentName)
+        let start = StartConversationAction(conversationUUID: id, handles: [handle], isVideo: false)
         do {
-            try await callKit.request(CXTransaction(action: start))
+            try await request(start)
             trace(.callkit, "start transaction ok", id)
-            if isMuted { reportMute(for: id) }
         } catch {
             trace(.callkit, "start transaction failed \(CallLog.describe(error))", id, level: .error)
             finish(id, .failure(.callKitRefused(error.localizedDescription)), endedBy: nil)
@@ -307,8 +292,8 @@ final class CallController: NSObject {
         #endif
         trace(.call, "hangup asked")
         Task {
-            do { try await callKit.request(CXTransaction(action: CXEndCallAction(call: id))) } catch {
-                // CallKit never knew the call (still asking for the mic) or no longer does; end it here.
+            do { try await request(EndConversationAction(conversationUUID: id)) } catch {
+                // iOS never knew the call (still asking for the mic) or no longer does; end it here.
                 trace(.callkit, "end transaction failed \(CallLog.describe(error))", id)
                 finish(id, .byCaller, endedBy: nil)
             }
@@ -321,7 +306,7 @@ final class CallController: NSObject {
         if fixtureCall { isMuted = muted; return }
         #endif
         trace(.call, "mute asked muted=\(muted)")
-        Task { try? await callKit.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) }
+        Task { try? await request(MuteConversationAction(conversationUUID: id, isMuted: muted)) }
     }
 
     /// During a call the worker must accept the change before it is kept for the next call.
@@ -345,7 +330,7 @@ final class CallController: NSObject {
             try await syncMic(id)
         } catch {
             guard call?.id == id else { return false }
-            isMuted = !micSends()
+            if call?.isPaused != true { isMuted = !micSends() }
             trace(.audio, "mic follow failed muted=\(muted) \(CallLog.describe(error))", id, level: .error)
             return false
         }
@@ -361,22 +346,32 @@ final class CallController: NSObject {
     /// track's first captured frame and fails after 5 s without one, and a muted (disabled) track can capture none.
     /// The mixer's silence still reaches the track as frames.
     private func syncMic(_ id: UUID) async throws {
-        guard call?.id == id, call?.micSyncing == false else { return }
-        call?.micSyncing = true
-        defer { if call?.id == id { call?.micSyncing = false } }
+        guard call?.id == id else { throw CancellationError() }
+        if let sync = call?.micSync { return try await sync.value }
+        let sync = Task {
+            defer { if call?.id == id { call?.micSync = nil } }
+            try await reconcileMic(id)
+        }
+        call?.micSync = sync
+        try await sync.value
+    }
+
+    private func reconcileMic(_ id: UUID) async throws {
         while let current = call, current.id == id, let mic = current.mic {
+            let silent = isMuted || current.isPaused
             if !current.micPublished {
-                Self.silenceMixer(isMuted)
+                Self.silenceMixer(silent)
                 return
             }
-            if isMuted != mic.isMuted {
-                if isMuted { try await mic.mute() } else { try await mic.unmute() }
-            } else if !isMuted, current.micPublished, let room = current.room, room.connectionState == .connected,
+            if silent != mic.isMuted {
+                if silent { try await mic.mute() } else { try await mic.unmute() }
+            } else if !silent, current.micPublished, let room = current.room, room.connectionState == .connected,
                       !Self.isPublished(mic, in: room)
             {
                 try await room.localParticipant.publish(audioTrack: mic, options: Self.micPublishOptions)
                 trace(.audio, "mic published again after a reconnect", id)
             } else {
+                Self.silenceMixer(current.isPaused)
                 return
             }
         }
@@ -423,7 +418,7 @@ final class CallController: NSObject {
         try Task.checkCancellation()
         guard call?.id == id else { throw CancellationError() }
         call?.mic = mic
-        Self.silenceMixer(isMuted)
+        Self.silenceMixer(isMuted || call?.isPaused == true)
         trace(.audio, "mic created ms=\(CallLog.ms(since: creating))", id)
         let starting = ContinuousClock.now
         try await mic.start()
@@ -441,14 +436,14 @@ final class CallController: NSObject {
                 guard call?.id == id else { return }
                 call?.grant = grant
                 let names = grant.names
-                if let agent = grant.agent, !agent.isEmpty { setAgentName(agent, for: id) }
+                if let agent = grant.agent, !agent.isEmpty { agentName = agent }
                 let room = Room(delegate: self, roomOptions: RoomOptions(defaultAudioPublishOptions: Self.micPublishOptions))
                 call?.room = room
                 await listen(to: room, names: names, for: id)
                 let mic = try await microphone
                 guard call?.id == id else { return }
                 call?.connectingTone?.stop()
-                phase = .joining
+                enter(.joining, for: id)
                 let connecting = ContinuousClock.now
                 trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
                 do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
@@ -467,7 +462,7 @@ final class CallController: NSObject {
                 // Keep setup silenced until the published track has taken any pending mute.
                 try await syncMic(id)
                 guard call?.id == id else { return }
-                Self.silenceMixer(false)
+                Self.silenceMixer(call?.isPaused == true)
                 trace(.audio, "mic published muted=\(isMuted) track=\(mic.isMuted ? "muted" : "open") ms=\(publishMS)", id)
                 startAgentTimer(id)
                 startInterimTimer(id)
@@ -481,12 +476,15 @@ final class CallController: NSObject {
         }
     }
 
-    private func setAgentName(_ name: String, for id: UUID) {
-        agentName = name
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: name)
-        update.localizedCallerName = name
-        provider?.reportCall(with: id, updated: update)
+    private func request(_ action: sending ConversationAction) async throws {
+        // The framework's async request and synchronous event reporting share its single delegate manager.
+        nonisolated(unsafe) let manager = manager
+        try await manager.perform([action])
+    }
+
+    private func report(_ event: LiveCommunicationKit.Conversation.Event, for id: UUID) {
+        guard let conversation = manager.conversations.first(where: { $0.uuid == id }) else { return }
+        manager.reportConversationEvent(event, for: conversation)
     }
 
     private func startActivationTimer(_ id: UUID) {
@@ -510,7 +508,10 @@ final class CallController: NSObject {
     /// Re-reads the room: every delegate callback lands here, so their order does not matter.
     private func refresh() {
         guard let call, let room = call.room, let names = call.names else { return }
-        if room.connectionState == .reconnecting { return phase = .reconnecting }
+        if room.connectionState == .reconnecting {
+            if call.reportedConnected { phase = .reconnecting }
+            return
+        }
         guard let agent = room.remoteParticipants.values.first(where: \.isAgent) else { return }
         let attributes = agent.attributes
         if names.isUpdating(attributes) {
@@ -520,19 +521,60 @@ final class CallController: NSObject {
         refreshVoice(attributes, names: names, for: call.id)
         refreshCommandWords(attributes, names: names, for: call.id)
         refreshCommands(attributes, names: names, for: call)
-        guard let activity = names.activity(attributes) else { return }
-        if !call.reportedConnected {
-            // Live only once the caller can be heard: in the room, microphone published.
-            guard call.micPublished, room.connectionState == .connected else { return }
-            self.call?.reportedConnected = true
-            trace(.call, "live")
-            #if DEBUG
-            ReconnectDrill.run(on: room, for: call.id)
-            #endif
-            call.agentTimer?.cancel()
-            provider?.reportOutgoingCall(with: call.id, connectedAt: nil)
+        if let update = call.milestone?.workerUpdate(names.activity(attributes)) { phase = update }
+    }
+
+    enum ConnectionMilestone: Sendable {
+        case joining, listeningCue
+
+        func workerUpdate(_ activity: VoiceProtocol.AgentActivity?) -> Phase? {
+            guard self == .listeningCue, let activity else { return nil }
+            return .live(activity)
         }
-        phase = .live(activity)
+
+        func transition(at date: Date) -> (phase: Phase, event: LiveCommunicationKit.Conversation.Event) {
+            switch self {
+            case .joining: (.joining, .conversationStartedConnecting(date))
+            case .listeningCue: (.live(.listening), .conversationConnected(date))
+            }
+        }
+    }
+
+    private func enter(_ milestone: ConnectionMilestone, for id: UUID) {
+        call?.milestone = milestone
+        let transition = milestone.transition(at: .now)
+        phase = transition.phase
+        report(transition.event, for: id)
+    }
+
+    private func observeCue(_ track: RemoteAudioTrack, in room: Room) {
+        guard let current = call, current.room === room, !current.reportedConnected else { return }
+        if let prior = current.cueTrack { current.cuePlayback?.detach(from: prior) }
+        let playback = ListeningCuePlayback { [weak self, weak track, weak room] milestone in
+            Task { @MainActor in
+                guard let room, let track else { return }
+                self?.cuePlayed(milestone, track: track, in: room)
+            }
+        }
+        call?.cueTrack = track
+        call?.cuePlayback = playback
+        playback.attach(to: track)
+        refresh()
+    }
+
+    private func cuePlayed(_ milestone: ConnectionMilestone, track: RemoteAudioTrack, in room: Room) {
+        guard let call, call.room === room, call.cueTrack === track, !call.reportedConnected else { return }
+        call.cuePlayback?.detach(from: track)
+        self.call?.cuePlayback = nil
+        self.call?.cueTrack = nil
+        call.agentTimer?.cancel()
+        let handle = Handle(type: .generic, value: call.target.paired.agentHandle.uuidString, displayName: agentName)
+        report(.conversationUpdated(.init(members: [handle], activeRemoteMembers: [handle], capabilities: [.pausing])), for: call.id)
+        enter(milestone, for: call.id)
+        trace(.call, "live")
+        #if DEBUG
+        ReconnectDrill.run(on: room, for: call.id)
+        #endif
     }
 
     /// Before `room.connect` returned this is the SDK cleaning up a connect that failed; `connect` reports that.
@@ -542,9 +584,8 @@ final class CallController: NSObject {
         finish(call.id, Ending(cause: .remote, message: reason ?? call.endReason ?? fallback), endedBy: .remoteEnded)
     }
 
-    /// Ends call `id` everywhere, once: on the host, in LiveKit and, unless CallKit asked, in CallKit.
     private func finish(
-        _ id: UUID, _ ending: Ending, endedBy reason: CXCallEndedReason?, hostReason: CallTarget.EndReason? = nil,
+        _ id: UUID, _ ending: Ending, endedBy reason: LiveCommunicationKit.Conversation.EndedReason?, hostReason: CallTarget.EndReason? = nil,
         site: String = #function
     ) {
         guard let current = call, current.id == id else { return }
@@ -566,7 +607,8 @@ final class CallController: NSObject {
         #if DEBUG && targetEnvironment(simulator)
         VoiceDebug.callEnded(id)
         #endif
-        appMuteActions.removeAll()
+        if let track = ended.cueTrack { ended.cuePlayback?.detach(from: track) }
+        ended.micSync?.cancel()
         ended.grantTask?.cancel()
         ended.connectTask?.cancel()
         ended.agentTimer?.cancel()
@@ -589,8 +631,10 @@ final class CallController: NSObject {
         }
         editTranscript { $0.end() }
         commands = nil
-        if let reason { provider?.reportCall(with: id, endedAt: nil, reason: reason) }
-        // didDeactivate does not always follow (a reset, a call CallKit never knew).
+        if let reason { report(.conversationEnded(.now, reason), for: id) }
+        // An admitted outgoing call can be redialed even if the worker never answered.
+        if ended.connectTask != nil { IntentCall.donate(ended.target.paired, name: agentName) }
+        // didDeactivate does not always follow (a reset, a call iOS never knew).
         setEngine(.none)
         Self.silenceMixer(false)
         #if targetEnvironment(simulator)
@@ -824,9 +868,10 @@ extension CallController {
             commands = settings
         }
         guard !call.settingsSent else { return }
-        // The attribute can come before setup finished, and an RPC sent then never reaches the worker (RpcError 1501
-        // after its timeout) while the worker holds its first cue for it. Setup's last refresh sends it.
-        guard call.micPublished else { return trace(.rpc, "settings wait for setup", call.id, level: .debug) }
+        // The settings reply releases the worker's opening cue. Both media paths must be ready to hear it.
+        guard call.micPublished, call.cuePlayback != nil || call.reportedConnected else {
+            return trace(.rpc, "settings wait for setup", call.id, level: .debug)
+        }
         self.call?.settingsSent = true
         let id = call.id
         trace(.rpc, "settings send once", id, level: .info)
@@ -933,90 +978,84 @@ extension CallController {
     }
 }
 
-extension CallController {
-    /// Shows CallKit (lock screen, AirPods) the microphone as the app left it, so its mute key never claims otherwise.
-    private func reportMute(for id: UUID) {
-        guard call?.id == id else { return }
-        let action = CXSetMutedCallAction(call: id, muted: isMuted)
-        appMuteActions.insert(action.uuid)
-        Task {
-            do { try await callKit.request(CXTransaction(action: action)) } catch {
-                appMuteActions.remove(action.uuid)
-                trace(.callkit, "mute report failed \(CallLog.describe(error))", id, level: .error)
-            }
-        }
-    }
+extension CallController: ConversationManagerDelegate {
+    nonisolated func conversationManagerDidBegin(_: ConversationManager) {}
 
-}
+    nonisolated func conversationManager(_: ConversationManager, conversationChanged _: LiveCommunicationKit.Conversation) {}
 
-// MARK: - CallKit
-
-extension CallController: CXProviderDelegate {
-    nonisolated func providerDidReset(_: CXProvider) {
-        MainActor.assumeIsolated {
-            trace(.callkit, "provider reset", level: .error)
+    nonisolated func conversationManagerDidReset(_: ConversationManager) {
+        Task { @MainActor in
+            trace(.callkit, "manager reset", level: .error)
             if let id = call?.id { finish(id, Ending(cause: .failure, message: "The call was reset."), endedBy: nil) }
         }
     }
 
-    nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
-        let id = action.callUUID
-        let current = MainActor.assumeIsolated { call?.id == id }
-        MainActor.assumeIsolated { trace(.callkit, "perform start current=\(current)", id) }
-        guard current else { return action.fail() }
-        provider.reportOutgoingCall(with: id, startedConnectingAt: nil)
-        action.fulfill()
-        MainActor.assumeIsolated {
+    nonisolated func conversationManager(_: ConversationManager, perform action: ConversationAction) {
+        // The delegate hands this action to one executor for its entire remaining lifetime.
+        nonisolated(unsafe) let pending = action
+        Task { @MainActor in await perform(pending) }
+    }
+
+    private func perform(_ action: ConversationAction) async {
+        let id = action.conversationUUID
+        guard call?.id == id else { return action.fail() }
+        switch action {
+        case let start as StartConversationAction:
+            trace(.callkit, "perform start current=true", id)
             Self.configureAudioSession()
             startActivationTimer(id)
+            start.fulfill(dateStarted: .now)
             #if targetEnvironment(simulator)
             activateAudioByHand()
             #endif
             connect(id)
-        }
-    }
-
-    nonisolated func provider(_: CXProvider, perform action: CXEndCallAction) {
-        let id = action.callUUID
-        action.fulfill()
-        MainActor.assumeIsolated {
+        case let end as EndConversationAction:
             trace(.callkit, "perform end", id)
             finish(id, .byCaller, endedBy: nil)
-        }
-    }
-
-    nonisolated func provider(_: CXProvider, perform action: CXSetMutedCallAction) {
-        let id = action.callUUID
-        let muted = action.isMuted
-        let actionID = action.uuid
-        // CallKit actions are not Sendable; this one is only fulfilled or failed, on the main queue it came from.
-        nonisolated(unsafe) let action = action
-        MainActor.assumeIsolated {
-            // CallKit resets the mute of a call that just ended (systemInitiated); there is no microphone left to move.
-            guard call?.id == id else {
-                trace(.callkit, "perform mute muted=\(muted) for a call that is over", id, level: .info)
-                return action.fail()
-            }
-            if appMuteActions.remove(actionID) != nil { action.fulfill() } else {
-                _ = Task {
-                    if await applyMute(muted, for: id) { action.fulfill() } else { action.fail() }
+            end.fulfill(dateEnded: .now)
+        case let mute as MuteConversationAction:
+            if await applyMute(mute.isMuted, for: id) { mute.fulfill() } else { mute.fail() }
+        case let pause as PauseConversationAction:
+            let previous = call?.isPaused == true
+            do {
+                try setPaused(pause.isPaused)
+                try await syncMic(id)
+                guard call?.id == id else { return pause.fail() }
+                pause.fulfill()
+            } catch {
+                if call?.id == id {
+                    try? setPaused(previous)
+                    try? await syncMic(id)
                 }
+                pause.fail()
             }
+        default:
+            action.fail()
         }
     }
 
-    nonisolated func provider(_: CXProvider, didActivate _: AVAudioSession) {
-        MainActor.assumeIsolated { audioActivated(by: "callkit") }
+    private func setPaused(_ paused: Bool) throws {
+        // Only the activation callback can reopen an interrupted audio session.
+        if AudioManager.shared.engineAvailability.isInputAvailable {
+            try AudioManager.shared.setEngineAvailability(.init(isInputAvailable: true, isOutputAvailable: !paused))
+        }
+        call?.isPaused = paused
+        if paused { call?.connectingTone?.stop() }
+        Self.silenceMixer(paused || isMuted)
+    }
+
+    nonisolated func conversationManager(_: ConversationManager, didActivate _: AVAudioSession) {
+        Task { @MainActor in audioActivated(by: "system") }
     }
 
     private func audioActivated(by activator: String) {
         guard call != nil else { return }
         trace(.callkit, "audio session activated by=\(activator)")
-        setEngine(.default)
+        setEngine(.init(isInputAvailable: true, isOutputAvailable: call?.isPaused == false))
         guard let timer = call?.activationTimer else { return }
         timer.cancel()
         call?.activationTimer = nil
-        guard phase == .connecting,
+        guard phase == .connecting, call?.isPaused == false,
               let url = Bundle.main.url(forResource: "Connecting", withExtension: "wav"),
               let tone = try? AVAudioPlayer(contentsOf: url) else { return }
         call?.connectingTone = tone
@@ -1026,7 +1065,7 @@ extension CallController: CXProviderDelegate {
     #if targetEnvironment(simulator)
     /// The Simulator's callservicesd cannot activate an app's audio session from outside the app (it logs "Error
     /// setting audio active to true" with OSStatus -50), so `didActivate` never comes there. Once the start action is
-    /// fulfilled the app activates the session itself, where CallKit would, and the rest of the call runs as on a phone.
+    /// fulfilled the app activates the session itself, where iOS would, and the rest of the call runs as on a phone.
     private func activateAudioByHand() {
         do { try AVAudioSession.sharedInstance().setActive(true) } catch {
             return trace(.callkit, "simulator audio activation failed \(CallLog.describe(error))", level: .error)
@@ -1045,17 +1084,17 @@ extension CallController: CXProviderDelegate {
     }
     #endif
 
-    nonisolated func provider(_: CXProvider, didDeactivate _: AVAudioSession) {
-        MainActor.assumeIsolated {
+    nonisolated func conversationManager(_: ConversationManager, didDeactivate _: AVAudioSession) {
+        Task { @MainActor in
             call?.connectingTone?.stop()
             trace(.callkit, "audio session deactivated")
+            setEngine(.none)
         }
-        setEngine(.none)
     }
 
-    nonisolated func provider(_: CXProvider, timedOutPerforming action: CXAction) {
+    nonisolated func conversationManager(_: ConversationManager, timedOutPerforming action: ConversationAction) {
         let name = String(describing: type(of: action))
-        MainActor.assumeIsolated { trace(.callkit, "timed out performing \(name)", level: .error) }
+        Task { @MainActor in trace(.callkit, "timed out performing \(name)", level: .error) }
     }
 }
 
@@ -1088,14 +1127,17 @@ extension CallController: RoomDelegate {
         }
     }
 
-    #if DEBUG
     nonisolated func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         guard participant.isAgent, let track = publication.track as? RemoteAudioTrack else { return }
+        if publication.name == ListeningCuePlayback.trackName {
+            Task { @MainActor in observeCue(track, in: room) }
+        }
+        #if DEBUG
         let sid = publication.sid.stringValue
         if ProcessInfo.processInfo.environment["HEYDAN_AUDIO_METER"] == "1" { track.add(audioRenderer: AudioMeter.track) }
         Task { @MainActor in if room === call?.room { trace(.room, "agent audio subscribed sid=\(sid)") } }
+        #endif
     }
-    #endif
 
     nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
         let who = "sid=\(participant.sid?.stringValue ?? "-") agent=\(participant.isAgent)"

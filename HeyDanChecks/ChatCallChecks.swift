@@ -188,24 +188,24 @@ import XCTest
     func testBackgroundControlReachesPairedCallAdmission() async throws {
         let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "control-admission"])
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
-        XCUIDevice.shared.press(.home)
+        XCUIApplication(bundleIdentifier: "com.apple.Preferences").activate()
         let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
         // Under load the app can go straight to suspended; either background state is fine for the intent.
         let backgrounded = NSPredicate { _, _ in [.runningBackground, .runningBackgroundSuspended].contains(app.state) }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: backgrounded, object: nil)], timeout: 20), .completed)
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: backgrounded, object: nil)], timeout: 20)
         do {
             try await IntentDefinitions(bundleIdentifier: bundle).intents["CallDefaultAgentIntent"].makeIntent().run()
             XCTFail("The fixture host refuses admission")
         } catch {}
         app.activate()
-        let admission = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "CallKit admitted the")).firstMatch
+        let admission = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "iOS admitted the")).firstMatch
         XCTAssertTrue(admission.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Call again"].exists)
         if admission.label.contains("background call") {
-            print("check: CallKit admitted the background Control")
+            print("check: iOS admitted the background Control")
         } else {
             XCTAssertTrue(admission.label.contains("foreground call"))
-            print("check: CallKit admitted the Control after foregrounding")
+            print("check: iOS admitted the Control after foregrounding")
         }
     }
 

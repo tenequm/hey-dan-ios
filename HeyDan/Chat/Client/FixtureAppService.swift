@@ -358,7 +358,7 @@ actor FixtureAppService: AppService {
         var reason = "Calls are unavailable in this preview."
         if scenario == "control-admission" {
             let background = await MainActor.run { UIApplication.shared.applicationState == .background }
-            reason = background ? "CallKit admitted the background call." : "CallKit admitted the foreground call."
+            reason = background ? "iOS admitted the background call." : "iOS admitted the foreground call."
         }
         throw .server(status: 503, body: ErrorBody(error: "voice_offline", message: reason))
     }

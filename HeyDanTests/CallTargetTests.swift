@@ -2,6 +2,7 @@ import AVFAudio
 import CryptoKit
 import Foundation
 import HeyDanCore
+import Intents
 import XCTest
 import Security
 import Synchronization
@@ -31,6 +32,25 @@ private final class FixtureBundle {}
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent, agent]), expected: agent.name))
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: "Other"))
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: nil))
+    }
+
+    func testRecentsUsesOnlyOneConcreteAgentHandle() {
+        let host = URL(string: "https://example.invalid")!
+        let target = PairedCallTarget(host: host, deviceId: "fixture", conversation: conversation)
+        func intent(_ handles: [String]) -> INStartCallIntent {
+            let people = handles.map {
+                INPerson(personHandle: INPersonHandle(value: $0, type: .unknown), nameComponents: nil,
+                    displayName: conversation.agent.name, image: nil, contactIdentifier: nil, customIdentifier: nil)
+            }
+            return INStartCallIntent(callRecordFilter: nil, callRecordToCallBack: nil, audioRoute: .unknown,
+                destinationType: .redial, contacts: people, callCapability: .audioCall)
+        }
+        XCTAssertEqual(IntentCall.redialAgent(in: intent([target.agentHandle.uuidString])),
+                       PairedAgentID.make(host: host, agentId: conversation.agent.id))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([conversation.agent.name])))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([AgentEntity.defaultID.uuidString])))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([target.agentHandle.uuidString, UUID().uuidString])))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([])))
     }
 
     func testLegacyCleanupDeletesBackupsAndPreservesUnrelatedAccounts() {
@@ -106,6 +126,49 @@ private final class FixtureBundle {}
             transcript.caption(segment: "two", text: "Again", isFinal: false, fromCaller: true, at: .now)
             XCTAssertNil(transcript.deliveryMarker)
         }
+    }
+
+    func testJoiningBecomesListeningAndSystemJoinedOnlyDuringTheListeningCue() throws {
+        let date = Date(timeIntervalSince1970: 10)
+        let joining = CallController.ConnectionMilestone.joining.transition(at: date)
+        XCTAssertEqual(joining.phase, .joining)
+        XCTAssertEqual(joining.event, .conversationStartedConnecting(date))
+
+        let events = Mutex<[CallController.ConnectionMilestone]>([])
+        let playback = ListeningCuePlayback { event in events.withLock { $0.append(event) } }
+        for activity in [VoiceProtocol.AgentActivity.listening, .thinking, .speaking] {
+            XCTAssertNil(CallController.ConnectionMilestone.joining.workerUpdate(activity))
+        }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        func render(_ hz: Double, milliseconds: Int, to renderer: ListeningCueRenderer) throws {
+            let frames = AVAudioFrameCount(milliseconds * 48)
+            let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+            pcm.frameLength = frames
+            let samples = try XCTUnwrap(pcm.floatChannelData?[0])
+            for i in 0 ..< Int(frames) { samples[i] = Float(0.15 * sin(2 * .pi * hz * Double(i) / 48_000)) }
+            renderer.render(pcmBuffer: pcm)
+        }
+
+        for renderer in [playback.output, playback.track] {
+            try render(0, milliseconds: 100, to: renderer)
+            try render(784, milliseconds: 90, to: renderer)
+            try render(523, milliseconds: 140, to: renderer) // Discard shares the opening note.
+            try render(1175, milliseconds: 80, to: renderer)
+            try render(1568, milliseconds: 110, to: renderer)
+            try render(784, milliseconds: 110, to: renderer)
+        }
+        XCTAssertTrue(events.withLock { $0.isEmpty })
+        try render(1175, milliseconds: 10, to: playback.track)
+        XCTAssertTrue(events.withLock { $0.isEmpty }, "Decoded audio has yet to play.")
+        try render(1175, milliseconds: 10, to: playback.output)
+        let event = try XCTUnwrap(events.withLock { $0.first }).transition(at: date)
+        XCTAssertEqual(event.phase, .live(.listening))
+        XCTAssertEqual(event.event, .conversationConnected(date))
+        for renderer in [playback.track, playback.output] {
+            try render(784, milliseconds: 110, to: renderer)
+            try render(1175, milliseconds: 130, to: renderer)
+        }
+        XCTAssertEqual(events.withLock { $0.count }, 1)
     }
 
     func testCallSetupLabelsAndBundledTone() throws {

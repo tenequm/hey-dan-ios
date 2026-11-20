@@ -1,4 +1,5 @@
 import AppIntents
+import Intents
 import HeyDanCore
 import LiveKit
 #if DEBUG
@@ -15,6 +16,7 @@ import Security
 struct HeyDanApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
+    @State private var redialError: String?
     @State private var pairedHost: Pairings.Entry?
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #if DEBUG
@@ -79,6 +81,19 @@ struct HeyDanApp: App {
                 #endif
             }
                 .environment(\.pairingConfirmation, $pairedHost)
+                .onContinueUserActivity(NSStringFromClass(INStartCallIntent.self)) { activity in
+                    guard let intent = activity.interaction?.intent as? INStartCallIntent else { return }
+                    Task {
+                        do {
+                            guard let id = IntentCall.redialAgent(in: intent) else { throw IntentCall.unavailableAgent }
+                            try await IntentCall.run(agentID: id, inBackground: false, exactAgent: true)
+                        } catch let error as IntentCall.CallNotStarted { redialError = error.message }
+                        catch { redialError = error.localizedDescription }
+                    }
+                }
+                .alert("Could not redial", isPresented: Binding(get: { redialError != nil }, set: { if !$0 { redialError = nil } })) {
+                    Button("OK") { redialError = nil }
+                } message: { Text(redialError ?? "") }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     Self.removeLegacyLinks()
                     ChatController.shared.setActive(phase != .background)
@@ -221,7 +236,7 @@ extension HeyDanApp {
         var feed: Task<Void, Never>?
         defer { feed?.cancel() }
         if let path = env["HEYDAN_FEED_WAV"], !path.isEmpty {
-            // No microphone at all: the engine takes the frames AudioFeed hands it. On a phone CallKit still
+            // No microphone at all: the engine takes the frames AudioFeed hands it. On a phone iOS still
             // activates the call's session and gates the engine; a manual-rendering engine just never uses the device.
             do {
                 try AudioManager.shared.setManualRenderingMode(true)
@@ -269,8 +284,6 @@ extension HeyDanApp {
     }
 }
 
-/// A key the caller presses mid-call. `mute` and `unmute` go through the key's own path, a CXSetMutedCallAction
-/// requested from CXCallController that the app did not mark as its own: exactly what the lock screen and AirPods send.
 private enum DebugStep: String {
     case mute, unmute
 
@@ -559,7 +572,7 @@ private enum AudioFeed {
 #endif
 
 /// The backup to Call agent: it always opens Hey Dan (after Face ID on a locked phone) and starts the call there. A
-/// plain intent's start from the background fails CallKit's user-intent check, and one from the app in front passes.
+/// plain intent's start from the background fails the system's user-intent check, and one from the app in front passes.
 struct StartConversationIntent: AppIntent {
     static let title: LocalizedStringResource = "Start conversation"
     static let description = IntentDescription("Opens Hey Dan and calls a NanoClaw agent in its chat.")
@@ -581,7 +594,7 @@ struct StartConversationIntent: AppIntent {
 }
 
 /// What the Action Button runs (see the README for the shortcut it needs). iOS 27's phone start-call schema is what
-/// lets CallKit take a start from the background, on a locked phone too: the system vouches for the user's intent,
+/// lets iOS take a start from the background, on a locked phone too: the system vouches for the user's intent,
 /// which it does not for a plain intent. The shortcut saves the agent and the call type (Audio), not Ask Each Time.
 @AppIntent(schema: .phone.startCall)
 struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
@@ -604,7 +617,7 @@ struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
     }
 }
 
-/// Keep the intent alive until CallKit has started the call or the caller can be shown the failure.
+/// Keep the intent alive until iOS has started the call or the caller can be shown the failure.
 @MainActor
 enum IntentCall {
     static let backgroundRefused = "iOS did not let Hey Dan start the call from the background. Use Start conversation, "
@@ -615,8 +628,28 @@ enum IntentCall {
         var localizedStringResource: LocalizedStringResource { "\(message)" }
     }
 
+    static let unavailableAgent = CallNotStarted(message: "This agent is no longer available to call.")
+
+    static func redialAgent(in intent: INStartCallIntent) -> UUID? {
+        let contacts = intent.contacts ?? []
+        let people = contacts.isEmpty ? intent.callRecordToCallBack?.participants ?? [] : contacts
+        guard people.count == 1, let handle = people.first?.personHandle?.value, let id = UUID(uuidString: handle),
+              id != AgentEntity.defaultID else { return nil }
+        return id
+    }
+
+    static func donate(_ target: PairedCallTarget, name: String) {
+        let intent = CallLineIntent()
+        intent.destination = .line(AgentEntity(id: target.agentHandle, agent: name, source: "Paired agent"))
+        intent.audioVisualMode = .audio
+        Task {
+            do { _ = try await intent.donate() }
+            catch { CallLog.log(.intent, "call donation failed \(CallLog.describe(error))", level: .error) }
+        }
+    }
+
     /// `inBackground`: run with no app on screen, so nothing but the thrown error can tell the caller what went wrong.
-    static func run(agentID: UUID?, inBackground: Bool) async throws {
+    static func run(agentID: UUID?, inBackground: Bool, exactAgent: Bool = false) async throws {
         let began = ContinuousClock.now
         let controller = CallController.shared
         let acknowledged = controller.acknowledgeStart()
@@ -625,7 +658,7 @@ enum IntentCall {
             CallLog.log(.intent, "a call is on already: not started")
             return
         }
-        let target = try await pairedTarget(id: agentID)
+        let target = try await pairedTarget(id: agentID, exactAgent: exactAgent)
         guard let id = await controller.start(target: target, acknowledged: acknowledged) else { return }
         let deadline = ContinuousClock.now + CallController.setupBound
         while controller.isConnecting(id), ContinuousClock.now < deadline {
@@ -662,7 +695,7 @@ enum IntentCall {
     }
     #endif
 
-    static func pairedTarget(id: UUID?) async throws -> CallTarget {
+    static func pairedTarget(id: UUID?, exactAgent: Bool = false) async throws -> CallTarget {
         let entries = Pairings.shared.entries.filter { $0.features.contains("calls") }
         var preference = UserDefaults.standard.string(forKey: "defaultCallAgent").flatMap(UUID.init(uuidString:))
         #if DEBUG
@@ -675,11 +708,13 @@ enum IntentCall {
                 entry.agents.first { PairedAgentID.make(host: entry.host, agentId: $0.id) == id }.map { (entry, $0) }
             }.first
         }
+        let requested = pick(id)
+        if exactAgent, requested == nil { throw unavailableAgent }
         let active = Pairings.shared.active
         let automatic = active.flatMap { entry in
             entry.features.contains("calls") ? entry.agents.first.map { (entry, $0) } : nil
         }
-        guard let (entry, agent) = pick(id) ?? (preference == nil ? automatic : pick(preference)) else {
+        guard let (entry, agent) = requested ?? (preference == nil ? automatic : pick(preference)) else {
             throw CallNotStarted(message: "Choose an available paired agent in Settings or Shortcuts.")
         }
         let found: (conversation: Conversation?, service: any AppService)
