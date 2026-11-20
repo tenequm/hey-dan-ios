@@ -137,6 +137,7 @@ final class CallController: NSObject {
         var reportedConnected = false
         /// The host names why it ended the call in the room metadata; the SDK clears it before it reports the disconnect.
         var endReason: String?
+        var grantTask: Task<CallTarget.Grant, Error>?
         var connectTask: Task<Void, Never>?
         var agentTimer: Task<Void, Never>?
         /// Ends the call if CallKit never activates its audio session (`didActivate`), which iOS 27 sometimes skips.
@@ -251,7 +252,8 @@ final class CallController: NSObject {
         let granted = await AVAudioApplication.requestRecordPermission()
         trace(.audio, "mic permission granted=\(granted)", id)
         guard granted else { return finish(id, .failure(.microphoneDenied), endedBy: nil) }
-        guard call?.id == id else { return }
+        guard let current = call, current.id == id else { return }
+        call?.grantTask = Task { try await requestGrant(current.target, for: id) }
         _ = callProvider()
         let start = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: agentName))
         do {
@@ -384,25 +386,53 @@ final class CallController: NSObject {
 
     // MARK: - Call lifecycle
 
+    private func requestGrant(_ target: CallTarget, for id: UUID) async throws -> CallTarget.Grant {
+        try Task.checkCancellation()
+        let asked = ContinuousClock.now
+        trace(.net, "token request", id)
+        let grant: CallTarget.Grant
+        do { grant = try await target.grant() } catch {
+            trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
+            throw error
+        }
+        guard call?.id == id else {
+            endOnHost(target, callId: grant.callId)
+            throw CancellationError()
+        }
+        call?.callId = grant.callId
+        trace(.net, "token ok protocol=\(grant.names.version) ms=\(CallLog.ms(since: asked))", id)
+        return grant
+    }
+
+    private func prepareMic(_ id: UUID) async throws -> LocalAudioTrack {
+        let creating = ContinuousClock.now
+        let mic = await LocalAudioTrack.createTrack()
+        try Task.checkCancellation()
+        guard call?.id == id else { throw CancellationError() }
+        call?.mic = mic
+        Self.silenceMixer(isMuted)
+        trace(.audio, "mic created ms=\(CallLog.ms(since: creating))", id)
+        let starting = ContinuousClock.now
+        try await mic.start()
+        trace(.audio, "mic prepared ms=\(CallLog.ms(since: starting))", id)
+        return mic
+    }
+
     private func connect(_ id: UUID) {
-        guard let target = call?.target else { return }
+        guard let current = call, current.id == id, let grantTask = current.grantTask else { return }
+        let target = current.target
         call?.connectTask = Task {
             do {
-                let grant: CallTarget.Grant
-                let asked = ContinuousClock.now
-                do { grant = try await target.grant() } catch {
-                    trace(.net, "token failed \(CallLog.describe(error)) ms=\(CallLog.ms(since: asked))", id, level: .error)
-                    throw error
-                }
-                guard call?.id == id else { return endOnHost(target, callId: grant.callId) }
-                call?.callId = grant.callId
+                async let microphone = prepareMic(id)
+                let grant = try await grantTask.value
+                guard call?.id == id else { return }
                 call?.grant = grant
-                trace(.net, "token ok protocol=\(grant.names.version) ms=\(CallLog.ms(since: asked))", id)
                 let names = grant.names
                 if let agent = grant.agent, !agent.isEmpty { setAgentName(agent, for: id) }
                 let room = Room(delegate: self, roomOptions: RoomOptions(defaultAudioPublishOptions: Self.micPublishOptions))
                 call?.room = room
                 await listen(to: room, names: names, for: id)
+                let mic = try await microphone
                 guard call?.id == id else { return }
                 let connecting = ContinuousClock.now
                 trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
@@ -413,25 +443,17 @@ final class CallController: NSObject {
                 guard call?.id == id else { return }
                 call?.roomConnected = true
                 trace(.room, "connected ms=\(CallLog.ms(since: connecting))", id)
-                let mic = await LocalAudioTrack.createTrack()
-                guard call?.id == id else { return }
-                call?.mic = mic
-                // Setup done, the mixer opens; a call that is gone leaves no later call's microphone silent there
-                // (unless one is already setting up its own). A failed setup leaves it closed: `finish` opens it once
-                // the engine is off.
-                var micReady = false
-                defer { if call?.id == id ? micReady : call?.mic == nil { Self.silenceMixer(false) } }
-                try await syncMic(id)
-                guard call?.id == id else { return }
                 let publishing = ContinuousClock.now
+                trace(.audio, "mic publish start", id)
                 try await room.localParticipant.publish(audioTrack: mic, options: Self.micPublishOptions)
                 guard call?.id == id else { return }
+                let publishMS = CallLog.ms(since: publishing)
                 call?.micPublished = true
-                // Mutes the track before the mixer opens (the defer above), so a muted caller is not heard in between.
+                // Keep setup silenced until the published track has taken any pending mute.
                 try await syncMic(id)
                 guard call?.id == id else { return }
-                micReady = true
-                trace(.audio, "mic published muted=\(isMuted) track=\(mic.isMuted ? "muted" : "open") ms=\(CallLog.ms(since: publishing))", id)
+                Self.silenceMixer(false)
+                trace(.audio, "mic published muted=\(isMuted) track=\(mic.isMuted ? "muted" : "open") ms=\(publishMS)", id)
                 startAgentTimer(id)
                 startInterimTimer(id)
                 refresh()
@@ -529,6 +551,7 @@ final class CallController: NSObject {
         VoiceDebug.callEnded(id)
         #endif
         appMuteActions.removeAll()
+        ended.grantTask?.cancel()
         ended.connectTask?.cancel()
         ended.agentTimer?.cancel()
         ended.activationTimer?.cancel()
@@ -968,6 +991,7 @@ extension CallController: CXProviderDelegate {
     }
 
     private func audioActivated(by activator: String) {
+        guard call != nil else { return }
         trace(.callkit, "audio session activated by=\(activator)")
         call?.activationTimer?.cancel()
         setEngine(.default)
