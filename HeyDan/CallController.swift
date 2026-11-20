@@ -337,8 +337,7 @@ final class CallController: NSObject {
             do { try await request(EndConversationAction(conversationUUID: id)) } catch {
                 // iOS never knew the call (still asking for the mic) or no longer does; end it here.
                 trace(.callkit, "end transaction failed \(CallLog.describe(error))", id)
-                let known = manager.conversations.contains { $0.uuid == id }
-                finish(id, .byCaller, endedBy: known ? .failed : nil)
+                finish(id, .byCaller, endedBy: .failed)
             }
         }
     }
@@ -539,9 +538,9 @@ final class CallController: NSObject {
         try await manager.perform([action])
     }
 
-    private func report(_ event: LiveCommunicationKit.Conversation.Event, for id: UUID) {
+    private func report(_ event: LiveCommunicationKit.Conversation.Event, for id: UUID, requestEndIfMissing: Bool = false) {
         guard let conversation = manager.conversations.first(where: { $0.uuid == id }) else {
-            if case .conversationEnded = event {
+            if requestEndIfMissing {
                 trace(.callkit, "ended conversation missing, requesting end", id)
                 Task {
                     do { try await request(EndConversationAction(conversationUUID: id)) }
@@ -695,7 +694,7 @@ final class CallController: NSObject {
         }
         editTranscript { $0.end() }
         commands = nil
-        if let reason { report(.conversationEnded(.now, reason), for: id) }
+        if let reason { report(.conversationEnded(.now, reason), for: id, requestEndIfMissing: ending.cause != .caller) }
         // An admitted outgoing call can be redialed even if the worker never answered.
         if ended.connectTask != nil { IntentCall.donate(ended.target.paired, name: agentName) }
         // didDeactivate does not always follow (a reset, a call iOS never knew).
