@@ -143,7 +143,9 @@ def notifications_ready(state):
 # A Jev worker has no command vocabulary or reply events. Its thinking transition and final caption prove the reply.
 def grade(text):
     caller = text.find('e2e caption final caller=true')
-    jev = (' commands=- ' in text and not re.search(r' commands=[23] ', text) and 'e2e reply ' not in text)
+    plain_stream = re.search(r'streams=\[[^\]\n]*\b(?:turn|reply)=', text)
+    jev = (' thinking=1 ' in text and 'command words announced ' not in text
+           and 'e2e reply ' not in text and not plain_stream)
     if caller < 0:
         reply = False
     elif jev:
