@@ -226,9 +226,35 @@ struct ThreadContent: View {
     var discard: (String) -> Void = { _ in }
     var markRead: (Int64) -> Void = { _ in }
     var loadHistory: (Int64) async -> Void = { _ in }
-    @State private var visibleID: String?
-    @State private var atBottom = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var position = ScrollPosition(idType: String.self, edge: .bottom)
+    @State private var phase = ScrollPhase.idle
+    @State private var atEnd = true
+    @State private var withinReadRange = false
     @State private var loadingHistory = false
+
+    private static let controlSize: CGFloat = 38.5
+    private static let controlSpacing: CGFloat = 14
+    private var workingStatus: Status? {
+        status.flatMap { $0.state == .working || $0.state == .waiting ? $0 : nil }
+    }
+
+    private struct FeedGeometry: Equatable {
+        let contentEnd: CGFloat
+        let viewport: CGFloat
+        let atEnd: Bool
+        let withinReadRange: Bool
+        let withinFollowRange: Bool
+
+        init(_ geometry: ScrollGeometry) {
+            contentEnd = geometry.contentSize.height + geometry.contentInsets.bottom
+            viewport = geometry.containerSize.height
+            let distance = geometry.contentSize.height <= viewport ? 0 : contentEnd - geometry.visibleRect.maxY
+            atEnd = distance <= 1
+            withinReadRange = distance <= 16
+            withinFollowRange = distance <= max(1, viewport * 0.1)
+        }
+    }
 
     private var entities: [ThreadEntity] { rows.compactMap { if case .entity(let entity) = $0 { return entity }; return nil } }
     private var firstOrder: Int64? { entities.compactMap(\.order).min() }
@@ -262,27 +288,68 @@ struct ThreadContent: View {
                     }
                 }
                 if showsCaptions { LiveCaptionRows(rows: rows) }
-                if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()
             .padding(theme.space.s4)
+            .padding(.bottom, workingStatus == nil ? 0 : Self.controlSize + 8)
         }
-        .defaultScrollAnchor(.bottom)
-        .scrollPosition(id: $visibleID)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 16
-        } action: { _, bottom in
-            atBottom = bottom
-            readVisibleBottom()
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        .scrollPosition($position)
+        .onScrollPhaseChange { _, current in phase = current }
+        .onScrollGeometryChange(for: FeedGeometry.self) { FeedGeometry($0) } action: { old, new in
+            atEnd = new.atEnd
+            withinReadRange = new.withinReadRange
+            if phase == .idle, old.withinFollowRange, !new.atEnd,
+               old.contentEnd != new.contentEnd || old.viewport != new.viewport {
+                position.scrollTo(edge: .bottom)
+            }
         }
+        .onChange(of: withinReadRange) { readVisibleBottom() }
         .onChange(of: newestOrder) { readVisibleBottom() }
         .onChange(of: active) { readVisibleBottom() }
         .background(theme.color.surface)
         .accessibilityIdentifier(AXID.thread)
+        .overlay(alignment: .bottom) {
+            GlassEffectContainer(spacing: 12) {
+                HStack(spacing: Self.controlSpacing) {
+                    if let workingStatus {
+                        StatusPill(status: workingStatus, style: .capsule)
+                            .glassEffect(.regular, in: .capsule)
+                    }
+                    if !atEnd {
+                        scrollButton
+                            .transition(.offset(x: -(Self.controlSize + Self.controlSpacing) / 2).combined(with: .opacity))
+                    }
+                }
+                .animation(workingStatus == nil || reduceMotion ? nil : .timingCurve(1.0 / 3, 1, 2.0 / 3, 1, duration: 0.24), value: atEnd)
+            }
+            .padding(.bottom, 8)
+        }
+    }
+
+    private var scrollButton: some View {
+        Button(action: scrollToEnd) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 16))
+                .foregroundStyle(theme.color.icon)
+                .frame(width: Self.controlSize, height: Self.controlSize)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0).onEnded { _ in scrollToEnd() })
+        .accessibilityLabel("Scroll to end")
+        .accessibilityIdentifier("chat.scrollToEnd")
+    }
+
+    private func scrollToEnd() {
+        guard position.edge != .bottom else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
     }
 
     private func readVisibleBottom() {
-        if active, atBottom, let newestOrder { markRead(newestOrder) }
+        if active, withinReadRange, let newestOrder { markRead(newestOrder) }
     }
 
     private func loadOlder(_ order: Int64) async {
