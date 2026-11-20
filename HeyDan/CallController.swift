@@ -337,7 +337,8 @@ final class CallController: NSObject {
             do { try await request(EndConversationAction(conversationUUID: id)) } catch {
                 // iOS never knew the call (still asking for the mic) or no longer does; end it here.
                 trace(.callkit, "end transaction failed \(CallLog.describe(error))", id)
-                finish(id, .byCaller, endedBy: .failed)
+                let known = manager.conversations.contains { $0.uuid == id }
+                finish(id, .byCaller, endedBy: known ? .failed : nil)
             }
         }
     }
@@ -503,6 +504,7 @@ final class CallController: NSObject {
                 call?.roomConnected = true
                 trace(.room, "connected ms=\(CallLog.ms(since: connecting))", id)
                 refresh()
+                guard call?.id == id else { return }
                 let publishing = ContinuousClock.now
                 trace(.audio, "mic publish start", id)
                 do {
@@ -532,7 +534,7 @@ final class CallController: NSObject {
     }
 
     private func request(_ action: sending ConversationAction) async throws {
-        // The framework's async request and synchronous event reporting share its single delegate manager.
+        // The SDK requires off-actor perform on the same non-Sendable manager used for main-actor event reports.
         nonisolated(unsafe) let manager = manager
         try await manager.perform([action])
     }
@@ -930,6 +932,7 @@ extension CallController {
             commands = settings
         }
         guard !call.settingsSent else { return }
+        // An early settings RPC can be lost while the worker is still setting up.
         guard call.micPublished else { return trace(.rpc, "settings wait for setup", call.id, level: .debug) }
         self.call?.settingsSent = true
         let id = call.id
