@@ -131,6 +131,8 @@ final class CallController: NSObject {
         var micPublished = false
         /// A pass of `syncMic` is under way; a mute asked for meanwhile is taken by its next round.
         var micSync: Task<Void, Error>?
+        var micActions: [ConversationAction] = []
+        var pauseBeforeMicSync: Bool?
         var isPaused = false
         /// `room.connect` returned: only from then can the agent leave or the room end the call. A connect that
         /// times out makes the SDK report both while tearing the room down, and that is a failure to connect.
@@ -165,7 +167,7 @@ final class CallController: NSObject {
     @ObservationIgnored private var call: ActiveCall?
     /// The last call that ended, and how: what an intent that started it reports.
     @ObservationIgnored private var lastEnded: (id: UUID, ending: Ending)?
-    typealias ManagerCallback = @MainActor @Sendable (CallController) async -> Void
+    typealias ManagerCallback = @MainActor @Sendable (CallController) -> Void
     nonisolated private let callbacks: AsyncStream<ManagerCallback>.Continuation
     @ObservationIgnored private let manager: ConversationManager
     @ObservationIgnored private let startImpact = UIImpactFeedbackGenerator(style: .light)
@@ -187,7 +189,7 @@ final class CallController: NSObject {
         Task { @MainActor [weak self] in
             for await callback in stream {
                 guard let self else { break }
-                await callback(self)
+                callback(self)
             }
         }
         manager.delegate = self
@@ -361,23 +363,6 @@ final class CallController: NSObject {
         return await requestSettings(picks, for: id)
     }
 
-    /// Takes the caller's wish for call `id` at once and brings its microphone to it. False for any other call, or
-    /// when the microphone could not follow: the key then shows what the microphone does.
-    private func applyMute(_ muted: Bool, for id: UUID) async -> Bool {
-        guard call?.id == id else { return false }
-        isMuted = muted
-        do {
-            try await syncMic(id)
-        } catch {
-            guard call?.id == id else { return false }
-            if call?.isPaused != true { isMuted = !micSends() }
-            trace(.audio, "mic follow failed muted=\(muted) \(CallLog.describe(error))", id, level: .error)
-            return false
-        }
-        trace(.audio, "mic muted=\(muted)", id)
-        return call?.id == id
-    }
-
     /// Brings call `id`'s microphone to `isMuted`, one pass at a time, rechecking after every await. Once setup
     /// published it, an unmute also publishes it again where a full reconnect left it out (the SDK republishes only
     /// unmuted tracks).
@@ -385,19 +370,42 @@ final class CallController: NSObject {
     /// Until then the track stays unmuted and a mute holds at the mixer instead: LiveKit's publish waits for the
     /// track's first captured frame and fails after 5 s without one, and a muted (disabled) track can capture none.
     /// The mixer's silence still reaches the track as frames.
-    private func syncMic(_ id: UUID) async throws {
-        guard call?.id == id else { throw CancellationError() }
-        if let sync = call?.micSync { return try await sync.value }
+    @discardableResult
+    private func syncMic(_ id: UUID) -> Task<Void, Error> {
+        if let sync = call?.micSync { return sync }
         let sync = Task {
-            defer { if call?.id == id { call?.micSync = nil } }
-            try await reconcileMic(id)
+            do {
+                try Task.checkCancellation()
+                try await reconcileMic(id)
+            } catch {
+                guard let current = call, current.id == id else { throw error }
+                call?.micSync = nil
+                call?.micActions = []
+                call?.pauseBeforeMicSync = nil
+                for action in current.micActions { action.fail() }
+                if let previous = current.pauseBeforeMicSync {
+                    try? setPaused(previous)
+                    if call?.id == id { self.syncMic(id) }
+                }
+                if call?.id == id, call?.isPaused == false, current.micActions.contains(where: { $0 is MuteConversationAction }) {
+                    isMuted = !micSends()
+                }
+                trace(.audio, "mic follow failed \(CallLog.describe(error))", id, level: .error)
+                throw error
+            }
+            guard let current = call, current.id == id else { throw CancellationError() }
+            call?.micSync = nil
+            call?.micActions = []
+            call?.pauseBeforeMicSync = nil
+            for action in current.micActions { action.fulfill() }
         }
         call?.micSync = sync
-        try await sync.value
+        return sync
     }
 
     private func reconcileMic(_ id: UUID) async throws {
         while let current = call, current.id == id, let mic = current.mic {
+            try Task.checkCancellation()
             let silent = isMuted || current.isPaused
             if !current.micPublished {
                 Self.silenceMixer(silent)
@@ -508,7 +516,7 @@ final class CallController: NSObject {
                 let publishMS = CallLog.ms(since: publishing)
                 call?.micPublished = true
                 // Keep setup silenced until the published track has taken any pending mute.
-                try await syncMic(id)
+                try await syncMic(id).value
                 guard call?.id == id else { return }
                 Self.silenceMixer(call?.isPaused == true)
                 trace(.audio, "mic published muted=\(isMuted) track=\(mic.isMuted ? "muted" : "open") ms=\(publishMS)", id)
@@ -662,6 +670,7 @@ final class CallController: NSObject {
         VoiceDebug.callEnded(id)
         #endif
         ended.micSync?.cancel()
+        for action in ended.micActions { action.fail() }
         ended.grantTask?.cancel()
         ended.connectTask?.cancel()
         ended.setupTask?.cancel()
@@ -1047,10 +1056,10 @@ extension CallController: ConversationManagerDelegate {
     nonisolated func conversationManager(_: ConversationManager, perform action: ConversationAction) {
         // The delegate hands this action to one executor for its entire remaining lifetime.
         nonisolated(unsafe) let pending = action
-        enqueue { await $0.perform(pending) }
+        enqueue { $0.perform(pending) }
     }
 
-    func perform(_ action: ConversationAction, fulfillEnd: (EndConversationAction) -> Void = { $0.fulfill(dateEnded: .now) }) async {
+    func perform(_ action: ConversationAction, fulfillEnd: (EndConversationAction) -> Void = { $0.fulfill(dateEnded: .now) }) {
         let id = action.conversationUUID
         if let end = action as? EndConversationAction {
             fulfillEnd(end)
@@ -1070,21 +1079,16 @@ extension CallController: ConversationManagerDelegate {
             #endif
             connect(id)
         case let mute as MuteConversationAction:
-            if await applyMute(mute.isMuted, for: id) { mute.fulfill() } else { mute.fail() }
+            isMuted = mute.isMuted
+            call?.micActions.append(mute)
+            syncMic(id)
         case let pause as PauseConversationAction:
             let previous = call?.isPaused == true
-            do {
-                try setPaused(pause.isPaused)
-                try await syncMic(id)
-                guard call?.id == id else { return pause.fail() }
-                pause.fulfill()
-            } catch {
-                if call?.id == id {
-                    try? setPaused(previous)
-                    try? await syncMic(id)
-                }
-                pause.fail()
-            }
+            do { try setPaused(pause.isPaused) } catch { return pause.fail() }
+            guard call?.id == id else { return pause.fail() }
+            if call?.pauseBeforeMicSync == nil { call?.pauseBeforeMicSync = previous }
+            call?.micActions.append(pause)
+            syncMic(id)
         default:
             action.fail()
         }

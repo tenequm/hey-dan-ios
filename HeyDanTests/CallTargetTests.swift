@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import HeyDanCore
 import class LiveCommunicationKit.EndConversationAction
+import class LiveCommunicationKit.MuteConversationAction
 import Intents
 import XCTest
 import Security
@@ -136,26 +137,40 @@ private final class FixtureBundle {}
         }
     }
 
-    func testManagerCallbacksFinishInDeliveryOrderAcrossSuspension() async {
-        let controller = CallController.shared
-        let (release, gate) = AsyncStream<Void>.makeStream()
-        var order: [Int] = []
-        controller.enqueue { _ in
-            order.append(1)
-            for await _ in release { break }
-            order.append(2)
+    #if targetEnvironment(simulator)
+    func testEndTearsDownTheCallWhileMuteWorkIsPending() async throws {
+        let previous = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"]
+        setenv("HEYDAN_FIXTURE_LIVE_CALL", "1", 1)
+        defer {
+            if let previous { setenv("HEYDAN_FIXTURE_LIVE_CALL", previous, 1) }
+            else { unsetenv("HEYDAN_FIXTURE_LIVE_CALL") }
         }
-        controller.enqueue { _ in order.append(3) }
-        await Task.yield()
-        gate.finish()
+        let controller = CallController.shared
+        let target = CallTarget(paired: .init(host: FixtureAppService.host, deviceId: "dev_fixture",
+                                               conversation: conversation), service: FixtureAppService())
+        let started = await controller.start(target: target)
+        let id = try XCTUnwrap(started)
+        controller.perform(MuteConversationAction(conversationUUID: id, isMuted: true))
+        XCTAssertTrue(controller.isMuted)
+        controller.perform(EndConversationAction(conversationUUID: id))
+        XCTAssertFalse(controller.isCurrent(id))
+        XCTAssertFalse(controller.isMuted)
+    }
+    #endif
+
+    func testManagerCallbacksRunInDeliveryOrder() async {
+        let controller = CallController.shared
+        var order: [Int] = []
+        controller.enqueue { _ in order.append(1) }
+        controller.enqueue { _ in order.append(2) }
         await withCheckedContinuation { done in controller.enqueue { _ in done.resume() } }
-        XCTAssertEqual(order, [1, 2, 3])
+        XCTAssertEqual(order, [1, 2])
     }
 
-    func testSystemEndCompletesForAnUnknownConversation() async {
+    func testEndIsFulfilledBeforeCheckingForTheCurrentConversation() {
         let end = EndConversationAction(conversationUUID: UUID())
         var fulfilled: [UUID] = []
-        await CallController.shared.perform(end) { action in
+        CallController.shared.perform(end) { action in
             fulfilled.append(action.conversationUUID)
             action.fulfill(dateEnded: .now)
         }
