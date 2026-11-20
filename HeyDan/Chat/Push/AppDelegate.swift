@@ -134,7 +134,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 try? await UNUserNotificationCenter.current().setBadgeCount(total)
             }
         }
-        guard let token else { return }
+        guard let token, let topic = Bundle.main.bundleIdentifier else { return }
         guard let environment = Self.environment(Bundle.main.object(forInfoDictionaryKey: Self.apsEnvironmentKey) as? String) else {
             if !invalidEnvironmentLogged { CallLog.log(.net, "push invalid_environment"); invalidEnvironmentLogged = true }
             return
@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let value = entry.deviceId + ":" + environment + ":" + token
             guard uploaded[key] != value else { continue }
             do {
-                try await SignedClient(host: entry.host, deviceId: entry.deviceId).registerPushToken(PushTokenRequest(token: token, environment: environment))
+                try await SignedClient(host: entry.host, deviceId: entry.deviceId).registerPushToken(PushTokenRequest(token: token, environment: environment, topic: topic))
                 uploaded[key] = value
             } catch { CallLog.log(.net, "push upload_failed \(AppError.map(error).logName)") }
         }
