@@ -56,7 +56,9 @@ final class HeyDanChecks: XCTestCase {
         let agents = definitions.entities["VoiceLineEntity"]
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
         let defaults = try await withRegisteredIntentMetadata { try await agents.entities(identifiers: [id]) }
-        let suggested = try await agents.suggestedEntities()
+        let suggested = try await withRegisteredIntentMetadata {
+            try await agents.suggestedEntities()
+        }
         XCTAssertTrue(suggested.contains(try XCTUnwrap(defaults.first)))
         XCTAssertGreaterThan(suggested.count, 1)
     }
@@ -83,7 +85,7 @@ extension XCUIApplication {
 extension XCTestCase {
     // On a fresh install the app can launch before iOS registers its intent metadata.
     @MainActor func withRegisteredIntentMetadata<T>(_ read: @MainActor () async throws -> T) async throws -> T {
-        let deadline = ContinuousClock.now + .seconds(15)
+        let deadline = ContinuousClock.now + .seconds(60)
         while true {
             do { return try await read() }
             catch let error as NSError where error.domain == "AppIntentsServicesMetadataErrorDomain"
