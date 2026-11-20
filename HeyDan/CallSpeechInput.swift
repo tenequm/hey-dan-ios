@@ -6,6 +6,8 @@ import Synchronization
 
 /// The SDK supplies post-processing buffers without timestamps. Keep the mic clock even while a model is loading.
 final class CallSpeechInput: AudioRenderer, @unchecked Sendable {
+    private static let bufferedMicPackets = 50
+
     private struct State {
         var time = CMTime.zero
         var outputTime = CMTime.zero
@@ -26,7 +28,7 @@ final class CallSpeechInput: AudioRenderer, @unchecked Sendable {
     }
 
     func feed(format: AVAudioFormat) -> AsyncStream<AnalyzerInput> {
-        let (inputs, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self, bufferingPolicy: .bufferingNewest(50))
+        let (inputs, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self, bufferingPolicy: .bufferingNewest(Self.bufferedMicPackets))
         state.withLock {
             $0.stream?.finish()
             $0.stream = continuation

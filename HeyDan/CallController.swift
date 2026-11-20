@@ -1216,10 +1216,11 @@ extension CallController: RoomDelegate {
     private static func attributeSummary(_ current: [String: String], changed: [String: String], names: VoiceProtocol.Names) -> String {
         let keys = [
             VoiceProtocol.agentStateAttribute, names.thinkingAttribute, names.updatingAttribute, names.commandsAttribute,
-            names.protocolAttribute, names.voiceAttribute,
+            names.protocolAttribute, names.voiceAttribute, CallSpeech.interruptMethod,
         ].compactMap(\.self)
         func name(_ key: String) -> Substring { key.split(separator: ".").last ?? "" }
         let values = keys.map { key in
+            if key == CallSpeech.interruptMethod { return "interrupt=\(current[key] == "1")" }
             if key == names.voiceAttribute {
                 guard let voice = current[key].flatMap(CallVoiceState.init(attribute:)) else { return "voice=-" }
                 return "voice=gen:\(voice.gen ?? -1),active:\(voice.active.provider)/\(voice.active.model ?? "-")/\(voice.active.voice ?? "-"),pending:\(voice.pending?.provider ?? "-")/\(voice.pending?.model ?? "-")/\(voice.pending?.voice ?? "-")"
@@ -1227,7 +1228,7 @@ extension CallController: RoomDelegate {
             return "\(name(key))=\(current[key] ?? "-")"
         }.joined(separator: " ")
         let changedKeys = keys.filter { changed[$0] != nil }.map(name).joined(separator: ",")
-        return "\(values) interrupt=\(current[CallSpeech.interruptMethod] == "1") changed=[\(changedKeys)]"
+        return "\(values) changed=[\(changedKeys)]"
     }
 
     nonisolated func room(_ room: Room, participant _: LocalParticipant, remoteDidSubscribeTrack _: LocalTrackPublication) {

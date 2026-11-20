@@ -44,6 +44,7 @@ import UIKit
     var isFixture: Bool { fixture }
     #endif
     var entries: [Entry] { saved.entries.values.sorted { $0.host.absoluteString < $1.host.absoluteString } }
+    var callEntries: [Entry] { entries.filter { $0.features.contains("calls") } }
     var active: Entry? { saved.active.flatMap { saved.entries[$0] } }
 
     init(account: String = "pairings", publishes: Bool = true) {

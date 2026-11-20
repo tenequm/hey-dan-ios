@@ -746,7 +746,7 @@ enum IntentCall {
     #endif
 
     static func pairedTarget(id: UUID?, exactAgent: Bool = false) async throws -> CallTarget {
-        let entries = Pairings.shared.entries.filter { $0.features.contains("calls") }
+        let entries = Pairings.shared.callEntries
         var preference = UserDefaults.standard.string(forKey: "defaultCallAgent").flatMap(UUID.init(uuidString:))
         #if DEBUG
         if IdentityKeychain.callTestRun != nil { preference = nil }
@@ -841,7 +841,7 @@ struct AgentQuery: EntityStringQuery {
     func suggestedEntities() async -> [AgentEntity] {
         try? await IntentCall.readyPairings()
         return await MainActor.run {
-            [AgentEntity.defaultAgent] + Pairings.shared.entries.filter { $0.features.contains("calls") }.flatMap { entry in
+            [AgentEntity.defaultAgent] + Pairings.shared.callEntries.flatMap { entry in
                     entry.agents.map { AgentEntity(entry: entry, agent: $0) }
                 }
         }
