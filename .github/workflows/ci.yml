@@ -68,13 +68,11 @@ jobs:
       - name: Beta variant build
         run: xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build -xcconfig Beta.xcconfig CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build
 
-  app-tests:
-    name: App tests
+  # Builds the Simulator test products once; the shards below only install and run them.
+  sim-build:
+    name: Simulator build
     runs-on: xcode-27
-    timeout-minutes: 25
-    env:
-      # No CLI grants notification permission on a Simulator that never ran the app (AGENTS.md); this test needs it.
-      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+    timeout-minutes: 20
     steps:
       - *checkout
       - uses: ./.github/actions/setup
@@ -82,4 +80,62 @@ jobs:
           simulator: true
       - *cache-config
       - *compile-cache
-      - run: just app-test
+      - run: python3 scripts/sim_tests.py build "Hey Dan iPhone" build com.example.HeyDan
+      # tar keeps the modification times the reuse check compares against the key file.
+      - run: tar -cf "$RUNNER_TEMP/sim-products.tar" build/Build/Products build/HeyDanSimulatorTests.key
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sim-products
+          path: ${{ runner.temp }}/sim-products.tar
+          compression-level: 1
+          retention-days: 1
+
+  sim-tests:
+    name: ${{ matrix.name }}
+    needs: sim-build
+    runs-on: xcode-27
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: App tests
+            mode: app-test
+          - name: UI checks (calls)
+            mode: sim-checks
+            checks: ChatCallChecks
+          - name: UI checks (voices, pairing, screens)
+            mode: sim-checks
+            checks: PairedVoiceChecks ChatPairingChecks ScreenCaptureChecks
+          - name: UI checks (threads, composer, settings)
+            mode: sim-checks
+            # ChatChecks' other tests need a local nanoclaw stack or a test pairing (secrets); ChatPushChecks needs
+            # notification permission, which no CLI grants on a Simulator that never ran the app, and a real bundle ID.
+            checks: ChatThreadChecks ChatComposerChecks ChatAgentSettingsChecks HeyDanChecks ChatChecks/testFixtureUnreadRelaunch
+    env:
+      HEYDAN_PREBUILT: "1"
+      HEYDAN_RETRY: "1"
+      # No CLI grants notification permission on a Simulator that never ran the app (AGENTS.md); this test needs it.
+      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+    steps:
+      - *checkout
+      - uses: ./.github/actions/setup
+        with:
+          simulator: true
+      # Boots while the products download; nothing builds beside it in this job.
+      - run: |
+          udid=$(xcrun simctl list devices available -j | jq -r '.devices[][] | select(.name == "Hey Dan iPhone") | .udid')
+          xcrun simctl boot "$udid"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sim-products
+          path: ${{ runner.temp }}
+      - run: tar -xpf "$RUNNER_TEMP/sim-products.tar"
+      - run: python3 scripts/sim_tests.py "${{ matrix.mode }}" "Hey Dan iPhone" build com.example.HeyDan "${{ matrix.checks }}"
+      - if: failure() && matrix.mode == 'sim-checks'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots-${{ strategy.job-index }}
+          path: build/checks
+          if-no-files-found: ignore
+          retention-days: 7
