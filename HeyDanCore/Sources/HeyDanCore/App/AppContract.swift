@@ -939,9 +939,11 @@ nonisolated public struct CallEndRequest: Sendable, Equatable, Codable {
 nonisolated public struct PushTokenRequest: Sendable, Equatable, Codable {
     public var `token`: String
     public var `environment`: String
-    public init(`token`: String, `environment`: String) {
+    public var topic: String?
+    public init(`token`: String, `environment`: String, topic: String? = nil) {
         self.`token` = `token`
         self.`environment` = `environment`
+        self.topic = topic
     }
 }
 

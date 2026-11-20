@@ -4,3 +4,7 @@ HEYDAN_BUNDLE_ID = com.example.HeyDan
 DEVELOPMENT_TEAM =
 
 #include? "Local.xcconfig"
+
+HEYDAN_APP_ID = $(HEYDAN_BUNDLE_ID)
+HEYDAN_DISPLAY_NAME = Hey Dan
+HEYDAN_APP_ICON = AppIcon

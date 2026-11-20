@@ -20,6 +20,14 @@ public enum PairedHost {
 public struct PairingLink: Sendable, Equatable {
     public let baseURL: URL
     public let code: String
+    public static func betaDestination(_ url: URL) -> URL? {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme?.lowercased() == "heydan-beta" else { return nil }
+        parts.scheme = "https"
+        guard let destination = parts.url, PairingLink(destination.absoluteString) != nil else { return nil }
+        return destination
+    }
+
     public init?(_ text: String, allowsLocalNetworking: Bool = false) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),

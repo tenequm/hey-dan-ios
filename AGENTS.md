@@ -39,7 +39,7 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
   `GET /app/events?after=<seq>`, feeds the list, threads, statuses and badge. `hello`'s `features` (`files`, `calls`,
   `push`, `voice-picker`) gate the UI and are re-read on every connect.
 - **Pushes.** `HeyDanNotificationService` turns the host's pushes into communication notifications. The app and the
-  extension share the App Group `group.$(HEYDAN_BUNDLE_ID)` to total the last unread counts of all paired hosts into
+  extension share the App Group `group.$(HEYDAN_APP_ID)` (the beta variant's ids and group end in `.beta`, so the two apps share nothing) to total the last unread counts of all paired hosts into
   one badge.
 - **Paired calls.** `POST /app/calls` with an `attemptId` (a retry recovers the same call) returns the grant;
   `POST /app/calls/<callId>/end` hangs up, and `POST /app/calls/attempts/<attemptId>/cancel` drops a start still

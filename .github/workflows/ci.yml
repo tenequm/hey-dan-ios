@@ -65,6 +65,8 @@ jobs:
           restore-keys: |
             ${{ steps.compiler.outputs.prefix }}-
       - run: just build
+      - name: Beta variant build
+        run: xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build -xcconfig Beta.xcconfig CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build
 
   app-tests:
     name: App tests
