@@ -188,5 +188,16 @@ class Run(unittest.TestCase):
             self.fail('the command started by the wrapped process outlived the signal')
 
 
+class Smoke(unittest.TestCase):
+
+    def test_every_smoke_check_exists(self):
+        checks = Path(__file__).resolve().parent.parent / 'HeyDanChecks'
+        for name in sim_tests.SMOKE:
+            cls, method = name.split('/')
+            source = (checks / f'{cls}.swift').read_text()
+            self.assertIn(f'class {cls}: XCTestCase', source, name)
+            self.assertRegex(source, rf'func {method}\(', name)
+        self.assertEqual(len(sim_tests.SMOKE), len(set(sim_tests.SMOKE)))
+
 if __name__ == '__main__':
     unittest.main()
