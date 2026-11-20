@@ -93,7 +93,7 @@ final class ChatThreadChecks: XCTestCase {
         let message = app.descendants(matching: .any)["chat.message.msg_2101"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 10))
         let footer = app.buttons["chat.copy.msg_2101"]
-        XCTAssertTrue(footer.exists)
+        XCTAssertFalse(footer.exists)
         // "Hello" is the first word of the markdown heading.
         message.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 20, dy: 14)).press(forDuration: 1)
         let copy = app.descendants(matching: .any)["chat.menu.copy"].firstMatch
@@ -122,6 +122,8 @@ final class ChatThreadChecks: XCTestCase {
         for id in ["chat.message.msg_5", "chat.outbox.queued", "chat.outbox.failed"] {
             let row = app.descendants(matching: .any)[id].firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 8))
+            let messageID = id.split(separator: ".").last!
+            XCTAssertTrue(app.buttons["chat.copy.\(messageID)"].exists)
             // The one-word bubble is trailing aligned, above its delivery status.
             row.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0)).withOffset(CGVector(dx: -32, dy: 17)).press(forDuration: 1)
             let share = app.descendants(matching: .any)["chat.menu.share"].firstMatch

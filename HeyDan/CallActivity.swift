@@ -44,7 +44,7 @@ final class CallActivity {
         switch phase {
         case .idle:
             return await end(stage: .ended, muted: false, agentName: agentName, liveSince: liveSince, dismissal: .immediate)
-        case .connecting:
+        case .connecting, .joining:
             stage = .connecting
         case let .live(activity):
             stage = switch activity {

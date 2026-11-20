@@ -12,10 +12,22 @@ struct PairedCallButton: View {
             Button {
                 Task { _ = await call.start(target: CallTarget(paired: target, service: service)) }
             } label: { ThreadCallLabel() }
-            .buttonStyle(.plain)
+            .buttonStyle(CallStartButtonStyle())
             .disabled(call.isCallActive || !target.conversation.canCall)
             .accessibilityIdentifier("chat.call")
         }
+    }
+}
+
+struct CallStartButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.5)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { CallController.shared.prepareStartImpact() }
+            }
     }
 }
 

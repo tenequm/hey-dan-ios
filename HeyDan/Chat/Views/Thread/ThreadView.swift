@@ -60,6 +60,8 @@ struct ThreadView: View {
                     Button("Call again") {
                         Task { _ = await call.start(target: CallTarget(paired: target, service: chat.service)) }
                     }
+                    .buttonStyle(CallStartButtonStyle())
+                    .foregroundStyle(theme.color.accent)
                     .disabled(!live.canCall || !chat.features.contains("calls"))
                 }
                 .textRole(theme.type.footnote, theme.weight.medium)
@@ -232,6 +234,7 @@ struct ThreadContent: View {
 
     private static let controlSize: CGFloat = 38.5
     private static let controlSpacing: CGFloat = 14
+    private var showsScrollButton: Bool { position.edge != .bottom && !geometry.atEnd }
     private var workingStatus: Status? {
         status.flatMap { $0.state == .working || $0.state == .waiting ? $0 : nil }
     }
@@ -264,7 +267,7 @@ struct ThreadContent: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: theme.space.s4) {
+            LazyVStack(spacing: 0) {
                 if hasMoreBefore, let firstOrder {
                     Button {
                         Task { await loadOlder(firstOrder) }
@@ -273,26 +276,32 @@ struct ThreadContent: View {
                     }
                     .accessibilityLabel("Load older messages")
                     .disabled(loadingHistory)
+                    .padding(.bottom, theme.space.s4)
                     .onAppear { Task { await loadOlder(firstOrder) } }
                 }
-                ForEach(rows, id: \.presentationID) { row in
-                    switch row {
-                    case .entity(.message(let message)):
-                        MessageRow(message: message, compacted: compactedThrough.map { message.order <= $0 } ?? false, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
-                            .id(row.presentationID)
-                    case .entity(.question(let question)):
-                        QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
-                            .id(row.presentationID)
-                    case .outbox(let entry):
-                        OutboxRow(entry: entry, retry: retry, discard: discard)
-                            .id(row.presentationID)
-                    case .entity(.unknown): EmptyView()
+                ForEach(rows.enumerated(), id: \.element.presentationID) { index, row in
+                    let next = index + 1 < rows.count ? rows[index + 1] : nil
+                    let grouped = row.messageRole != nil && row.messageRole == next?.messageRole
+                    Group {
+                        switch row {
+                        case .entity(.message(let message)):
+                            MessageRow(message: message, showsFooter: !grouped && (next != nil || status == nil || status?.state == .idle),
+                                       compacted: compactedThrough.map { message.order <= $0 } ?? false,
+                                       outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
+                        case .entity(.question(let question)):
+                            QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
+                        case .outbox(let entry):
+                            OutboxRow(entry: entry, retry: retry, discard: discard)
+                        case .entity(.unknown): EmptyView()
+                        }
                     }
+                    .padding(.bottom, grouped ? theme.space.s1 : theme.space.s5)
+                    .id(row.presentationID)
                 }
                 if showsCaptions { LiveCaptionRows(rows: rows) }
             }
             .scrollTargetLayout()
-            .padding(.vertical, theme.space.s4)
+            .padding(.top, theme.space.s3)
             .padding(.bottom, workingStatus == nil ? 0 : Self.controlSize + 8)
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -325,12 +334,12 @@ struct ThreadContent: View {
                         StatusPill(status: workingStatus, style: .capsule)
                             .glassEffect(.regular, in: .capsule)
                     }
-                    if !geometry.atEnd {
+                    if showsScrollButton {
                         scrollButton
                             .transition(.offset(x: -(Self.controlSize + Self.controlSpacing) / 2).combined(with: .opacity))
                     }
                 }
-                .animation(workingStatus == nil || reduceMotion ? nil : .timingCurve(1.0 / 3, 1, 2.0 / 3, 1, duration: 0.24), value: geometry.atEnd)
+                .animation(workingStatus == nil || reduceMotion ? nil : .timingCurve(1.0 / 3, 1, 2.0 / 3, 1, duration: 0.24), value: showsScrollButton)
             }
             .padding(.bottom, 8)
         }
@@ -379,6 +388,14 @@ struct ThreadContent: View {
 }
 
 private extension ThreadRow {
+    var messageRole: Role? {
+        switch self {
+        case .entity(.message(let message)): message.role
+        case .outbox: .user
+        default: nil
+        }
+    }
+
     var presentationID: String {
         switch self {
         case .entity(.message(let message)): return message.clientId.map { "client.\($0)" } ?? message.id
