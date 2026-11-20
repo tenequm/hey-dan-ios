@@ -37,8 +37,9 @@ private struct PreparedCallSpeech {
 @Observable @MainActor
 final class CallSpeech {
     static let interruptMethod = "nanoclaw.voice-mode.interrupt"
+    private static let speechTrackName = "roomio_audio" // The worker's SPEECH_TRACK.
     private(set) var caption = CallerCaption()
-    private let barge = SpeechBargeIn()
+    private let barge = SpeechBargeIn { CallController.shared.trace(.rpc, $0) }
     @ObservationIgnored private var warm: Task<PreparedCallSpeech?, Never>?
     @ObservationIgnored private var warmLocale: Locale?
     @ObservationIgnored private var selection: Task<PreparedCallSpeech?, Never>?
@@ -157,7 +158,7 @@ final class CallSpeech {
     }
 
     static func muteSpeechTrack(in tracks: [some CallSpeechPlayout]) -> (() -> Void)? {
-        guard let track = tracks.first(where: { $0.name == "roomio_audio" }) else { return nil }
+        guard let track = tracks.first(where: { $0.name == speechTrackName }) else { return nil }
         let volume = track.volume
         track.volume = 0
         return { track.volume = volume }
@@ -183,15 +184,22 @@ final class CallSpeech {
             return CallerWord(text: word, startMs: start, confidence: run.transcriptionConfidence)
         }
         barge.hear(words, remoteActive: agent.isSpeaking, mute: {
-            Self.muteSpeechTrack(in: agent.audioTracks.filter { $0.isSubscribed && !$0.isMuted }
+            let restore = Self.muteSpeechTrack(in: agent.audioTracks.filter { $0.isSubscribed && !$0.isMuted }
                 .compactMap { $0.track as? RemoteAudioTrack })
+            if restore == nil { CallController.shared.trace(.rpc, "interrupt skipped: no speech track") }
+            return restore
         }, interrupt: { cut in
-            guard room.connectionState == .connected, agent.attributes[Self.interruptMethod] == "1" else { return false }
-            guard let payload = try? cut.payload(from: input),
-                  let response = try? await room.localParticipant.performRpc(destinationIdentity: identity,
-                      method: Self.interruptMethod, payload: payload) else { return false }
+            guard room.connectionState == .connected, agent.attributes[Self.interruptMethod] == "1" else {
+                self.update(room: room)
+                return nil
+            }
+            let micMs = input.milliseconds
+            guard let payload = try? cut.payload(micMs: micMs) else { return nil }
+            CallController.shared.trace(.rpc, "interrupt cut sent cutAtMs=\(cut.cutAtMs) micMs=\(micMs) chars=\(cut.heard.count)")
+            guard let response = try? await room.localParticipant.performRpc(destinationIdentity: identity,
+                method: Self.interruptMethod, payload: payload) else { return nil }
             struct Reply: Decodable { let ok: Bool }
-            return (try? JSONDecoder().decode(Reply.self, from: Data(response.utf8)))?.ok == true
+            return (try? JSONDecoder().decode(Reply.self, from: Data(response.utf8)))?.ok
         })
     }
 
@@ -203,7 +211,7 @@ final class CallSpeech {
         if let input { mic?.remove(audioRenderer: input); input.finish() }
         if let analyzer { Task { await analyzer.cancelAndFinishNow() } }
         analyzer = nil
-        barge.reset()
+        barge.reset(reason: "call ended")
         mic = nil
         room = nil
         input = nil

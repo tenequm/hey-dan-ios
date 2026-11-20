@@ -125,7 +125,7 @@ import XCTest
             volume = 0
             return { volume = 0.7 }
         }, interrupt: { cut in
-            let payload = try? cut.payload(from: input)
+            let payload = try? cut.payload(micMs: input.milliseconds)
             let fields = payload.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
             XCTAssertEqual(fields?.count, 4)
             XCTAssertEqual(fields?["heard"] as? String, "ok wait!")
@@ -165,23 +165,33 @@ import XCTest
         XCTAssertEqual(cue.volume, 0.4)
     }
 
-    func testFailedAndUnansweredRPCRestoreVolumeOnDeadline() async {
-        for hangs in [false, true] {
-            let gate = SpeechBargeIn(timeout: .milliseconds(20))
+    func testRefusedCutRestoresBeforeReplyDeadline() async {
+        let restored = expectation(description: "Refusal restored speech")
+        let gate = SpeechBargeIn(replyTimeout: .seconds(30))
+        gate.update(enabled: true, speaking: true, micMs: 0)
+        gate.hear([CallerWord(text: "stop", startMs: 1, confidence: 1)], remoteActive: true,
+                  mute: { { restored.fulfill() } }, interrupt: { _ in false })
+        await fulfillment(of: [restored], timeout: 2)
+    }
+
+    func testMissingLateAndAcceptedRepliesHaveBoundedMute() async {
+        for reply: Bool? in [nil, false, true] {
+            var events: [String] = []
+            let timeout = Duration.milliseconds(100)
+            let gate = SpeechBargeIn(replyTimeout: timeout) { events.append($0) }
             gate.update(enabled: true, speaking: true, micMs: 0)
-            let restored = expectation(description: "Restored volume")
-            var muted = false
-            gate.hear([CallerWord(text: "stop", startMs: 123, confidence: 1)], remoteActive: true, mute: {
-                muted = true
-                return { muted = false; restored.fulfill() }
-            }, interrupt: { _ in
-                if hangs { try? await Task.sleep(for: .seconds(10)) }
-                return false
+            let restored = expectation(description: "Restored without a new speaking edge")
+            let mutedAt = ContinuousClock.now
+            gate.hear([CallerWord(text: "stop", startMs: 1, confidence: 1)], remoteActive: true,
+                      mute: { { restored.fulfill() } }, interrupt: { _ in
+                if reply == false { try? await Task.sleep(for: .seconds(30)) }
+                return reply
             })
-            XCTAssertTrue(muted)
-            await fulfillment(of: [restored], timeout: 2)
-            XCTAssertFalse(muted)
-            gate.reset()
+            await fulfillment(of: [restored], timeout: 3)
+            XCTAssertGreaterThanOrEqual(ContinuousClock.now - mutedAt, reply == true ? timeout * 3 : timeout)
+            XCTAssertEqual(events.count, 2)
+            XCTAssertTrue(events.first?.hasPrefix(reply == true ? "interrupt reply=accepted" : "interrupt reply=timed_out") == true)
+            XCTAssertEqual(events.last, reply == true ? "interrupt restored reason=accepted cap" : "interrupt restored reason=deadline")
         }
     }
 }
