@@ -19,6 +19,21 @@ private final class FixtureBundle {}
     private let conversation = Conversation(kind: .conversation, id: "conv_taylor01", seq: 1,
         agent: Agent(id: "ag_taylor", name: "Taylor"), unread: 0, readOrder: 0, canCall: true, createdAt: 0)
 
+    func testCallEntriesFollowTheHostCallsFeature() throws {
+        let account = "test-call-entries-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        XCTAssertTrue(pairings.callEntries.isEmpty)
+        let host = FixtureAppService.host
+        try pairings.add(FixtureAppService.pairing, host: host, features: ["voice-picker"])
+        XCTAssertTrue(pairings.callEntries.isEmpty)
+        pairings.refreshFeatures(["calls"], host: host)
+        XCTAssertEqual(pairings.callEntries.map(\.host), [host])
+        pairings.refreshFeatures([], host: host)
+        XCTAssertTrue(pairings.callEntries.isEmpty)
+    }
+
     func testDebugCallsRequireExactlyTheConfiguredAgent() throws {
         func entry(_ agents: [Agent]) -> Pairings.Entry {
             Pairings.Entry(host: URL(string: "https://example.com")!,

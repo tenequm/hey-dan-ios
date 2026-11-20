@@ -23,6 +23,10 @@ public struct Transcript: Sendable, Equatable {
         public let at: Date
         /// False while the transcription may still revise a caller line; agent lines are always final.
         public internal(set) var isFinal: Bool
+        fileprivate var callerSegmentUpdatedAt: Date?
+        public var captionDeadline: Date? {
+            isFinal ? callerSegmentUpdatedAt?.addingTimeInterval(2) : nil
+        }
         /// What became of the caller turn this line belongs to; nil while it is open.
         public internal(set) var mark: Mark?
         /// The caller turn's number as the transcript counts them (from 1, noises not counted).
@@ -64,6 +68,8 @@ public struct Transcript: Sendable, Equatable {
     public static let streamingWindow: TimeInterval = 0.7
 
     public private(set) var lines: [Line] = []
+    public var latestCallerCaption: Line? { lines.last { $0.callerSegmentUpdatedAt != nil } }
+
     /// The line that last got new words, and when.
     public private(set) var streamingLineID: Int?
     public private(set) var lastDeltaAt: Date?
@@ -111,7 +117,8 @@ public struct Transcript: Sendable, Equatable {
         let changed = segmentText[segment] != text
         let command = mine ? command : nil
         let remarked = known.flatMap { id in lines.first { $0.id == id } }.map { $0.command != command } ?? false
-        guard !text.isEmpty, changed || remarked || (interimSegments[segment] != nil) != interim else { return }
+        let firstFinal = mine && isFinal && !finalSegments.contains(segment)
+        guard !text.isEmpty, changed || firstFinal || remarked || (interimSegments[segment] != nil) != interim else { return }
         segmentText[segment] = text
         if interim { interimSegments[segment] = now } else {
             interimSegments[segment] = nil
@@ -119,6 +126,7 @@ public struct Transcript: Sendable, Equatable {
         }
         if let known {
             update(known) {
+                if mine, changed || firstFinal { $0.callerSegmentUpdatedAt = now }
                 $0.text = text
                 $0.isFinal = !interim
                 $0.command = command
@@ -130,6 +138,7 @@ public struct Transcript: Sendable, Equatable {
             let id = takeID()
             segmentLine[segment] = id
             var line = Line(id: id, speaker: mine ? .caller : .agent, kind: .caption, text: text, at: now, isFinal: !interim)
+            if mine { line.callerSegmentUpdatedAt = now }
             line.command = command
             // An agent line joins the message being spoken; only its first line says what it answers.
             if !mine, let reply = currentReply {
@@ -220,7 +229,12 @@ public struct Transcript: Sendable, Equatable {
         guard !stale.isEmpty else { return false }
         for (segment, _) in stale {
             interimSegments[segment] = nil
-            if let id = segmentLine[segment] { update(id) { $0.isFinal = true } }
+            if let id = segmentLine[segment] {
+                update(id) {
+                    $0.isFinal = true
+                    $0.callerSegmentUpdatedAt = now
+                }
+            }
         }
         return true
     }

@@ -20,6 +20,7 @@ struct ThreadCallBar: View {
     @Environment(\.theme) private var theme
     let target: CallTarget
     private var call: CallController { .shared }
+    @State private var expiredCaptionDeadline: Date?
     @State private var presentsCallOptions = false
     @State private var optionsHeight: CGFloat = 240
     @State private var optionsVoice: VoiceSettingsModel?
@@ -42,14 +43,21 @@ struct ThreadCallBar: View {
 
     var body: some View {
         VStack(spacing: theme.space.s1) {
-            let caption = call.speech.caption
-            if !caption.text.isEmpty {
+            if case let .live(activity) = call.phase, activity != .speaking, !call.isMuted,
+               let caption = call.transcript.latestCallerCaption,
+               caption.captionDeadline.map({ $0 > .now && $0 != expiredCaptionDeadline }) ?? true {
                 Text(verbatim: caption.text)
                     .textRole(theme.type.label)
                     .foregroundStyle(caption.isFinal ? theme.color.textPrimary : theme.color.textSecondary)
                     .lineLimit(2)
                     .truncationMode(.head)
                     .accessibilityIdentifier("call.callerCaption")
+                    .task(id: caption.captionDeadline) {
+                        guard let deadline = caption.captionDeadline else { return }
+                        do { try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow))) }
+                        catch { return }
+                        expiredCaptionDeadline = deadline
+                    }
             }
             controls
         }

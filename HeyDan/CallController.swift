@@ -14,7 +14,6 @@ import UIKit
 final class CallController: NSObject {
     static let shared = CallController()
 
-    let speech = CallSpeech()
     private(set) var pairedCallTarget: CallTarget?
     private(set) var captionOrders: [Int: Int64] = [:]
     private(set) var endingNotice: Ending?
@@ -95,7 +94,7 @@ final class CallController: NSObject {
     /// Only a call that never went live failed to connect; one that was live ended, whatever the reason. Hanging up
     /// before it went live is no failure either.
     static func isFailure(_ ending: Ending, liveSince: Date?) -> Bool { liveSince == nil && ending.cause != .caller }
-    private(set) var isMuted = false { didSet { speech.setMuted(isMuted) } }
+    private(set) var isMuted = false
     private(set) var agentName = "Agent"
     /// The call's live transcript: cleared when a call starts, kept readable (all final) after it ends.
     private(set) var transcript = Transcript()
@@ -224,7 +223,6 @@ final class CallController: NSObject {
         let id = UUID()
         // Claimed before any await, so a second tap or Action Button press finds the call already active.
         endingNotice = nil
-        speech.begin(target: target)
         pairedCallTarget = target
         call = ActiveCall(id: id, target: target)
         call?.voice = LiveVoice(callID: id)
@@ -259,9 +257,8 @@ final class CallController: NSObject {
                 phase = .live(.listening)
                 Task { try? await streamFixtureCall(id, service: service) }
             } else {
-                phase = .live(.speaking)
-                speech.showCaption("Check the backup.", at: 0, final: false)
-                editTranscript { $0.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now) }
+                phase = .live(.listening)
+                apply(.caption(segment: "sample", text: "Check the backup.", isFinal: false, fromCaller: true, command: nil), for: id)
             }
             return id
         }
@@ -320,6 +317,7 @@ final class CallController: NSObject {
         try await service.extendStreamedReply("All three matched. The archive contains the updated documents and the verification report.")
         guard call?.id == id else { return }
         phase = .live(.speaking)
+        apply(.caption(segment: "follow-up", text: "One more thing", isFinal: false, fromCaller: true, command: nil), for: id)
     }
 
     private func waitForFixtureStep(_ step: String, callID: UUID) async throws {
@@ -463,7 +461,6 @@ final class CallController: NSObject {
         Self.silenceMixer(isMuted)
         trace(.audio, "mic created ms=\(CallLog.ms(since: creating))", id)
         let starting = ContinuousClock.now
-        speech.attach(to: mic)
         try await mic.start()
         trace(.audio, "mic prepared ms=\(CallLog.ms(since: starting))", id)
         return mic
@@ -548,7 +545,6 @@ final class CallController: NSObject {
     /// Re-reads the room: every delegate callback lands here, so their order does not matter.
     private func refresh() {
         guard let call, let room = call.room, let names = call.names else { return }
-        speech.update(room: room)
         if room.connectionState == .reconnecting { return phase = .reconnecting }
         guard let agent = room.remoteParticipants.values.first(where: \.isAgent) else { return }
         let attributes = agent.attributes
@@ -599,7 +595,6 @@ final class CallController: NSObject {
         call?.streamFlush?.cancel()
         for event in call?.streams.drain() ?? [] { apply(event, for: id) }
         guard let ended = call else { return }
-        speech.end()
         ended.connectingTone?.stop()
         call = nil
         liveVoice = nil
@@ -1162,11 +1157,10 @@ extension CallController: RoomDelegate {
     private static func attributeSummary(_ current: [String: String], changed: [String: String], names: VoiceProtocol.Names) -> String {
         let keys = [
             VoiceProtocol.agentStateAttribute, names.thinkingAttribute, names.updatingAttribute, names.commandsAttribute,
-            names.protocolAttribute, names.voiceAttribute, CallSpeech.interruptMethod,
+            names.protocolAttribute, names.voiceAttribute,
         ].compactMap(\.self)
         func name(_ key: String) -> Substring { key.split(separator: ".").last ?? "" }
         let values = keys.map { key in
-            if key == CallSpeech.interruptMethod { return "interrupt=\(current[key] == "1")" }
             if key == names.voiceAttribute {
                 guard let voice = current[key].flatMap(CallVoiceState.init(attribute:)) else { return "voice=-" }
                 return "voice=gen:\(voice.gen ?? -1),active:\(voice.active.provider)/\(voice.active.model ?? "-")/\(voice.active.voice ?? "-"),pending:\(voice.pending?.provider ?? "-")/\(voice.pending?.model ?? "-")/\(voice.pending?.voice ?? "-")"
