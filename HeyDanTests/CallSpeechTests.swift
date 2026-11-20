@@ -14,6 +14,28 @@ import XCTest
         XCTAssertTrue(CallerWord(text: "Так, зачекай!", startMs: 0, confidence: 0.9).interrupts)
     }
 
+    func testCaptureRequiresActiveAudioWithHoldAndMuteReleasedIndependently() {
+        let speech = CallSpeech()
+        func expectCaption(_ allowed: Bool, line: UInt = #line) {
+            speech.showCaption("Listening", at: 0, final: false)
+            XCTAssertEqual(speech.caption.text.isEmpty, !allowed, line: line)
+        }
+
+        expectCaption(false)
+        speech.updateInput(audioActive: true, held: false, muted: false)
+        expectCaption(true)
+        speech.updateInput(audioActive: true, held: true, muted: false)
+        expectCaption(false)
+        speech.updateInput(audioActive: true, held: false, muted: true)
+        expectCaption(false)
+        speech.updateInput(audioActive: false, held: false, muted: false)
+        expectCaption(false)
+        speech.updateInput(audioActive: true, held: false, muted: false)
+        expectCaption(true)
+        speech.end()
+        expectCaption(false)
+    }
+
     func testConvertedInputKeepsMicTimeAcrossPreheatAndMute() async throws {
         let input = CallSpeechInput()
         let source = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))

@@ -31,8 +31,9 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
 - **Chat** with markdown and code, photos and files, question cards you answer with a tap, and rich cards with
   fields, tables and charts. What you send offline goes out when the host is back.
 - **Replies on the lock screen** as communication notifications, with one unread badge across all your hosts.
-- **Calls** through CallKit, so they keep going on the lock screen: start one from a thread or the Action Button,
-  talk hands-free and follow live captions in the same thread. The call bar has mute, Call options and End.
+- **Calls** through [LiveCommunicationKit](https://developer.apple.com/documentation/livecommunicationkit) keep going on the lock screen.
+  Start one from a thread or the Action Button, talk hands-free and follow live captions in the same thread.
+  The call bar shows Joining until the agent's listening cue plays, then switches to Listening. It has mute, Call options and End.
   Call options lets you change the agent's voice or the typing sound.
 - **Pairing** by one-time link: each host gets its own Secure Enclave key on the phone, and requests to the host are
   signed with it. Pair several hosts and pick the active one.
@@ -44,6 +45,8 @@ Chat goes to your NanoClaw host's [app channel](https://github.com/tenequm/nanoc
 signed HTTPS requests, and one server-sent event stream keeps the chat list, threads and unread counts current. New
 replies arrive as APNs pushes, which the notification service extension turns into communication notifications.
 Calls use relay-only ICE over [LiveKit](https://github.com/livekit/client-sdk-swift). Each call belongs to its chat.
+Phone Recents can redial the same paired agent. System Hold silences the microphone and remote audio while keeping the room
+connected. The worker can continue processing a turn during hold.
 See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
 
 ## Requirements
@@ -85,9 +88,9 @@ See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
 3. Call type: Audio, not Ask Each Time.
 4. iOS Settings > Action Button > Shortcut > that shortcut.
 
-A press then calls with the phone locked and Hey Dan out of sight: Call agent uses iOS 27's start-call intent schema,
-which lets CallKit start a call from the background. Keep both fields saved in the shortcut; that setup is proven on
-a locked iPhone (iOS 27.2). If iOS still refuses the call, the shortcut says so. Then use Start conversation
+Call agent uses iOS 27's start-call intent schema to request a call with the phone locked. Keep both fields saved
+in the shortcut. If iOS refuses the background start and allows the shortcut to open Hey Dan, it retries the same
+destination in the foreground. You can also use Start conversation
 (Shortcuts > Hey Dan > Start conversation, or Siri: "Talk to Hey Dan"): it opens Hey Dan after Face ID and starts the
 call there.
 
@@ -140,8 +143,7 @@ One-time setup:
 
 The beta recipe builds the same Release scheme with [Beta.xcconfig](Beta.xcconfig). The installed app has a marked
 icon, its own pairing keys, chats, badge and notification settings. Pair the beta independently. In Shortcuts or
-Control Center choose the beta entry for the Action Button. Siri uses each app's display name. CallKit uses the app
-name and both builds disable Recents.
+Control Center choose the beta entry for the Action Button. Siri uses each app's display name. Phone Recents redials the paired agent in the app that placed the call.
 
 1. Keep the normal bundle ID and team in `Local.xcconfig`. With the team signed into Xcode, run `just gen`, then
    `xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -configuration Release -xcconfig Beta.xcconfig -destination 'generic/platform=iOS' -allowProvisioningUpdates build`

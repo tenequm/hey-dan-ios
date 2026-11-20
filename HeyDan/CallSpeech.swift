@@ -54,7 +54,7 @@ final class CallSpeech {
     @ObservationIgnored private weak var mic: LocalAudioTrack?
     @ObservationIgnored private weak var room: Room?
     @ObservationIgnored private var afterMuteMs = 0
-    @ObservationIgnored private var muted = false
+    @ObservationIgnored private var muted = true
 
     func preheat() {
         guard selection == nil else { return }
@@ -124,23 +124,26 @@ final class CallSpeech {
         }
     }
 
-    func setMuted(_ muted: Bool) {
+    func updateInput(audioActive: Bool, held: Bool, muted userMuted: Bool) {
+        let muted = !audioActive || held || userMuted
         guard self.muted != muted else { return }
         self.muted = muted
         input?.mute(muted)
         afterMuteMs = input?.milliseconds ?? 0
         caption = CallerCaption()
+        if muted { barge.reset() } else if let room { update(room: room) }
     }
 
     func update(room: Room) {
         self.room = room
         let agent = room.remoteParticipants.values.first(where: \.isAgent)
-        barge.update(enabled: room.connectionState == .connected && agent?.attributes[Self.interruptMethod] == "1",
+        barge.update(enabled: !muted && room.connectionState == .connected && agent?.attributes[Self.interruptMethod] == "1",
                      speaking: agent?.attributes[VoiceProtocol.agentStateAttribute] == "speaking",
                      micMs: input?.milliseconds ?? 0)
     }
 
     func showCaption(_ text: String, at start: Int, final: Bool) {
+        guard !muted else { return }
         if caption.text.isEmpty, !text.isEmpty { CallLog.log(.audio, "local speech caption received") }
         caption.update(text, at: start, final: final)
     }
@@ -192,7 +195,7 @@ final class CallSpeech {
         mic = nil
         room = nil
         input = nil
-        muted = false
+        muted = true
         afterMuteMs = 0
         caption = CallerCaption()
     }

@@ -5,6 +5,8 @@ struct PairedCallTarget: Sendable, Equatable {
     let host: URL
     let deviceId: String
     let conversation: Conversation
+
+    var agentHandle: UUID { PairedAgentID.make(host: host, agentId: conversation.agent.id) }
 }
 
 struct CallTarget {

@@ -84,7 +84,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
-        NSUserActivityTypes: [INSendMessageIntent]
+        NSUserActivityTypes: [INSendMessageIntent, INStartCallIntent]
         UIAppFonts:
           - DMSans/DMSans-Regular.ttf
           - DMSans/DMSans-Medium.ttf
