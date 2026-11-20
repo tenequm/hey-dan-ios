@@ -132,7 +132,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
 
         def test(selector):
             # A selector may be several, space-separated: one xcodebuild session costs 100 s on a CI runner.
-            result = Path(results) / (selector.replace('/', '-').replace(' ', '+') + '.xcresult')
+            # A long joined name exceeds the 255-byte file name limit (xcodebuild exits 73 after the tests pass).
+            name = selector.replace('/', '-') if ' ' not in selector else f'session-{len(selector.split())}-checks'
+            result = Path(results) / (name + '.xcresult')
             command = ['xcodebuild', 'test-without-building', '-xctestrun', manifest, '-destination', destination,
                        *TEST_FLAGS, *('-only-testing:' + one for one in selector.split()),
                        # CI reruns a failed test once (HEYDAN_RETRY=1) and names it as flaky when the rerun passes.
