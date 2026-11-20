@@ -142,7 +142,39 @@ private final class FixtureBundle {}
         XCTAssertEqual(earlyMic.playableCue, .listeningCue)
     }
 
-    func testJoiningBecomesListeningAndSystemJoinedOnlyDuringTheListeningCue() throws {
+    func testMissingCueGetsTheFullGracePeriodAfterBothMediaAreReady() {
+        let start = ContinuousClock.now
+        for agentFirst in [true, false] {
+            var timer = CallController.SetupTimer()
+            XCTAssertNil(timer.update(agent: agentFirst, published: !agentFirst, paused: false, at: start))
+            let ready = start + .seconds(24)
+            XCTAssertNil(timer.update(agent: true, published: true, paused: false, at: ready))
+            XCTAssertNil(timer.update(agent: true, published: true, paused: false, at: ready + .seconds(5)))
+            XCTAssertEqual(timer.update(agent: true, published: true, paused: false, at: ready + .seconds(6)), .cueMissed)
+        }
+        let date = Date.now
+        let joined = CallController.ConnectionMilestone.cueMissed.transition(at: date)
+        XCTAssertEqual(joined.phase, .live(.listening))
+        XCTAssertEqual(joined.event, .conversationConnected(date))
+    }
+
+    func testHoldPreservesRemainingTimeAndSetupFailuresDistinguishAgentFromMic() {
+        let start = ContinuousClock.now
+        for (agent, mic, seconds, expiry) in [(false, true, 25, CallController.SetupTimer.Expiry.noAgent),
+                                              (true, false, 25, .micUnpublished), (true, true, 6, .cueMissed)] {
+            var timer = CallController.SetupTimer()
+            XCTAssertNil(timer.update(agent: agent, published: mic, paused: false, at: start))
+            XCTAssertNil(timer.update(agent: agent, published: mic, paused: true, at: start + .seconds(4)))
+            XCTAssertNil(timer.deadline)
+            let resume = start + .seconds(100)
+            XCTAssertNil(timer.update(agent: agent, published: mic, paused: false, at: resume))
+            XCTAssertEqual(timer.deadline, resume + .seconds(seconds - 4))
+            XCTAssertEqual(timer.update(agent: agent, published: mic, paused: false, at: resume + .seconds(seconds - 4)), expiry)
+        }
+        XCTAssertEqual(CallTarget.EndReason.micUnpublished.rawValue, "mic-unpublished")
+    }
+
+    func testListeningCueReportsListeningAndSystemJoined() throws {
         let date = Date(timeIntervalSince1970: 10)
         let joining = CallController.ConnectionMilestone.joining.transition(at: date)
         XCTAssertEqual(joining.phase, .joining)

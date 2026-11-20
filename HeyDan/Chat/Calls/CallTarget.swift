@@ -57,6 +57,7 @@ struct CallTarget {
     }
 
     enum EndReason: String {
+        case micUnpublished = "mic-unpublished"
         case noAgent = "no-agent"
         case updating
     }

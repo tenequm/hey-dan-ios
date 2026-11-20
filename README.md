@@ -33,7 +33,8 @@ Native iPhone app for your [NanoClaw](https://github.com/tenequm/nanoclaw) agent
 - **Replies on the lock screen** as communication notifications, with one unread badge across all your hosts.
 - **Calls** through [LiveCommunicationKit](https://developer.apple.com/documentation/livecommunicationkit) keep going on the lock screen.
   Start one from a thread or the Action Button, talk hands-free and follow live captions in the same thread.
-  The call bar shows Joining until the agent's listening cue plays, then switches to Listening. It has mute, Call options and End.
+  The call bar switches from Joining to Listening when the microphone is published and the agent's cue plays.
+  If the cue is missed, Listening starts after six seconds with the agent and microphone connected. It has mute, Call options and End.
   Call options lets you change the agent's voice or the typing sound.
 - **Pairing** by one-time link: each host gets its own Secure Enclave key on the phone, and requests to the host are
   signed with it. Pair several hosts and pick the active one.
