@@ -35,9 +35,28 @@ struct ThreadCallBar: View {
 
     private var displayName: String { call.agentName }
     private var voiceService: (any VoicePickerService)? { call.liveVoiceService ?? target.voicePickerService }
-    private var canChangeTyping: Bool {
+    private var canChangeSettings: Bool {
         if case .live = call.phase { return call.commands != nil }
         return false
+    }
+
+    private var releaseWord: String {
+        call.commands?.overWords.first.map { "«\($0)»" } ?? "the release word"
+    }
+
+    private var activityLabel: String {
+        if case .live = call.phase, call.commands?.listenUntilOver == true {
+            return "Listening until \(releaseWord)"
+        }
+        return call.phase.callBarLabel
+    }
+
+    private func changeSettings(typing: Bool? = nil, listenUntilOver: Bool? = nil) {
+        settingsBusy = true
+        Task {
+            await call.updateSettings(typing: typing, listenUntilOver: listenUntilOver)
+            settingsBusy = false
+        }
     }
 
     var body: some View {
@@ -48,7 +67,7 @@ struct ThreadCallBar: View {
             .accessibilityIdentifier("controls.mute")
             Spacer(minLength: 0)
             Image(systemName: "waveform").foregroundStyle(theme.color.accent).accessibilityHidden(true)
-            Text(call.phase.callBarLabel).textRole(theme.type.label, theme.weight.medium).lineLimit(1)
+            Text(activityLabel).textRole(theme.type.label, theme.weight.medium).lineLimit(2)
             CallElapsed(since: call.liveSince)
                 .textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             Spacer(minLength: 0)
@@ -106,19 +125,26 @@ struct ThreadCallBar: View {
                     .accessibilityIdentifier(AXID.optionsVoice)
                     Divider().overlay(theme.color.border)
                         .padding(.leading, theme.space.s4 + theme.control.glassIcon + theme.space.s3)
-                    Toggle(isOn: Binding(get: { call.commands?.typing ?? call.settingsPicks.typing }, set: { typing in
-                        settingsBusy = true
-                        Task {
-                            await call.updateSettings(typing: typing)
-                            settingsBusy = false
-                        }
-                    })) {
+                    Toggle(isOn: Binding(get: { call.commands?.typing ?? call.settingsPicks.typing },
+                                         set: { changeSettings(typing: $0) })) {
                         SettingsRow(title: "Typing sound", icon: "keyboard", subtitle: "Quiet keys while \(displayName) works on your turn")
                     }
                     .toggleStyle(.switch).tint(theme.color.accent)
                     .padding(.trailing, theme.space.s4)
-                    .disabled(settingsBusy || !canChangeTyping)
+                    .disabled(settingsBusy || !canChangeSettings)
                     .accessibilityIdentifier(AXID.optionsTyping)
+                    if call.commands?.listenUntilOver != nil {
+                        Divider().overlay(theme.color.border)
+                            .padding(.leading, theme.space.s4 + theme.control.glassIcon + theme.space.s3)
+                        Toggle(isOn: Binding(get: { call.commands?.listenUntilOver == true },
+                                             set: { changeSettings(listenUntilOver: $0) })) {
+                            SettingsRow(title: "Listen until \(releaseWord)", icon: "ear")
+                        }
+                        .toggleStyle(.switch).tint(theme.color.accent)
+                        .padding(.trailing, theme.space.s4)
+                        .disabled(settingsBusy || !canChangeSettings)
+                        .accessibilityIdentifier("options.listenUntilOver")
+                    }
                 }
             }
             .foregroundStyle(theme.color.textPrimary)
