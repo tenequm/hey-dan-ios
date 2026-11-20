@@ -143,7 +143,7 @@ final class CallSpeech {
         input?.mute(muted)
         afterMuteMs = input?.milliseconds ?? 0
         caption = CallerCaption()
-        if muted { barge.reset() } else if let room { update(room: room) }
+        if muted { barge.reset(reason: "input muted") } else if let room { update(room: room) }
     }
 
     func update(room: Room) {
