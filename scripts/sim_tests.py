@@ -13,6 +13,13 @@ import time
 
 
 TEST_SECONDS = 180
+# `smoke` (CI on every pull request): one check per core path - launch and pairing, list and thread, composer,
+# fixture call, agent settings, voices, one system check - the quickest of each.
+SMOKE = ['ChatPairingChecks/testUnpairedLaunchOpensPairing', 'ChatChecks/testFixtureUnreadRelaunch',
+         'ChatThreadChecks/testFixtureThread', 'ChatThreadChecks/testRichCardTable', 'ChatComposerChecks/testTextSend',
+         'ChatCallChecks/testFixtureCallAndPairingSettings', 'ChatCallChecks/testFailureOffersCallAgainInThread',
+         'ChatAgentSettingsChecks/testSaveSettingsWhileWorking', 'PairedVoiceChecks/testCatalogFailure',
+         'HeyDanChecks/testLiveActivityOnLockScreen']
 START = time.monotonic()
 TEST_FLAGS = ['-collect-test-diagnostics', 'never', '-enableCodeCoverage', 'NO',
               '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
@@ -49,8 +56,6 @@ def test_products(build, destination, env):
         print('Reusing Simulator test products', flush=True)
         return manifests[0]
 
-    if os.environ.get('HEYDAN_PREBUILT') == '1':
-        raise RuntimeError('The downloaded Simulator test products do not match this checkout')
     stamp.unlink(missing_ok=True)
     subprocess.run(['xcodegen', 'generate', *(['--use-cache'] if Path('HeyDan.xcodeproj').is_dir() else [])], check=True)
     build_env = env.copy()
@@ -119,8 +124,6 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
         manifest = test_products(build, destination, env)
         build_seconds = time.monotonic() - started
         mark('built')
-        if mode == 'build':
-            return
         subprocess.run([*sim, 'bootstatus', udid, '-b'], check=True, stdout=subprocess.DEVNULL)
         mark('booted')
         subprocess.run([*sim, 'spawn', udid, 'launchctl', 'kickstart', '-k',
@@ -131,9 +134,10 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
         flaky = []
 
         def test(selector):
-            result = Path(results) / (selector.replace('/', '-') + '.xcresult')
+            # A selector may be several, space-separated: one xcodebuild session costs 100 s on a CI runner.
+            result = Path(results) / (selector.replace('/', '-').replace(' ', '+') + '.xcresult')
             command = ['xcodebuild', 'test-without-building', '-xctestrun', manifest, '-destination', destination,
-                       *TEST_FLAGS, '-only-testing:' + selector,
+                       *TEST_FLAGS, *('-only-testing:' + one for one in selector.split()),
                        # CI reruns a failed test once (HEYDAN_RETRY=1) and names it as flaky when the rerun passes.
                        *(['-retry-tests-on-failure', '-test-iterations', '2'] if os.environ.get('HEYDAN_RETRY') == '1' else []),
                        # CI names what a Simulator that never ran the app cannot pass.
@@ -141,9 +145,8 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             count = 1
             # Enumerating starts its own test session, which outran its 3-minute limit on a fresh CI Simulator; the app tests are
             # quick, so one test's allowance plus the startup margin covers them without it.
-            # CI skips it (it outran the limit there on whole classes too); the job's own timeout bounds the run.
-            if os.environ.get('HEYDAN_PREBUILT') == '1':
-                count = 20
+            if ' ' in selector:
+                count = sum(1 if one.count('/') > 1 else 20 for one in selector.split())
             elif mode != 'app-test' and selector.count('/') < 2:
                 inventory = Path(results) / (selector.replace('/', '-') + '.txt')
                 subprocess.run(['timeout', '180', *command, '-enumerate-tests', '-test-enumeration-style', 'flat',
@@ -152,20 +155,30 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 count = max(1, selected_tests(inventory.read_text(), selector))
                 mark('enumerated')
             # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
-            deadline = str(240 + TEST_SECONDS * (count + (os.environ.get('HEYDAN_RETRY') == '1')))
+            deadline = 240 + TEST_SECONDS * (count + (os.environ.get('HEYDAN_RETRY') == '1'))
+            # CI's budget for the whole script (HEYDAN_DEADLINE, seconds), so a shard out of time ends red with a
+            # summary instead of being cancelled by the job timeout.
+            if budget := os.environ.get('HEYDAN_DEADLINE'):
+                deadline = min(deadline, int(int(budget) - (time.monotonic() - START)))
+            deadline = str(max(deadline, 1))
             proc = subprocess.Popen(['timeout', '--foreground', '--kill-after=10', deadline, *command,
                                      '-resultBundlePath', result],
                                     env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
             # XCTest activity trees and assertion values can contain chat text or pairing links. Lines print as they
             # arrive, so a job killed by its timeout still shows which tests passed and which one hung.
             outcomes = {}
+            running = None
             for line in proc.stdout:
                 line = line.rstrip('\n')
-                if case := re.match(r"^Test Case '-\[\S+ (\S+)\]' (passed|failed)", line):
-                    outcomes.setdefault(case[1], set()).add(case[2])
+                if case := re.match(r"^Test Case '-\[(\S+) (\S+)\]' started", line):
+                    running = f'{case[1]}/{case[2]}'
+                elif re.match(r"^Test Case '.*' (passed|failed|skipped)", line):
+                    running = None
+                if case := re.match(r"^Test Case '-\[(\S+) (\S+)\]' (passed|failed)", line):
+                    outcomes.setdefault(f'{case[1]}/{case[2]}', set()).add(case[3])
                 if re.match(r"^(check:|Test Case '.*' (passed|failed|skipped)|\s*Executed \d+ tests?|.*Test run with \d+ tests|\*\* TEST)", line):
                     print(line, flush=True)
-                elif 'error:' in line and os.environ.get('HEYDAN_PREBUILT') == '1':
+                elif 'error:' in line and os.environ.get('GITHUB_ACTIONS') == 'true':
                     # On a hosted runner the app shows only fixtures, so the assertion text is safe to print.
                     print(re.sub(r'^\S*/', '', line), flush=True)
                 elif 'error:' in line:
@@ -173,8 +186,16 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                           else 'xcodebuild reported an error')
             proc.wait()
             mark('tested')
-            flaky.extend(f'{selector}/{name}' for name, seen in outcomes.items() if seen == {'passed', 'failed'})
-            if proc.returncode:
+            flaky.extend(name for name, seen in outcomes.items() if seen == {'passed', 'failed'})
+            if proc.returncode == 124:
+                passed = sorted(name for name, seen in outcomes.items() if 'passed' in seen)
+                note = (f'Out of time in {selector}: {len(passed)} passed, '
+                        f'{"running " + running if running else "between tests"} when the watchdog fired')
+                print(f'::error title=UI checks out of time::{note}', flush=True)
+                if os.environ.get('GITHUB_STEP_SUMMARY'):
+                    with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+                        out.write(f'### {note}\n\n' + ''.join(f'- `{name}` passed\n' for name in passed) + '\n')
+            elif proc.returncode:
                 report(selector, result)
                 raise subprocess.CalledProcessError(proc.returncode, 'xcodebuild test-without-building')
             summary = json.loads(subprocess.check_output(['xcrun', 'xcresulttool', 'get', 'test-results',
@@ -203,7 +224,8 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
 
         subprocess.run([*sim, 'install', udid, build / 'Build/Products/Debug-iphonesimulator/HeyDan.app'], check=True)
         mark('installed')
-        selectors = ['HeyDanTests'] if mode == 'app-test' else [ui_selector(c) for c in check.split()]
+        checks = SMOKE if check == 'smoke' else check.split()
+        selectors = ['HeyDanTests'] if mode == 'app-test' else [ui_selector(c) for c in checks]
         if any('Push' in selector for selector in selectors) and bundle == 'com.example.HeyDan':
             raise RuntimeError('Simulator push checks need HEYDAN_BUNDLE_ID in Local.xcconfig')
         if mode == 'sim-checks':
@@ -217,6 +239,12 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(out)
         failed = []
         base = runner.copy()
+        if mode == 'sim-checks':
+            # One session for everything but the screen captures, which need their own environment: each session
+            # costs about 100 s on a CI runner.
+            screens = [one for one in selectors if one.startswith('HeyDanChecks/ScreenCaptureChecks')]
+            rest = [one for one in selectors if one not in screens]
+            selectors = [' '.join(rest)] * bool(rest) + screens
         # Every selector runs even after one fails, so a CI shard reports all its failures at once.
         for selector in selectors:
             runner.clear()

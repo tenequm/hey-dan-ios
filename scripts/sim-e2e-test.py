@@ -2,7 +2,6 @@
 import importlib.util
 import os
 from pathlib import Path
-import re
 import shutil
 import signal
 import sys
@@ -189,19 +188,16 @@ class Run(unittest.TestCase):
             self.fail('the command started by the wrapped process outlived the signal')
 
 
-class CIShards(unittest.TestCase):
-    # Needs notification permission on a Simulator that never ran the app, and a real bundle ID.
-    CI_SKIPPED = {'ChatPushChecks'}
+class Smoke(unittest.TestCase):
 
-    def test_every_check_class_runs_on_ci_or_is_skipped_by_name(self):
-        root = Path(__file__).resolve().parent.parent
-        classes = {m for f in (root / 'HeyDanChecks').glob('*.swift')
-                   for m in re.findall(r'class (\w+): XCTestCase', f.read_text())}
-        workflow = (root / '.github/workflows/ci.yml').read_text()
-        sharded = {name.split('/')[0] for line in re.findall(r'^\s+checks: (.+)$', workflow, re.M) for name in line.split()}
-        self.assertFalse(sharded & self.CI_SKIPPED)
-        self.assertEqual(classes, sharded | self.CI_SKIPPED)
-
+    def test_every_smoke_check_exists(self):
+        checks = Path(__file__).resolve().parent.parent / 'HeyDanChecks'
+        for name in sim_tests.SMOKE:
+            cls, method = name.split('/')
+            source = (checks / f'{cls}.swift').read_text()
+            self.assertIn(f'class {cls}: XCTestCase', source, name)
+            self.assertRegex(source, rf'func {method}\(', name)
+        self.assertEqual(len(sim_tests.SMOKE), len(set(sim_tests.SMOKE)))
 
 if __name__ == '__main__':
     unittest.main()

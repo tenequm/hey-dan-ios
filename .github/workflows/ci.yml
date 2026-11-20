@@ -51,7 +51,8 @@ jobs:
         run: |
           xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')
           echo "xcode=xcode-$xcode-$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
-          echo "prefix=xcode-$xcode-$RUNNER_ARCH-$GITHUB_JOB" >> "$GITHUB_OUTPUT"
+          # ui-smoke runs App tests' build-for-testing and never runs on main, so it reads App tests' entry.
+          echo "prefix=xcode-$xcode-$RUNNER_ARCH-${GITHUB_JOB/#ui-smoke/app-tests}" >> "$GITHUB_OUTPUT"
           cat > "$RUNNER_TEMP/compile-cache.xcconfig" <<'EOF'
           COMPILATION_CACHE_ENABLE_CACHING = YES
           COMPILATION_CACHE_KEEP_CAS_DIRECTORY = YES
@@ -73,7 +74,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/CompilationCache.noindex
-          key: ${{ steps.compiler.outputs.prefix }}-${{ hashFiles('project.yml', 'Config.xcconfig', '**/Package.resolved', 'HeyDanCore/Package.swift', 'justfile', 'scripts/sim_tests.py', '**/*.swift') }}
+          key: ${{ steps.compiler.outputs.prefix }}-${{ hashFiles('project.yml', 'Config.xcconfig', '**/Package.resolved', 'HeyDanCore/Package.swift', 'justfile', 'scripts/sim_tests.py', '**/*.swift', '!build/**') }}
           restore-keys: |
             ${{ steps.compiler.outputs.prefix }}-
       - run: just build
@@ -104,13 +105,18 @@ jobs:
       - run: just app-test
       - *compile-cache-save
 
-  # The UI checks run on pull requests and by hand, not again on the push to main. One job builds the Simulator test
-  # products; each shard only installs and runs them.
-  sim-build:
-    name: Simulator build
+  # The smoke set of UI checks (SMOKE in scripts/sim_tests.py) on pull requests and by hand, not again on the push to
+  # main. The full set runs locally (AGENTS.md). ChatPushChecks never runs on CI: it needs notification permission,
+  # which no CLI grants on a Simulator that never ran the app, and a real bundle ID.
+  ui-smoke:
+    name: UI smoke
     if: github.event_name != 'push'
     runs-on: xcode-27
     timeout-minutes: 20
+    env:
+      HEYDAN_RETRY: "1"
+      # The script's own budget, under the job's 20 minutes: out of time ends red with what passed.
+      HEYDAN_DEADLINE: "1080"
     steps:
       - *checkout
       - uses: ./.github/actions/setup
@@ -119,57 +125,11 @@ jobs:
       - *cache-config
       - *package-cache
       - *compile-cache
-      - run: python3 scripts/sim_tests.py build "Hey Dan iPhone" build com.example.HeyDan
-      # tar keeps the modification times the reuse check compares against the key file.
-      - run: tar -cf "$RUNNER_TEMP/sim-products.tar" build/Build/Products build/HeyDanSimulatorTests.key
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: sim-products
-          path: ${{ runner.temp }}/sim-products.tar
-          compression-level: 1
-          retention-days: 1
-      - *compile-cache-save
-
-  ui-checks:
-    name: ${{ matrix.name }}
-    needs: sim-build
-    runs-on: xcode-27
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      # Three shards: with App tests beside them that is the account's cap of five macOS jobs.
-      # Every HeyDanChecks class is in one shard or in CI_SKIPPED (scripts/sim-e2e-test.py checks it). Not here:
-      # ChatPushChecks needs notification permission, which no CLI grants on a Simulator that never ran the app, and
-      # a real bundle ID. ChatChecks runs whole: its stack and pairing tests skip themselves without secrets.
-      matrix:
-        include:
-          - name: UI checks (calls, pairing)
-            checks: ChatCallChecks ChatPairingChecks
-          - name: UI checks (voices, screens, settings)
-            checks: PairedVoiceChecks ScreenCaptureChecks ChatAgentSettingsChecks
-          - name: UI checks (threads, composer, system)
-            checks: ChatThreadChecks ChatComposerChecks HeyDanChecks ChatChecks
-    env:
-      HEYDAN_PREBUILT: "1"
-      HEYDAN_RETRY: "1"
-      # On the runner's Simulator the system photo picker shows no photo within this check's 10 s.
-      HEYDAN_SKIP_TESTS: HeyDanChecks/ChatComposerChecks/testPhotosPicker
-    steps:
-      - *checkout
-      - uses: ./.github/actions/setup
-        with:
-          simulator: true
-      # Hand over before anything boots: beside a booting Simulator the download stalled for 4 to 7 minutes.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: sim-products
-          path: ${{ runner.temp }}
-      - run: tar -xpf "$RUNNER_TEMP/sim-products.tar"
-      - run: python3 scripts/sim_tests.py sim-checks "Hey Dan iPhone" build com.example.HeyDan "${{ matrix.checks }}"
+      - run: just sim-checks smoke
       - if: (failure() || cancelled())
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: screenshots-${{ strategy.job-index }}
+          name: ui-smoke-screenshots
           path: build/checks
           if-no-files-found: ignore
           retention-days: 7
