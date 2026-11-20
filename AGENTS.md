@@ -51,6 +51,8 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
   (`lk.transcription` text streams) and the worker's `<ns>.turn`, `<ns>.reply` and `<ns>.review` topics fold into the
   transcript the way the browser page folds them. When the worker sets `<ns>.commands` to "2" or "3", the caller's
   picks (wake switch, pause sends, typing sound) go to it over the `<ns>.settings` RPC, once per call after setup.
+  On-device speech recognition captions the caller and, when the worker advertises `<ns>.interrupt` as "1", can mute
+  agent speech and send a barge-in request over the `<ns>.interrupt` RPC.
 - **Live Activity** (`HeyDanActivity`): its end key is a `LiveActivityIntent`, which runs in the app's process, where
   the call is.
 - **Logs**: subsystem = the bundle ID, one category per area, built only from ids, states, codes and durations, never
