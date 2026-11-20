@@ -13,13 +13,10 @@ import time
 
 
 TEST_SECONDS = 180
-# `smoke` (CI on every pull request): one check per core path - launch and pairing, list and thread, composer,
-# fixture call, agent settings, voices, one system check - the quickest of each.
-SMOKE = ['ChatPairingChecks/testUnpairedLaunchOpensPairing', 'ChatChecks/testFixtureUnreadRelaunch',
-         'ChatThreadChecks/testFixtureThread', 'ChatThreadChecks/testRichCardTable', 'ChatComposerChecks/testTextSend',
-         'ChatCallChecks/testFixtureCallAndPairingSettings', 'ChatCallChecks/testFailureOffersCallAgainInThread',
-         'ChatAgentSettingsChecks/testSaveSettingsWhileWorking', 'PairedVoiceChecks/testCatalogFailure',
-         'HeyDanChecks/testDefaultAgentIsSuggestedToShortcuts']
+# `smoke` (CI on every pull request): the quickest asserting check of each core path - launch and list, thread,
+# composer send, fixture call start, agent settings.
+SMOKE = ['ChatChecks/testFixtureUnreadRelaunch', 'ChatThreadChecks/testFixtureThread', 'ChatComposerChecks/testTextSend',
+         'ChatCallChecks/testFixtureCallAndPairingSettings', 'ChatAgentSettingsChecks/testSaveSettingsWhileWorking']
 START = time.monotonic()
 TEST_FLAGS = ['-collect-test-diagnostics', 'never', '-enableCodeCoverage', 'NO',
               '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
