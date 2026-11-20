@@ -117,6 +117,8 @@ core tests, the device build and the app tests on pull requests and pushes to `m
 uploads it with a timestamp build number and waits for App Store Connect to process it, failing on a rejection.
 `just testflight dry` exports and validates the IPA locally and uploads nothing, though the export still reserves a
 build number in App Store Connect. The version is `MARKETING_VERSION` in [project.yml](project.yml).
+If it matches the latest uploaded iOS build, upload stops and dry mode warns.
+Use `just testflight upload same-version` to upload another build of that version intentionally.
 
 One-time setup:
 

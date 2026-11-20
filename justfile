@@ -15,6 +15,7 @@ gen:
 test:
     cd HeyDanCore && swift test
     python3 scripts/sim-e2e-test.py
+    python3 -B scripts/testflight-test.py
 
 # Compile-check for a device without signing.
 build: gen
@@ -82,18 +83,23 @@ device-call seconds="65" say="": gen
 # Archive, sign and upload to TestFlight with the App Store Connect API key; waits for processing, fails on a rejection.
 # `just testflight dry` stops short of the upload: it exports the IPA locally and runs App Store validation on it
 # (the export still reserves its build number in App Store Connect, left AWAITING_UPLOAD).
-testflight mode="upload": gen
-    ${ASC_ENV_CMD:-} just _testflight {{mode}}
+testflight mode="upload" override="": gen
+    ${ASC_ENV_CMD:-} just _testflight {{quote(mode)}} {{quote(override)}}
 
 # Needs ASC_KEY_P8_B64 (the .p8 as one base64 line), ASC_KEY_ID and ASC_ISSUER_ID; an upload also ASC_APP_ID.
 [private]
-_testflight mode:
+[positional-arguments]
+_testflight mode override="":
     #!/usr/bin/env bash
     set -euo pipefail
-    case "{{mode}}" in upload) destination=upload ;; dry) destination=export ;; *) echo "mode is upload or dry" >&2; exit 2 ;; esac
+    case "$1:$2" in
+        upload:|upload:same-version) destination=upload ;;
+        dry:) destination=export ;;
+        *) echo "usage: just testflight [dry | upload [same-version]]" >&2; exit 2 ;;
+    esac
     [ -n "{{team_id}}" ] || { echo "no DEVELOPMENT_TEAM: set it in Local.xcconfig (see Local.xcconfig.example)" >&2; exit 1; }
     needed="ASC_KEY_P8_B64 ASC_KEY_ID ASC_ISSUER_ID"
-    [ "{{mode}}" = dry ] || needed="$needed ASC_APP_ID"
+    [ "$1" = dry ] || needed="$needed ASC_APP_ID"
     for name in $needed; do
         [ -n "${!name:-}" ] || { echo "$name is not set: see .env.local.example (ASC_ENV_CMD, ASC_APP_ID)" >&2; exit 1; }
     done
@@ -129,9 +135,14 @@ _testflight mode:
         dsym="$archive/dSYMs/$fw.framework.dSYM"
         [ -e "$dsym" ] || xcrun dsymutil "$archive/Products/Applications/HeyDan.app/Frameworks/$fw.framework/$fw" -o "$dsym" 2>/dev/null
     done
+    version=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleShortVersionString' "$archive/Info.plist")
+    if ! uv run -q scripts/testflight-wait.py check-version "$version" "${2:-$1}"; then
+        [ "$1" = dry ] || exit 1
+        echo "warning: could not verify the latest TestFlight version" >&2
+    fi
     xcodebuild -exportArchive -archivePath "$archive" -exportPath build/testflight/export \
         -exportOptionsPlist "$options" "${auth[@]}" -quiet
-    if [ "{{mode}}" = dry ]; then
+    if [ "$1" = dry ]; then
         xcrun altool --validate-app build/testflight/export/HeyDan.ipa --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID" --p8-file-path "$key"
         rm -f "$key"
         echo "dry run: build $build_number exported to build/testflight/export and validated; nothing uploaded"
