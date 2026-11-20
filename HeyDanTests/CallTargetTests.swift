@@ -129,6 +129,22 @@ private final class FixtureBundle {}
         }
     }
 
+    func testManagerCallbacksFinishInDeliveryOrderAcrossSuspension() async {
+        let controller = CallController.shared
+        let (release, gate) = AsyncStream<Void>.makeStream()
+        var order: [Int] = []
+        controller.enqueue { _ in
+            order.append(1)
+            for await _ in release { break }
+            order.append(2)
+        }
+        controller.enqueue { _ in order.append(3) }
+        await Task.yield()
+        gate.finish()
+        await withCheckedContinuation { done in controller.enqueue { _ in done.resume() } }
+        XCTAssertEqual(order, [1, 2, 3])
+    }
+
     func testSystemEndCompletesForAnUnknownConversation() async {
         let end = EndConversationAction(conversationUUID: UUID())
         await CallController.shared.perform(end)

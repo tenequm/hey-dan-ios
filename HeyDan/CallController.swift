@@ -168,6 +168,8 @@ final class CallController: NSObject {
     @ObservationIgnored private var call: ActiveCall?
     /// The last call that ended, and how: what an intent that started it reports.
     @ObservationIgnored private var lastEnded: (id: UUID, ending: Ending)?
+    typealias ManagerCallback = @MainActor @Sendable (CallController) async -> Void
+    nonisolated private let callbacks: AsyncStream<ManagerCallback>.Continuation
     @ObservationIgnored private let manager: ConversationManager
     @ObservationIgnored private let startImpact = UIImpactFeedbackGenerator(style: .light)
 
@@ -182,7 +184,15 @@ final class CallController: NSObject {
             maximumConversationGroups: 1, maximumConversationsPerConversationGroup: 1,
             includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
         manager = ConversationManager(configuration: configuration)
+        let (stream, continuation) = AsyncStream<ManagerCallback>.makeStream()
+        callbacks = continuation
         super.init()
+        Task { @MainActor [weak self] in
+            for await callback in stream {
+                guard let self else { break }
+                await callback(self)
+            }
+        }
         manager.delegate = self
         CallActivity.follow(self)
         // iOS activates the audio session; LiveKit's engine runs only between didActivate and didDeactivate.
@@ -1061,21 +1071,25 @@ extension CallController {
 }
 
 extension CallController: ConversationManagerDelegate {
+    nonisolated func enqueue(_ callback: @escaping ManagerCallback) {
+        callbacks.yield(callback)
+    }
+
     nonisolated func conversationManagerDidBegin(_: ConversationManager) {}
 
     nonisolated func conversationManager(_: ConversationManager, conversationChanged _: LiveCommunicationKit.Conversation) {}
 
     nonisolated func conversationManagerDidReset(_: ConversationManager) {
-        Task { @MainActor in
-            trace(.callkit, "manager reset", level: .error)
-            if let id = call?.id { finish(id, Ending(cause: .failure, message: "The call was reset."), endedBy: nil) }
+        enqueue { controller in
+            controller.trace(.callkit, "manager reset", level: .error)
+            if let id = controller.call?.id { controller.finish(id, Ending(cause: .failure, message: "The call was reset."), endedBy: nil) }
         }
     }
 
     nonisolated func conversationManager(_: ConversationManager, perform action: ConversationAction) {
         // The delegate hands this action to one executor for its entire remaining lifetime.
         nonisolated(unsafe) let pending = action
-        Task { @MainActor in await perform(pending) }
+        enqueue { await $0.perform(pending) }
     }
 
     func perform(_ action: ConversationAction) async {
@@ -1129,7 +1143,7 @@ extension CallController: ConversationManagerDelegate {
     }
 
     nonisolated func conversationManager(_: ConversationManager, didActivate _: AVAudioSession) {
-        Task { @MainActor in audioActivated(by: "system") }
+        enqueue { $0.audioActivated(by: "system") }
     }
 
     private func audioActivated(by activator: String) {
@@ -1169,16 +1183,16 @@ extension CallController: ConversationManagerDelegate {
     #endif
 
     nonisolated func conversationManager(_: ConversationManager, didDeactivate _: AVAudioSession) {
-        Task { @MainActor in
-            call?.connectingTone?.stop()
-            trace(.callkit, "audio session deactivated")
-            setEngine(.none)
+        enqueue { controller in
+            controller.call?.connectingTone?.stop()
+            controller.trace(.callkit, "audio session deactivated")
+            controller.setEngine(.none)
         }
     }
 
     nonisolated func conversationManager(_: ConversationManager, timedOutPerforming action: ConversationAction) {
         let name = String(describing: type(of: action))
-        Task { @MainActor in trace(.callkit, "timed out performing \(name)", level: .error) }
+        enqueue { $0.trace(.callkit, "timed out performing \(name)", level: .error) }
     }
 }
 
