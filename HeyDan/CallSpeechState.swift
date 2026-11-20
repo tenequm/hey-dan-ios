@@ -30,6 +30,17 @@ struct CallerWord {
     }
 }
 
+struct SpeechInterrupt {
+    let heard: String
+    let cutAtMs: Int
+
+    func payload(from input: CallSpeechInput) throws -> String {
+        // LiveKit does not expose a per-utterance playout position.
+        let fields: [String: Any] = ["heard": heard, "cutAtMs": cutAtMs, "micMs": input.milliseconds, "playedMs": NSNull()]
+        return String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+    }
+}
+
 @MainActor
 final class SpeechBargeIn {
     private let timeout: Duration
@@ -52,13 +63,17 @@ final class SpeechBargeIn {
         }
     }
 
-    func hear(_ words: [CallerWord], remoteActive: Bool, mute: () -> (() -> Void),
-              interrupt: @escaping (Int) async -> Bool) {
+    func hear(_ words: [CallerWord], remoteActive: Bool, mute: () -> (() -> Void)?,
+              interrupt: @escaping (SpeechInterrupt) async -> Bool) {
         guard remoteActive, !attempted, let speakingSince else { return }
         let current = words.filter { $0.startMs >= speakingSince }
-        guard current.contains(where: \.interrupts), let first = current.first else { return }
+        guard current.contains(where: \.interrupts), let first = current.first, let restore = mute() else { return }
+        let heard = current.filter { $0.startMs >= first.startMs }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: " ")
+        let cut = SpeechInterrupt(heard: heard, cutAtMs: first.startMs)
         attempted = true
-        restore = mute()
+        self.restore = restore
         deadline = Task {
             do { try await Task.sleep(for: timeout) } catch { return }
             request?.cancel()
@@ -66,7 +81,7 @@ final class SpeechBargeIn {
         }
         request = Task {
             guard !Task.isCancelled else { return }
-            let accepted = await interrupt(first.startMs)
+            let accepted = await interrupt(cut)
             guard !Task.isCancelled, accepted else { return }
             deadline?.cancel()
         }

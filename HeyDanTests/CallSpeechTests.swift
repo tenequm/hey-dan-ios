@@ -68,30 +68,65 @@ import XCTest
         }
     }
 
-    func testSuccessfulCutIsImmediateOncePerUtteranceAndRestoresPreviousVolume() async {
+    func testSuccessfulCutIsImmediateOncePerUtteranceAndRestoresPreviousVolume() async throws {
         let gate = SpeechBargeIn()
-        gate.update(enabled: true, speaking: true, micMs: 100)
+        let input = CallSpeechInput()
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        pcm.frameLength = 48_000
+        input.render(pcmBuffer: pcm)
+        gate.update(enabled: true, speaking: true, micMs: input.milliseconds)
         var volume = 0.7
-        let sent = expectation(description: "Sent first-word mic timestamp")
-        let words = [CallerWord(text: "ok", startMs: 150, confidence: 1),
-                     CallerWord(text: "wait", startMs: 230, confidence: 1)]
-        gate.hear(Array(words.prefix(1)), remoteActive: true,
+        let sent = expectation(description: "Sent interrupt")
+        let words = [CallerWord(text: "previous", startMs: 950, confidence: 1),
+                     CallerWord(text: " ok", startMs: 1000, confidence: 1),
+                     CallerWord(text: " wait!", startMs: 1030, confidence: 1)]
+        pcm.frameLength = 4800
+        input.render(pcmBuffer: pcm)
+        gate.hear(Array(words.prefix(2)), remoteActive: true,
                   mute: { XCTFail(); return {} }, interrupt: { _ in XCTFail(); return false })
         gate.hear(words, remoteActive: true, mute: {
             volume = 0
             return { volume = 0.7 }
         }, interrupt: { cut in
-            XCTAssertEqual(cut, 150)
+            let payload = try? cut.payload(from: input)
+            let fields = payload.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+            XCTAssertEqual(fields?.count, 4)
+            XCTAssertEqual(fields?["heard"] as? String, "ok wait!")
+            XCTAssertEqual(fields?["cutAtMs"] as? Int, 1000)
+            XCTAssertEqual(fields?["micMs"] as? Int, 1200)
+            XCTAssertTrue(fields?["playedMs"] is NSNull)
             sent.fulfill()
             return true
         })
+        input.render(pcmBuffer: pcm)
         XCTAssertEqual(volume, 0)
         await fulfillment(of: [sent], timeout: 2)
         gate.hear(words, remoteActive: true, mute: { XCTFail(); return {} }, interrupt: { _ in XCTFail(); return false })
-        gate.update(enabled: true, speaking: false, micMs: 300)
+        gate.update(enabled: true, speaking: false, micMs: 1300)
         XCTAssertEqual(volume, 0)
-        gate.update(enabled: true, speaking: true, micMs: 500)
+        gate.update(enabled: true, speaking: true, micMs: 1500)
         XCTAssertEqual(volume, 0.7)
+    }
+
+    func testCutMutesAndRestoresOnlyTheOriginalSpeechTrack() throws {
+        final class Track: CallSpeechPlayout {
+            let name: String
+            var volume: Double
+            init(_ name: String, volume: Double) {
+                self.name = name
+                self.volume = volume
+            }
+        }
+        let cue = Track("background_audio", volume: 0.4)
+        let speech = Track("roomio_audio", volume: 0.8)
+        XCTAssertNil(CallSpeech.muteSpeechTrack(in: [cue]))
+        let restore = try XCTUnwrap(CallSpeech.muteSpeechTrack(in: [cue, speech]))
+        XCTAssertEqual(speech.volume, 0)
+        XCTAssertEqual(cue.volume, 0.4)
+        restore()
+        XCTAssertEqual(speech.volume, 0.8)
+        XCTAssertEqual(cue.volume, 0.4)
     }
 
     func testFailedAndUnansweredRPCRestoreVolumeOnDeadline() async {

@@ -4,6 +4,13 @@ import LiveKit
 import Observation
 import Speech
 
+protocol CallSpeechPlayout: AnyObject {
+    var name: String { get }
+    var volume: Double { get set }
+}
+
+extension RemoteAudioTrack: CallSpeechPlayout {}
+
 private struct PreparedCallSpeech {
     let analyzer: SpeechAnalyzer
     let transcriber: SpeechTranscriber
@@ -109,7 +116,7 @@ final class CallSpeech {
                 CallLog.log(.audio, "local speech ready")
                 for try await result in prepared.transcriber.results {
                     guard !Task.isCancelled else { return }
-                    receive(result)
+                    receive(result, from: input)
                 }
             } catch {
                 if !Task.isCancelled { CallLog.log(.audio, "local speech ended") }
@@ -138,17 +145,21 @@ final class CallSpeech {
         caption.update(text, at: start, final: final)
     }
 
-    private func receive(_ result: SpeechTranscriber.Result) {
+    static func muteSpeechTrack(in tracks: [some CallSpeechPlayout]) -> (() -> Void)? {
+        guard let track = tracks.first(where: { $0.name == "roomio_audio" }) else { return nil }
+        let volume = track.volume
+        track.volume = 0
+        return { track.volume = volume }
+    }
+
+    private func receive(_ result: SpeechTranscriber.Result, from input: CallSpeechInput) {
         let start = Int((result.range.start.seconds * 1000).rounded())
         guard !muted, start >= afterMuteMs else { return }
-        let heard = String(result.text.characters)
-        showCaption(heard, at: start, final: result.isFinal)
+        showCaption(String(result.text.characters), at: start, final: result.isFinal)
         guard !result.isFinal, let room, room.connectionState == .connected,
               let agent = room.remoteParticipants.values.first(where: \.isAgent),
               agent.attributes[Self.interruptMethod] == "1", agent.attributes[VoiceProtocol.agentStateAttribute] == "speaking",
-              let identity = agent.identity,
-              let publication = agent.audioTracks.first(where: { $0.isSubscribed && !$0.isMuted }),
-              let track = publication.track as? RemoteAudioTrack
+              let identity = agent.identity
         else { return }
         let words = result.text.runs.compactMap { run -> CallerWord? in
             guard let range = run.audioTimeRange, range.start.isNumeric else { return nil }
@@ -157,16 +168,13 @@ final class CallSpeech {
             return CallerWord(text: word, startMs: Int((range.start.seconds * 1000).rounded()), confidence: run.transcriptionConfidence)
         }
         barge.hear(words, remoteActive: agent.isSpeaking, mute: {
-            let volume = track.volume
-            track.volume = 0
-            return { track.volume = volume }
+            Self.muteSpeechTrack(in: agent.audioTracks.filter { $0.isSubscribed && !$0.isMuted }
+                .compactMap { $0.track as? RemoteAudioTrack })
         }, interrupt: { cut in
             guard room.connectionState == .connected, agent.attributes[Self.interruptMethod] == "1" else { return false }
-            // LiveKit does not expose a per-utterance playout position.
-            let payload: [String: Any] = ["heard": heard, "cutAtMs": cut, "playedMs": NSNull()]
-            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+            guard let payload = try? cut.payload(from: input),
                   let response = try? await room.localParticipant.performRpc(destinationIdentity: identity,
-                      method: Self.interruptMethod, payload: String(decoding: data, as: UTF8.self)) else { return false }
+                      method: Self.interruptMethod, payload: payload) else { return false }
             struct Reply: Decodable { let ok: Bool }
             return (try? JSONDecoder().decode(Reply.self, from: Data(response.utf8)))?.ok == true
         })
