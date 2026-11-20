@@ -8,7 +8,7 @@ public enum CallFailure: Error, Equatable, Sendable {
     case local(code: String, message: String)
     case callKitRefused(String)
     case setupFailed
-    /// CallKit never activated the call's audio session.
+    /// The system never activated the call's audio session.
     case audioNotStarted
     case malformedGrant
     case agentNotListening
@@ -52,7 +52,7 @@ public enum VoiceProtocol {
     public static let agentStateAttribute = "lk.agent.state"
     /// Without a worker in the room after this long it is down or mid-update.
     public static let agentJoinTimeout: Duration = .seconds(25)
-    /// How long CallKit gets to activate the audio session after the call starts before the app gives up on it.
+    /// Maximum wait for system audio activation after accepting the outgoing start.
     public static let audioActivationTimeout: Duration = .seconds(5)
     /// The worker times the caller's turn by the silence it hears, so the mic must keep sending it (DTX off).
     public static let micDTX = false

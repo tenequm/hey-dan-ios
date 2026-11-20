@@ -135,7 +135,6 @@ final class CallController: NSObject {
         /// `room.connect` returned: only from then can the agent leave or the room end the call. A connect that
         /// times out makes the SDK report both while tearing the room down, and that is a failure to connect.
         var roomConnected = false
-        var pendingStart: StartConversationAction?
         var reportedConnected = false
         /// The host names why it ended the call in the room metadata; the SDK clears it before it reports the disconnect.
         var endReason: String?
@@ -542,6 +541,7 @@ final class CallController: NSObject {
             return
         }
         manager.reportConversationEvent(event, for: conversation)
+        if case .conversationConnected = event { trace(.callkit, "connected reported", id) }
     }
 
     private func startActivationTimer(_ id: UUID) {
@@ -604,8 +604,6 @@ final class CallController: NSObject {
             let connectedAt = Date.now
             call?.reportedConnected = true
             current.setupTask?.cancel()
-            current.pendingStart?.fulfill(dateStarted: connectedAt)
-            call?.pendingStart = nil
             let handle = Handle(type: .generic, value: current.target.paired.agentHandle.uuidString, displayName: agentName)
             report(.conversationUpdated(.init(members: [handle], activeRemoteMembers: [handle], capabilities: [.pausing])), for: current.id)
             report(.conversationConnected(connectedAt), for: current.id)
@@ -663,7 +661,6 @@ final class CallController: NSObject {
         #if DEBUG && targetEnvironment(simulator)
         VoiceDebug.callEnded(id)
         #endif
-        ended.pendingStart?.fail()
         ended.micSync?.cancel()
         ended.grantTask?.cancel()
         ended.connectTask?.cancel()
@@ -1065,8 +1062,9 @@ extension CallController: ConversationManagerDelegate {
         case let start as StartConversationAction:
             trace(.callkit, "perform start current=true", id)
             Self.configureAudioSession()
+            start.fulfill(dateStarted: .now)
+            trace(.callkit, "start fulfilled", id)
             startActivationTimer(id)
-            call?.pendingStart = start
             #if targetEnvironment(simulator)
             activateAudioByHand()
             #endif
@@ -1122,9 +1120,7 @@ extension CallController: ConversationManagerDelegate {
     }
 
     #if targetEnvironment(simulator)
-    /// The Simulator's callservicesd cannot activate an app's audio session from outside the app (it logs "Error
-    /// setting audio active to true" with OSStatus -50), so `didActivate` never comes there. During outgoing setup
-    /// the app activates the session itself, where iOS would, and the rest of the call runs as on a phone.
+    /// Simulator callservicesd can fail activation with OSStatus -50.
     private func activateAudioByHand() {
         do { try AVAudioSession.sharedInstance().setActive(true) } catch {
             return trace(.callkit, "simulator audio activation failed \(CallLog.describe(error))", level: .error)
@@ -1153,7 +1149,12 @@ extension CallController: ConversationManagerDelegate {
 
     nonisolated func conversationManager(_: ConversationManager, timedOutPerforming action: ConversationAction) {
         let name = String(describing: type(of: action))
-        enqueue { $0.trace(.callkit, "timed out performing \(name)", level: .error) }
+        let id = action.conversationUUID
+        let isStart = action is StartConversationAction
+        enqueue { controller in
+            controller.trace(.callkit, "timed out performing \(name)", id, level: .error)
+            if isStart { controller.finish(id, .failure(.setupFailed), endedBy: .failed) }
+        }
     }
 }
 
