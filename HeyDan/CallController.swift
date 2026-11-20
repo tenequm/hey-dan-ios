@@ -128,7 +128,7 @@ final class CallController: NSObject {
         /// The caller's microphone, made before it is published so a mute asked for during setup holds from the start
         /// (at the mixer: see `syncMic`).
         var mic: LocalAudioTrack?
-        var micPublished = false
+        var readiness = CallReadiness()
         /// A pass of `syncMic` is under way; a mute asked for meanwhile is taken by its next round.
         var micSync: Task<Void, Error>?
         var isPaused = false
@@ -357,13 +357,13 @@ final class CallController: NSObject {
     private func reconcileMic(_ id: UUID) async throws {
         while let current = call, current.id == id, let mic = current.mic {
             let silent = isMuted || current.isPaused
-            if !current.micPublished {
+            if !current.readiness.micPublished {
                 Self.silenceMixer(silent)
                 return
             }
             if silent != mic.isMuted {
                 if silent { try await mic.mute() } else { try await mic.unmute() }
-            } else if !silent, current.micPublished, let room = current.room, room.connectionState == .connected,
+            } else if !silent, current.readiness.micPublished, let room = current.room, room.connectionState == .connected,
                       !Self.isPublished(mic, in: room)
             {
                 try await room.localParticipant.publish(audioTrack: mic, options: Self.micPublishOptions)
@@ -456,13 +456,14 @@ final class CallController: NSObject {
                 try await room.localParticipant.publish(audioTrack: mic, options: Self.micPublishOptions)
                 guard call?.id == id else { return }
                 let publishMS = CallLog.ms(since: publishing)
-                call?.micPublished = true
+                call?.readiness.micPublished = true
+                joinOnCue(in: room)
                 // Keep setup silenced until the published track has taken any pending mute.
                 try await syncMic(id)
                 guard call?.id == id else { return }
                 Self.silenceMixer(call?.isPaused == true)
                 trace(.audio, "mic published muted=\(isMuted) track=\(mic.isMuted ? "muted" : "open") ms=\(publishMS)", id)
-                startAgentTimer(id)
+                if call?.reportedConnected == false { startAgentTimer(id) }
                 startInterimTimer(id)
                 refresh()
             } catch {
@@ -562,7 +563,19 @@ final class CallController: NSObject {
 
     private func cuePlayed(_ milestone: ConnectionMilestone, track: RemoteAudioTrack, in room: Room) {
         guard let call, call.room === room, call.cueTrack === track, !call.reportedConnected else { return }
-        call.cuePlayback?.detach(from: track)
+        self.call?.readiness.cue = milestone
+        joinOnCue(in: room)
+    }
+
+    struct CallReadiness {
+        var micPublished = false
+        var cue: ConnectionMilestone?
+        var playableCue: ConnectionMilestone? { micPublished ? cue : nil }
+    }
+
+    private func joinOnCue(in room: Room) {
+        guard let call, call.room === room, !call.reportedConnected, let milestone = call.readiness.playableCue else { return }
+        if let track = call.cueTrack { call.cuePlayback?.detach(from: track) }
         self.call?.cuePlayback = nil
         self.call?.cueTrack = nil
         call.agentTimer?.cancel()
@@ -591,7 +604,7 @@ final class CallController: NSObject {
         trace(
             .call,
             "finish site=\(site) cause=\(ending.cause) cx=\(reason.map { "\($0.rawValue)" } ?? "-") host=\(hostReason?.rawValue ?? "-") "
-                + "connected=\(current.roomConnected) mic=\(current.micPublished) live=\(current.reportedConnected) "
+                + "connected=\(current.roomConnected) mic=\(current.readiness.micPublished) live=\(current.reportedConnected) "
                 + "streams=[\(streams.joined(separator: ","))]",
             id
         )
@@ -867,7 +880,7 @@ extension CallController {
         }
         guard !call.settingsSent else { return }
         // The settings reply releases the worker's opening cue. Both media paths must be ready to hear it.
-        guard call.micPublished, call.cuePlayback != nil || call.reportedConnected else {
+        guard call.readiness.micPublished, call.cuePlayback != nil || call.reportedConnected else {
             return trace(.rpc, "settings wait for setup", call.id, level: .debug)
         }
         self.call?.settingsSent = true

@@ -128,6 +128,20 @@ private final class FixtureBundle {}
         }
     }
 
+    func testListeningWaitsForCueAndPublishedMicInEitherOrder() {
+        var earlyCue = CallController.CallReadiness()
+        earlyCue.cue = .listeningCue
+        XCTAssertNil(earlyCue.playableCue)
+        earlyCue.micPublished = true
+        XCTAssertEqual(earlyCue.playableCue, .listeningCue)
+
+        var earlyMic = CallController.CallReadiness()
+        earlyMic.micPublished = true
+        XCTAssertNil(earlyMic.playableCue)
+        earlyMic.cue = .listeningCue
+        XCTAssertEqual(earlyMic.playableCue, .listeningCue)
+    }
+
     func testJoiningBecomesListeningAndSystemJoinedOnlyDuringTheListeningCue() throws {
         let date = Date(timeIntervalSince1970: 10)
         let joining = CallController.ConnectionMilestone.joining.transition(at: date)
