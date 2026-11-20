@@ -64,7 +64,7 @@ See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
      `DEVELOPMENT_TEAM`. Without it the bundle ID is `com.example.HeyDan` and there is no team.
    - Copy [.env.local.example](.env.local.example) to `.env.local`. Set `HEYDAN_CALL_AGENT` and `HEYDAN_CALL_PAIR_CMD` for test calls.
      The command prints a fresh one-time pairing link restricted to that one test agent. Each call run unpairs its own device.
-     Set `NANOCLAW_SSH` and `NANOCLAW_DIR` for server logs, and `ASC_ENV_CMD` and `ASC_APP_ID` for TestFlight.
+     Set `NANOCLAW_SSH` and `NANOCLAW_DIR` for server logs, and `ASC_ENV_CMD` and `ASC_APP_ID` for TestFlight. Set `ASC_APP_ID_BETA` for the separate beta record.
    - `local.just` (optional): your own recipes, imported by the [justfile](justfile).
 2. `just gen` generates `HeyDan.xcodeproj` from [project.yml](project.yml).
 3. Install: `just device` signs, installs and launches the app on the connected iPhone; or ship it through
@@ -104,7 +104,8 @@ call there.
 | `just screens` | Captures the fixture screens in that Simulator into `.local/screens/<commit>/`; resets its keychain |
 | `just device` | Signs, installs and launches on the connected iPhone |
 | `just logs [since]` | The Simulator's app and LiveKit log for the last `since` (default `15m`) |
-| `just testflight [dry]` | Archives, signs, uploads and waits for processing; `dry` validates without uploading |
+| `just testflight [dry]` | Uploads the normal app from `main`; `dry` validates without uploading |
+| `just testflight-beta [dry]` | Builds Hey Dan (beta) from the current checkout and uses its own TestFlight record |
 
 `just --list` shows the rest (`gen`, `sim-call`, `device-call`, `device-logs`, `server-logs`, `lane-ready`), and
 [AGENTS.md](AGENTS.md) has the traps and what the stack checks need. CI: [ci.yml](.github/workflows/ci.yml) runs the
@@ -134,6 +135,47 @@ One-time setup:
    your `HEYDAN_BUNDLE_ID`, any SKU. Put its Apple ID (App Information) in `.env.local` as `ASC_APP_ID`.
 4. After the first upload: TestFlight > Internal Testing > + to add a group with yourself, add the build, then install
    it from the TestFlight app.
+
+### Install Hey Dan (beta) alongside Hey Dan
+
+The beta recipe builds the same Release scheme with [Beta.xcconfig](Beta.xcconfig). The installed app has a marked
+icon, its own pairing keys, chats, badge and notification settings. Pair the beta independently. In Shortcuts or
+Control Center choose the beta entry for the Action Button. Siri uses each app's display name. CallKit uses the app
+name and both builds disable Recents.
+
+1. Keep the normal bundle ID and team in `Local.xcconfig`. With the team signed into Xcode, run `just gen`, then
+   `xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -configuration Release -xcconfig Beta.xcconfig -destination 'generic/platform=iOS' -allowProvisioningUpdates build`
+   to provision the beta with automatic signing. If identifiers or group permissions need an Account Holder or Admin,
+   use [Certificates, Identifiers & Profiles](https://developer.apple.com/account) to register or check the explicit App IDs `<base>.beta`, `<base>.beta.NotificationService` and `<base>.beta.Activity`.
+   Enable Push Notifications on the beta app and Communication Notifications on the beta app and notification service.
+   [Register the App Group](https://developer.apple.com/help/account/identifiers/register-an-app-group) `group.<base>.beta` and assign it to the beta app and notification service. Xcode automatic
+   signing uses these IDs and creates or updates the profiles during archive and export.
+2. In [App Store Connect](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app), select **Apps > + > New App**. Choose iOS, the beta
+   bundle ID, a distinct available name, a primary language and a new SKU. Save its numeric **App Information > Apple ID**
+   as `ASC_APP_ID_BETA` in the gitignored `.env.local`. Both records can use the same team API key.
+3. From the branch you want to test, run `just testflight-beta`. The version check and processing wait use the beta
+   record. To intentionally repeat its marketing version, use `just testflight-beta upload same-version`.
+   `just testflight-beta dry` exports and validates against the beta record and can reserve a build number.
+4. In that app's **TestFlight > Internal Testing**, create a group, add your App Store Connect user and assign the
+   processed beta build to the group. Accept the invitation on the iPhone and install **Hey Dan (beta)** from
+   [TestFlight](https://developer.apple.com/testflight/). The normal app stays installed.
+
+**Pairing and call links.** Both apps accept a pasted `https://<host>/app/pair#<code>`. To open the beta directly,
+the host's `/pair` response or landing page can offer **Open in Hey Dan (beta)**. Copy the existing pairing URL,
+replace only its scheme with `heydan-beta`, and preserve the host, optional port, path and encoded fragment.
+The beta shows the host and waits for confirmation before redeeming the code. Keep the normal HTTPS link available
+for copy and paste. Neither app claims universal links or call URLs. The Simulator-only `facetime` test shim belongs
+to the normal app. Reply, Mark as Read, notification taps and the Live Activity end button target the issuing app.
+
+For universal links in a future build, add an `applinks:<host>` Associated Domains entitlement to the beta app and
+serve `/.well-known/apple-app-site-association` on that HTTPS host. Give `<app-id-prefix>.<base>.beta` a distinct
+path such as `/beta/app/pair` in `applinks.details[].components`. The host must emit that path and the beta must handle
+the browsing activity and map it back to `/app/pair` before confirmation. Keep the normal app off that beta path.
+
+**Push topics.** Both apps register their bundle ID as `topic` alongside the token and environment. On a host with
+per-device topic support, keep `APP_APNS_TOPIC=<base>` and include `<base>.beta` in comma-separated `APP_APNS_TOPICS`.
+The host uses the default for absent or unlisted topics and derives any Live Activity or VoIP topic from the selected
+device topic. Allow the beta topic before testing beta notifications.
 
 A TestFlight build registers for production pushes, so the host needs its production APNs key. The app declares no
 non-exempt encryption, so builds skip the export compliance question.
