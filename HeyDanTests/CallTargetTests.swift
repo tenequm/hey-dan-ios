@@ -35,6 +35,13 @@ private final class FixtureBundle {}
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: nil))
     }
 
+    func testRedialAlertsOnlyForFailuresBeforeAThreadCallStarts() {
+        XCTAssertNotNil(IntentCall.unavailableAgent.redialAlert)
+        let failed = IntentCall.notStarted(.failure(.noAgent), false)
+        XCTAssertNil(failed.redialAlert)
+        XCTAssertEqual(failed.message, CallFailure.noAgent.message)
+    }
+
     func testRecentsUsesOnlyOneConcreteAgentHandle() {
         let host = URL(string: "https://example.invalid")!
         let target = PairedCallTarget(host: host, deviceId: "fixture", conversation: conversation)
