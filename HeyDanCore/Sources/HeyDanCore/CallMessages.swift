@@ -76,8 +76,7 @@ public extension VoiceProtocol {
     /// A `Names.commandsAttribute` value this app knows; any other value (or none) is a vocabulary it does not, so it offers
     /// no commands. "2" and "3" are the same words (the ones the worker announces); "3" was bumped so an already-open
     /// older browser page stops quoting "send it". This is the vocabulary's version, not the protocol's.
-    static let listenUntilOverVersion = "4"
-    static let commandsVersions: Set<String> = ["2", "3", listenUntilOverVersion]
+    static let commandsVersions: Set<String> = ["2", "3"]
 
     static let rpcTimeout: TimeInterval = 10
     /// LiveKit's own wait for an RPC's ack (`maxRoundTripLatency`): an RPC whose ack comes later fails, though the
@@ -367,15 +366,15 @@ public struct SettingsRequest: Encodable, Sendable, Equatable {
     public let pauseSends: Bool
     public let cues: Bool
     public let typing: Bool
-    public let listenUntilOver: Bool?
+    public let listenUntilOver: Bool
 
-    public init(gen: Int, picks: SettingsPicks, cues: Bool = true, listenUntilOver: Bool? = nil) {
-        self.listenUntilOver = listenUntilOver
+    public init(gen: Int, picks: SettingsPicks, cues: Bool = true) {
         self.gen = gen
         wake = picks.wake
         pauseSends = picks.pauseSends
         self.cues = cues
         typing = picks.typing
+        listenUntilOver = picks.listenUntilOver ?? false
     }
 
     public var payload: String { rpcPayload(self) }

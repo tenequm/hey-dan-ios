@@ -77,9 +77,11 @@ enum FixtureContent {
                          VoiceLineCatalogVoice(id: "roger", name: "Roger", language: "en", gender: "male", description: "Calm, low",
                                                preview: ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_SAMPLE"].map { URL(fileURLWithPath: $0) }),
                          VoiceLineCatalogVoice(id: "sarah", name: "Sarah", language: "en", gender: "female", description: "Bright, quick")]
-    static func settingsReply(_ request: SettingsRequest, currentListenUntilOver: Bool) -> WorkerReply? {
-        let listen = request.listenUntilOver ?? currentListenUntilOver
-        return WorkerReply(payload: #"{"gen":\#(request.gen),"ok":true,"seq":0,"listenUntilOver":\#(listen),"overWords":["прийом","зулу","овер"]}"#)
+    static func settingsReply(_ request: SettingsRequest) -> WorkerReply? {
+        if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LEGACY_SETTINGS"] == "1" {
+            return WorkerReply(payload: #"{"gen":\#(request.gen),"ok":true,"seq":0}"#)
+        }
+        return WorkerReply(payload: #"{"gen":\#(request.gen),"ok":true,"seq":0,"listenUntilOver":\#(request.listenUntilOver),"overWords":["прийом","зулу","овер"]}"#)
     }
 
     static let voice: TTSView = {

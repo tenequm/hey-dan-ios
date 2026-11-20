@@ -245,7 +245,7 @@ final class CallController: NSObject {
         #if DEBUG && targetEnvironment(simulator)
         if fixtureCall {
             call?.micPublished = true
-            if let call { refreshCommands(version: VoiceProtocol.listenUntilOverVersion, for: call) }
+            if let call { refreshCommands(version: "3", for: call) }
             let view = FixtureContent.voice
             liveVoice = CallVoiceState(active: view.effective, activeDetails: view.details?.effective)
             if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"] == "call-stream",
@@ -367,7 +367,8 @@ final class CallController: NSObject {
             keepPicks(picks)
             return true
         }
-        return await requestSettings(picks, listenUntilOver: listenUntilOver, for: id)
+        if let listenUntilOver { picks.listenUntilOver = listenUntilOver }
+        return await requestSettings(picks, for: id)
     }
 
     /// Brings call `id`'s microphone to `isMuted`, one pass at a time, rechecking after every await. Once setup
@@ -943,25 +944,24 @@ extension CallController {
         self.call?.settingsSent = true
         let id = call.id
         trace(.rpc, "settings send once", id, level: .info)
-        let listen = version == VoiceProtocol.listenUntilOverVersion ? (settingsPicks.listenUntilOver ?? false) : nil
-        Task { await requestSettings(settingsPicks, listenUntilOver: listen, for: id) }
+        Task { await requestSettings(settingsPicks, for: id) }
     }
 
     /// Asks the worker to run `picks`, again when it does not answer (`VoiceProtocol.settingsAttempts` sends in all).
     /// Only the newest request's outcome counts: taken, the picks are kept for the next call; refused, `commands` goes
     /// back to what the worker runs; never acknowledged, the worker may have taken it anyway, so its state is read again.
     @discardableResult
-    private func requestSettings(_ picks: SettingsPicks, listenUntilOver: Bool?, for id: UUID) async -> Bool {
+    private func requestSettings(_ picks: SettingsPicks, for id: UUID) async -> Bool {
         guard call?.id == id else { return false }
         call?.settingsRequest += 1
         let request = call?.settingsRequest
         commands?.wake = picks.wake
         commands?.pauseSends = picks.pauseSends
         commands?.typing = picks.typing
-        var reply = await settingsRPC(picks, listenUntilOver: listenUntilOver, for: id)
+        var reply = await settingsRPC(picks, for: id)
         // A newer request supersedes this one: retrying would put older picks back on the worker after it took them.
         for _ in 1 ..< VoiceProtocol.settingsAttempts where reply == nil && call?.id == id && call?.settingsRequest == request {
-            reply = await settingsRPC(picks, listenUntilOver: listenUntilOver, for: id)
+            reply = await settingsRPC(picks, for: id)
         }
         let taken = reply?.ok == true
         guard call?.id == id, call?.settingsRequest == request else { return taken }
@@ -969,7 +969,7 @@ extension CallController {
             var picks = picks
             commands?.listenUntilOver = reply.listenUntilOver
             commands?.overWords = reply.overWords ?? []
-            if let echoed = reply.listenUntilOver { picks.listenUntilOver = echoed }
+            picks.listenUntilOver = reply.listenUntilOver ?? settingsPicks.listenUntilOver
             call?.takenPicks = picks
             commands?.cues = true
             commands?.typing = picks.typing
@@ -988,12 +988,12 @@ extension CallController {
     }
 
     /// The worker's answer to one settings request; nil when it did not answer or the call is over.
-    private func settingsRPC(_ picks: SettingsPicks, listenUntilOver: Bool?, for id: UUID) async -> WorkerReply? {
+    private func settingsRPC(_ picks: SettingsPicks, for id: UUID) async -> WorkerReply? {
         guard let gen = nextRPCGen(for: id) else { return nil }
-        let request = SettingsRequest(gen: gen, picks: picks, listenUntilOver: listenUntilOver)
+        let request = SettingsRequest(gen: gen, picks: picks)
         #if DEBUG && targetEnvironment(simulator)
         if fixtureCall {
-            return FixtureContent.settingsReply(request, currentListenUntilOver: commands?.listenUntilOver ?? false)
+            return FixtureContent.settingsReply(request)
         }
         #endif
         guard let method = call?.names?.settingsMethod else { return nil }
