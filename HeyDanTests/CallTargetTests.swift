@@ -1,3 +1,4 @@
+import AVFAudio
 import CryptoKit
 import Foundation
 import HeyDanCore
@@ -107,10 +108,24 @@ private final class FixtureBundle {}
         }
     }
 
+    func testCallSetupLabelsAndBundledTone() throws {
+        XCTAssertEqual(CallController.Phase.connecting.callBarLabel, "Connecting...")
+        XCTAssertEqual(CallController.Phase.joining.callBarLabel, "Joining...")
+        XCTAssertEqual(CallController.Phase.live(.listening).callBarLabel, "Listening")
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "Connecting", withExtension: "wav"))
+        let tone = try AVAudioPlayer(contentsOf: url)
+        XCTAssertGreaterThan(tone.duration, 0)
+        XCTAssertLessThan(tone.duration, 0.25)
+    }
+
     func testCallEndingFeedbackUsesConnectionHistory() {
         let remote = CallController.Ending(cause: .remote, message: "Call ended.")
         let live = CallController.Phase.live(.speaking)
         XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: live, liveSince: .now), .success)
+        XCTAssertTrue(CallController.Phase.joining.isStarting)
+        XCTAssertFalse(live.isStarting)
+        XCTAssertNil(HeyDanApp.callFeedback(from: .connecting, to: .joining, liveSince: nil))
+        XCTAssertEqual(HeyDanApp.callFeedback(from: .joining, to: live, liveSince: .now), .success)
         XCTAssertEqual(HeyDanApp.callFeedback(from: live, to: .ended(remote), liveSince: .now), .impact(weight: .light))
         XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: .ended(.byCaller), liveSince: nil), .impact(weight: .light))
         XCTAssertEqual(HeyDanApp.callFeedback(from: .connecting, to: .ended(.failure(.microphoneDenied)), liveSince: nil), .error)

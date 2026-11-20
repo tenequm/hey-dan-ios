@@ -82,6 +82,7 @@ struct HeyDanApp: App {
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     Self.removeLegacyLinks()
                     ChatController.shared.setActive(phase != .background)
+                    if phase == .active { CallController.shared.prepareStartImpact() }
                     if phase == .background { wasBackgrounded = true }
                     if phase == .active, wasBackgrounded {
                         wasBackgrounded = false
@@ -104,7 +105,7 @@ struct HeyDanApp: App {
 
     static func callFeedback(from old: CallController.Phase, to new: CallController.Phase, liveSince: Date?) -> SensoryFeedback? {
         switch new {
-        case .live where old == .connecting: .success
+        case .live where old.isStarting: .success
         case .ended(let ending): CallController.isFailure(ending, liveSince: liveSince) ? .error : .impact(weight: .light)
         default: nil
         }
@@ -618,13 +619,14 @@ enum IntentCall {
     static func run(agentID: UUID?, inBackground: Bool) async throws {
         let began = ContinuousClock.now
         let controller = CallController.shared
+        let acknowledged = controller.acknowledgeStart()
         try await readyPairings()
         if controller.isCallActive {
             CallLog.log(.intent, "a call is on already: not started")
             return
         }
         let target = try await pairedTarget(id: agentID)
-        guard let id = await controller.start(target: target) else { return }
+        guard let id = await controller.start(target: target, acknowledged: acknowledged) else { return }
         let deadline = ContinuousClock.now + CallController.setupBound
         while controller.isConnecting(id), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(250))
