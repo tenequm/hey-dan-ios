@@ -214,7 +214,9 @@ import XCTest
         XCTAssertTrue(app.buttons["chat.conversation.conv_taylor01"].waitForExistence(timeout: 10))
         let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
         let definitions = IntentDefinitions(bundleIdentifier: bundle)
-        let agents = try await definitions.entities["VoiceLineEntity"].suggestedEntities()
+        let agents = try await withRegisteredIntentMetadata {
+            try await definitions.entities["VoiceLineEntity"].suggestedEntities()
+        }
         let intent = definitions.intents["CallLineIntent"].makeIntent(destination: try XCTUnwrap(agents.first),
             audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))
         XCUIDevice.shared.press(.home)
