@@ -20,6 +20,7 @@ struct ThreadCallBar: View {
     @Environment(\.theme) private var theme
     let target: CallTarget
     private var call: CallController { .shared }
+    @State private var expiredCaptionDeadline: Date?
     @State private var presentsCallOptions = false
     @State private var optionsHeight: CGFloat = 240
     @State private var optionsVoice: VoiceSettingsModel?
@@ -41,6 +42,42 @@ struct ThreadCallBar: View {
     }
 
     var body: some View {
+        VStack(spacing: theme.space.s1) {
+            if case let .live(activity) = call.phase, activity != .speaking, !call.isMuted,
+               let caption = call.transcript.latestCallerCaption,
+               caption.captionDeadline.map({ $0 > .now && $0 != expiredCaptionDeadline }) ?? true {
+                Text(verbatim: caption.text)
+                    .textRole(theme.type.label)
+                    .foregroundStyle(caption.isFinal ? theme.color.textPrimary : theme.color.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.head)
+                    .accessibilityIdentifier("call.callerCaption")
+                    .task(id: caption.captionDeadline) {
+                        guard let deadline = caption.captionDeadline else { return }
+                        do { try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow))) }
+                        catch { return }
+                        expiredCaptionDeadline = deadline
+                    }
+            }
+            controls
+        }
+        .padding(theme.space.s1_5)
+        .background(theme.color.composer, in: RoundedRectangle(cornerRadius: theme.radius.composer))
+        .overlay { RoundedRectangle(cornerRadius: theme.radius.composer).strokeBorder(theme.color.composerBorder).allowsHitTesting(false) }
+        .shadow(color: theme.color.shadow, radius: theme.space.s3_5, y: theme.space.s1_5)
+        .padding(.horizontal, theme.space.s3)
+        .padding(.bottom, theme.space.s1_5)
+        .onAppear { call.trace(.call, "thread call bar shown") }
+        .sheet(isPresented: $presentsCallOptions, onDismiss: {
+            voiceTarget = pendingVoice
+            pendingVoice = nil
+        }) { callOptions }
+        .sheet(item: $voiceTarget) { target in
+            VoicePickerSheet(model: target.model, agentName: displayName, callID: target.callID)
+        }
+    }
+
+    private var controls: some View {
         HStack(spacing: theme.space.s1) {
             GlassIconButton(title: call.isMuted ? "Unmute" : "Mute", systemImage: call.isMuted ? "mic.slash" : "mic") {
                 call.setMuted(!call.isMuted)
@@ -62,20 +99,6 @@ struct ThreadCallBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("End call")
             .accessibilityIdentifier(AXID.keysCall)
-        }
-        .padding(theme.space.s1_5)
-        .background(theme.color.composer, in: RoundedRectangle(cornerRadius: theme.radius.composer))
-        .overlay { RoundedRectangle(cornerRadius: theme.radius.composer).strokeBorder(theme.color.composerBorder).allowsHitTesting(false) }
-        .shadow(color: theme.color.shadow, radius: theme.space.s3_5, y: theme.space.s1_5)
-        .padding(.horizontal, theme.space.s3)
-        .padding(.bottom, theme.space.s1_5)
-        .onAppear { call.trace(.call, "thread call bar shown") }
-        .sheet(isPresented: $presentsCallOptions, onDismiss: {
-            voiceTarget = pendingVoice
-            pendingVoice = nil
-        }) { callOptions }
-        .sheet(item: $voiceTarget) { target in
-            VoicePickerSheet(model: target.model, agentName: displayName, callID: target.callID)
         }
     }
 

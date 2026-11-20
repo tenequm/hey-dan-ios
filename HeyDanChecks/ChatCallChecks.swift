@@ -86,10 +86,11 @@ import XCTest
         call.tap()
         let caption = app.descendants(matching: .any)["chat.call.caption"].firstMatch
         let reply = app.descendants(matching: .any)["chat.message.msg_stream"].firstMatch
-        let bar = app.buttons["controls.mute"]
+        let callerCaption = app.staticTexts["call.callerCaption"]
         XCTAssertTrue(caption.waitForExistence(timeout: 5))
-        let gap = bar.frame.minY - caption.frame.maxY
-        XCTAssertGreaterThan(gap, 0)
+        XCTAssertEqual(callerCaption.label, "Which files changed")
+        let gap = feed.frame.maxY - caption.frame.maxY
+        XCTAssertGreaterThanOrEqual(gap, 0)
         XCTAssertLessThan(gap, 40)
         let captionHeight = caption.frame.height
         let left = reply.frame.minX
@@ -103,7 +104,13 @@ import XCTest
             XCTAssertGreaterThan(reply.frame.height, replyHeight)
             replyHeight = reply.frame.height
             XCTAssertGreaterThan(caption.frame.height, captionHeight)
-            XCTAssertEqual(bar.frame.minY - caption.frame.maxY, gap, accuracy: 0.5)
+            XCTAssertEqual(feed.frame.maxY - caption.frame.maxY, gap, accuracy: 0.5)
+            if state == "Speaking" {
+                XCTAssertTrue(caption.label.hasSuffix("One more thing"))
+                XCTAssertFalse(callerCaption.exists)
+            } else {
+                XCTAssertTrue(callerCaption.waitForNonExistence(timeout: 5))
+            }
             XCTAssertFalse(app.buttons["chat.scrollToEnd"].exists)
             shot("call-follow-" + capture)
         }
@@ -145,6 +152,9 @@ import XCTest
         XCTAssertTrue(feed.descendants(matching: .any)["chat.call.caption"].firstMatch.exists)
         XCTAssertFalse(call.exists)
         XCTAssertFalse(composer.exists)
+        let callerCaption = app.staticTexts["call.callerCaption"]
+        XCTAssertEqual(callerCaption.label, feed.descendants(matching: .any)["chat.call.caption"].firstMatch.label)
+        XCTAssertEqual(callerCaption.label, "Check the backup.")
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["Pair a host"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
@@ -152,6 +162,7 @@ import XCTest
         shot("thread-call-mode")
         app.buttons["controls.mute"].tap()
         XCTAssertEqual(app.buttons["controls.mute"].label, "Unmute")
+        XCTAssertFalse(callerCaption.exists)
         app.buttons["controls.options"].tap()
         XCTAssertTrue(app.switches["options.typing"].firstMatch.waitForExistence(timeout: 5))
         shot("thread-call-options")

@@ -38,6 +38,33 @@ struct TranscriptTests {
         #expect(transcript.lines[0].speaker == .caller)
     }
 
+    @Test func callBarUsesTheNewestCallerSegmentAndTimesFromItsFinal() {
+        var transcript = Transcript()
+        spoke(&transcript, "agent", "Ready")
+        transcript.apply(status(1, .sent, "Turn without a segment"), at: at(0))
+        #expect(transcript.latestCallerCaption == nil)
+
+        said(&transcript, "old", "First", final: false)
+        said(&transcript, "new", "Check", final: false, at: 1)
+        said(&transcript, "new", "Check again", final: false, at: 2)
+        said(&transcript, "old", "First.", at: 3)
+        #expect(transcript.latestCallerCaption?.text == "Check again")
+        #expect(transcript.latestCallerCaption?.captionDeadline == nil)
+
+        said(&transcript, "new", "Check again", at: 4)
+        said(&transcript, "new", "Check", final: false, at: 5)
+        #expect(transcript.latestCallerCaption?.isFinal == true)
+        #expect(transcript.latestCallerCaption?.captionDeadline == at(6))
+
+        said(&transcript, "next", "Next", final: false, at: 7)
+        transcript.settleStaleInterims(at: at(12))
+        #expect(transcript.latestCallerCaption?.captionDeadline == at(14))
+        said(&transcript, "next", "Next", at: 13)
+        said(&transcript, "next", "stale", final: false, at: 14)
+        #expect(transcript.latestCallerCaption?.text == "Next")
+        #expect(transcript.latestCallerCaption?.captionDeadline == at(15))
+    }
+
     @Test func aLateInterimNeverUndoesAFinal() {
         var transcript = Transcript()
         said(&transcript, "SG_turn_1", "Book a table")

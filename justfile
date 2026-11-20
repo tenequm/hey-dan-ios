@@ -150,7 +150,7 @@ _testflight variant mode override="":
         CURRENT_PROJECT_VERSION="$build_number" archive -quiet
     # LiveKit's binary xcframeworks ship stripped and without dSYMs (none upstream either), so the upload warns.
     # A dsymutil dSYM carries only their UUID and exported symbol table, no DWARF: it silences the warning, nothing more.
-    for fw in LiveKitWebRTC RustLiveKitUniFFI; do
+    for fw in LiveKitWebRTC RustLiveKitFFI; do
         dsym="$archive/dSYMs/$fw.framework.dSYM"
         [ -e "$dsym" ] || xcrun dsymutil "$archive/Products/Applications/HeyDan.app/Frameworks/$fw.framework/$fw" -o "$dsym" 2>/dev/null
     done

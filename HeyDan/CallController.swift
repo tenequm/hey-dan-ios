@@ -257,8 +257,8 @@ final class CallController: NSObject {
                 phase = .live(.listening)
                 Task { try? await streamFixtureCall(id, service: service) }
             } else {
-                phase = .live(.speaking)
-                editTranscript { $0.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now) }
+                phase = .live(.listening)
+                apply(.caption(segment: "sample", text: "Check the backup.", isFinal: false, fromCaller: true, command: nil), for: id)
             }
             return id
         }
@@ -317,6 +317,7 @@ final class CallController: NSObject {
         try await service.extendStreamedReply("All three matched. The archive contains the updated documents and the verification report.")
         guard call?.id == id else { return }
         phase = .live(.speaking)
+        apply(.caption(segment: "follow-up", text: "One more thing", isFinal: false, fromCaller: true, command: nil), for: id)
     }
 
     private func waitForFixtureStep(_ step: String, callID: UUID) async throws {
