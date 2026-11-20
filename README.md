@@ -88,9 +88,9 @@ See [AGENTS.md](AGENTS.md#how-the-app-talks-to-the-host) for the protocol.
 3. Call type: Audio, not Ask Each Time.
 4. iOS Settings > Action Button > Shortcut > that shortcut.
 
-A press then calls with the phone locked and Hey Dan out of sight: Call agent uses iOS 27's start-call intent schema,
-which requests a call in the background. Keep both fields saved in the shortcut. If iOS still refuses the call, the shortcut says so.
-Then use Start conversation
+Call agent uses iOS 27's start-call intent schema to request a call with the phone locked. Keep both fields saved
+in the shortcut. If iOS refuses the background start and allows the shortcut to open Hey Dan, it retries the same
+destination in the foreground. You can also use Start conversation
 (Shortcuts > Hey Dan > Start conversation, or Siri: "Talk to Hey Dan"): it opens Hey Dan after Face ID and starts the
 call there.
 

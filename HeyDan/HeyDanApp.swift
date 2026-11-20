@@ -598,7 +598,7 @@ struct StartConversationIntent: AppIntent {
 /// which it does not for a plain intent. The shortcut saves the agent and the call type (Audio), not Ask Each Time.
 @AppIntent(schema: .phone.startCall)
 struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
-    static let supportedModes: IntentModes = [.background]
+    static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
     var destination: CallDestination
@@ -612,8 +612,20 @@ struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
         let mode = systemContext.currentMode == .background ? "background" : "foreground"
         CallLog.log(.intent, "intent call-agent start mode=\(mode) unlocked=\(UIApplication.shared.isProtectedDataAvailable)")
         let agentID: UUID? = if case let .line(agent) = destination { agent.id } else { nil }
-        try await IntentCall.run(agentID: agentID, inBackground: true)
+        try await startPairedCall(agentID: agentID)
         return .result()
+    }
+}
+
+extension AppIntent {
+    @MainActor func startPairedCall(agentID: UUID?) async throws {
+        do {
+            try await IntentCall.run(agentID: agentID, inBackground: systemContext.currentMode == .background)
+        } catch let error as IntentCall.CallNotStarted where error.message == IntentCall.backgroundRefused {
+            guard systemContext.currentMode.canContinueInForeground else { throw error }
+            try await continueInForeground(alwaysConfirm: false)
+            try await IntentCall.run(agentID: agentID, inBackground: false)
+        }
     }
 }
 

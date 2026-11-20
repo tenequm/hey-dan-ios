@@ -47,14 +47,7 @@ struct CallDefaultAgentIntent: AudioRecordingIntent, LiveActivityIntent {
         #if !ACTIVITY_EXTENSION
         let background = systemContext.currentMode == .background
         CallLog.log(.intent, "control start background=\(background)")
-        do {
-            try await IntentCall.run(agentID: nil, inBackground: background)
-        } catch let error as IntentCall.CallNotStarted where error.message == IntentCall.backgroundRefused {
-            guard systemContext.currentMode.canContinueInForeground else { throw error }
-            CallLog.log(.intent, "control retry foreground")
-            try await continueInForeground(alwaysConfirm: false)
-            try await IntentCall.run(agentID: nil, inBackground: false)
-        }
+        try await startPairedCall(agentID: nil)
         #endif
         return .result()
     }
