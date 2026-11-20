@@ -237,7 +237,9 @@ import XCTest
         let definitions = IntentDefinitions(bundleIdentifier: bundle)
         let entities = definitions.entities["VoiceLineEntity"]
         for id in [UUID(uuidString: "00000000-0000-0000-0000-000000000000")!, UUID()] {
-            let matches = try await entities.entities(identifiers: [id])
+            let matches = try await withRegisteredIntentMetadata {
+                try await entities.entities(identifiers: [id])
+            }
             let destination = try XCTUnwrap(matches.first)
             let intent = definitions.intents["CallLineIntent"].makeIntent(destination: destination,
                 audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))

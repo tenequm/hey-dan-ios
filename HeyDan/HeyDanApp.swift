@@ -92,7 +92,7 @@ struct HeyDanApp: App {
                         do {
                             guard let id = IntentCall.redialAgent(in: intent) else { throw IntentCall.unavailableAgent }
                             try await IntentCall.run(agentID: id, inBackground: false, exactAgent: true)
-                        } catch let error as IntentCall.CallNotStarted { redialError = error.message }
+                        } catch let error as IntentCall.CallNotStarted { redialError = error.redialAlert }
                         catch { redialError = error.localizedDescription }
                     }
                 }
@@ -675,6 +675,8 @@ enum IntentCall {
 
     struct CallNotStarted: Error, CustomLocalizedStringResourceConvertible {
         let message: String
+        var shownInThread = false
+        var redialAlert: String? { shownInThread ? nil : message }
         var localizedStringResource: LocalizedStringResource { "\(message)" }
     }
 
@@ -790,9 +792,9 @@ enum IntentCall {
     }
 
 
-    private static func notStarted(_ ending: CallController.Ending, _ inBackground: Bool) -> CallNotStarted {
-        if inBackground, case .callKitRefused = ending.failure { return CallNotStarted(message: backgroundRefused) }
-        return CallNotStarted(message: ending.message)
+    static func notStarted(_ ending: CallController.Ending, _ inBackground: Bool) -> CallNotStarted {
+        if inBackground, case .callKitRefused = ending.failure { return CallNotStarted(message: backgroundRefused, shownInThread: true) }
+        return CallNotStarted(message: ending.message, shownInThread: true)
     }
 }
 
