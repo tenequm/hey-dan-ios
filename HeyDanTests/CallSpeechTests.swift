@@ -19,17 +19,34 @@ import XCTest
         XCTAssertTrue(pairings.callEntries.isEmpty)
     }
 
-    func testUnsupportedCallLanguageDoesNotTryPhoneLanguage() async {
+    func testSpeechUsesFirstSupportedPreference() async {
         var candidates: [Locale] = []
-        let resolved = await CallSpeech.supportedLocale(language: "uk") { candidate in
+        let ukrainian = Locale(identifier: "uk-UA")
+        let resolved = await CallSpeech.supportedLocale(preferredLanguages: ["uk", "en"]) { candidate in
             candidates.append(candidate)
+            return candidate == Locale(identifier: "uk") ? ukrainian : candidate
+        }
+        XCTAssertEqual(resolved, ukrainian)
+        XCTAssertEqual(candidates, [Locale(identifier: "uk")])
+    }
+
+    func testSpeechSkipsUnsupportedPreferences() async {
+        let ukrainian = Locale(identifier: "uk-UA")
+        let resolved = await CallSpeech.supportedLocale(preferredLanguages: ["ga", "cy", "uk-UA", "en"]) {
+            $0 == ukrainian ? $0 : nil
+        }
+        XCTAssertEqual(resolved, ukrainian)
+    }
+
+    func testSpeechWithoutSupportedPreferenceReturnsNil() async {
+        let preferences = ["ga", "cy"]
+        var candidates: [Locale] = []
+        let resolved = await CallSpeech.supportedLocale(preferredLanguages: preferences) {
+            candidates.append($0)
             return nil
         }
         XCTAssertNil(resolved)
-        XCTAssertEqual(candidates, [Locale(identifier: "uk")])
-
-        let phone = await CallSpeech.supportedLocale(language: nil) { $0 }
-        XCTAssertEqual(phone, Locale.preferredLanguages.first.map(Locale.init(identifier:)) ?? .current)
+        XCTAssertEqual(candidates, preferences.map(Locale.init(identifier:)))
     }
 
     func testOnlyNumericRepresentableSpeechTimesBecomeMilliseconds() {

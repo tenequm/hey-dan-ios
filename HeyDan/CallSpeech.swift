@@ -54,18 +54,18 @@ final class CallSpeech {
     func preheat() {
         guard SpeechTranscriber.isAvailable, selection == nil, warm == nil, !Pairings.shared.callEntries.isEmpty else { return }
         Task {
-            guard let locale = await Self.supportedLocale(language: nil), selection == nil,
+            guard let locale = await Self.supportedLocale(), selection == nil,
                   warm == nil, !Pairings.shared.callEntries.isEmpty else { return }
             _ = prepare(locale: locale)
         }
     }
 
-    static func supportedLocale(language: String?,
+    static func supportedLocale(preferredLanguages: [String] = Locale.preferredLanguages,
                                 equivalent: (Locale) async -> Locale? = SpeechTranscriber.supportedLocale(equivalentTo:)) async -> Locale? {
-        if let language { return await equivalent(Locale(identifier: language)) }
-        if let preferred = Locale.preferredLanguages.first,
-           let locale = await equivalent(Locale(identifier: preferred)) { return locale }
-        return await equivalent(.current)
+        for language in preferredLanguages {
+            if let locale = await equivalent(Locale(identifier: language)) { return locale }
+        }
+        return nil
     }
 
     private func prepare(locale: Locale) -> Task<PreparedCallSpeech?, Never> {
@@ -83,23 +83,22 @@ final class CallSpeech {
 
     func begin(target: CallTarget) {
         guard Pairings.shared.callEntries.contains(where: { $0.host == target.paired.host && $0.deviceId == target.paired.deviceId }) else { return }
-        let service = target.voicePickerService
         selection = Task {
-            guard SpeechTranscriber.isAvailable else { return nil }
-            let language = try? await service?.voice().details?.effective?.language
-            guard !Task.isCancelled else { return nil }
-            guard let locale = await Self.supportedLocale(language: language) else {
-                if language != nil, !Task.isCancelled { CallController.shared.trace(.audio, "local speech unsupported call language") }
+            guard SpeechTranscriber.isAvailable else {
+                if !Task.isCancelled { CallController.shared.trace(.audio, "local speech unavailable") }
+                return nil
+            }
+            guard let locale = await Self.supportedLocale() else {
+                if !Task.isCancelled { CallController.shared.trace(.audio, "local speech off: no supported language") }
                 return nil
             }
             guard !Task.isCancelled else { return nil }
-            let task = prepare(locale: locale)
-            guard let prepared = await task.value, !Task.isCancelled else { return nil }
-            warm = nil
-            do {
-                try await prepared.analyzer.prepareToAnalyze(in: prepared.format)
-                return prepared
-            } catch { return nil }
+            if let prepared = await prepare(locale: locale).value, !Task.isCancelled {
+                warm = nil
+                if (try? await prepared.analyzer.prepareToAnalyze(in: prepared.format)) != nil { return prepared }
+            }
+            if !Task.isCancelled { CallController.shared.trace(.audio, "local speech unavailable") }
+            return nil
         }
     }
 
@@ -118,10 +117,7 @@ final class CallSpeech {
                     self.input = nil
                 }
             }
-            guard let prepared = await selection?.value, !Task.isCancelled else {
-                if !Task.isCancelled { CallController.shared.trace(.audio, "local speech unavailable") }
-                return
-            }
+            guard let prepared = await selection?.value, !Task.isCancelled else { return }
             analyzer = prepared.analyzer
             do {
                 try await prepared.analyzer.start(inputSequence: input.feed(format: prepared.format))
