@@ -58,7 +58,7 @@ copy of the host's `src/channels/app/app-contract.fixtures.json`; take contract 
   pending. Paired calls connect with relay-only ICE.
 - **Call protocol 6.** The signed grant names its protocol. The app ends an unsupported grant on the host before
   joining. The protocol 6 worker uses the namespace `nanoclaw.voice-mode` (`<ns>` below).
-- **In the call.** CallKit owns it (lock screen, AirPods, interruptions, routing); LiveKit carries the audio. The screen
+- **In the call.** LiveCommunicationKit owns it (lock screen, AirPods, interruptions, routing); LiveKit carries the audio. The screen
   shows connecting, listening, thinking (`<ns>.thinking`), speaking (`lk.agent.state`) and why a call ended. Captions
   (`lk.transcription` text streams) and the worker's `<ns>.turn`, `<ns>.reply` and `<ns>.review` topics fold into the
   transcript the way the browser page folds them. When the worker sets `<ns>.commands` to "2" or "3", the caller's
