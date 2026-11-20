@@ -82,7 +82,10 @@ struct HeyDanApp: App {
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     Self.removeLegacyLinks()
                     ChatController.shared.setActive(phase != .background)
-                    if phase == .active { CallController.shared.prepareStartImpact() }
+                    if phase == .active {
+                        CallController.shared.prepareStartImpact()
+                        CallController.shared.speech.preheat()
+                    }
                     if phase == .background { wasBackgrounded = true }
                     if phase == .active, wasBackgrounded {
                         wasBackgrounded = false

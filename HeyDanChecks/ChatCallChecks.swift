@@ -80,6 +80,8 @@ import XCTest
         XCTAssertTrue(feed.descendants(matching: .any)["chat.call.caption"].firstMatch.exists)
         XCTAssertFalse(call.exists)
         XCTAssertFalse(composer.exists)
+        let callerCaption = app.staticTexts["call.callerCaption"]
+        XCTAssertEqual(callerCaption.label, "Check the backup.")
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["Pair a host"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
@@ -87,6 +89,7 @@ import XCTest
         shot("thread-call-mode")
         app.buttons["controls.mute"].tap()
         XCTAssertEqual(app.buttons["controls.mute"].label, "Unmute")
+        XCTAssertFalse(callerCaption.exists)
         app.buttons["controls.options"].tap()
         XCTAssertTrue(app.switches["options.typing"].firstMatch.waitForExistence(timeout: 5))
         shot("thread-call-options")
