@@ -10,7 +10,7 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.6.0"
+    MARKETING_VERSION: "0.7.0"
     # `just testflight` overrides this with a timestamp; uploads need a fresh build number.
     CURRENT_PROJECT_VERSION: "1"
 packages:
@@ -18,8 +18,7 @@ packages:
     url: https://github.com/livekit/client-sdk-swift
     from: 2.17.0
   MarkdownView:
-    url: https://github.com/Lakr233/MarkdownView
-    exactVersion: 4.8.5
+    path: Vendor/MarkdownView
   HeyDanCore:
     path: HeyDanCore
 targets:

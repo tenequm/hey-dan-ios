@@ -238,7 +238,7 @@ struct ThreadContent: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: theme.space.s4) {
+            LazyVStack(spacing: 0) {
                 if hasMoreBefore, let firstOrder {
                     Button {
                         Task { await loadOlder(firstOrder) }
@@ -247,27 +247,34 @@ struct ThreadContent: View {
                     }
                     .accessibilityLabel("Load older messages")
                     .disabled(loadingHistory)
+                    .padding(.bottom, theme.space.s4)
                     .onAppear { Task { await loadOlder(firstOrder) } }
                 }
-                ForEach(rows, id: \.presentationID) { row in
-                    switch row {
-                    case .entity(.message(let message)):
-                        MessageRow(message: message, compacted: compactedThrough.map { message.order <= $0 } ?? false, outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
-                            .id(row.presentationID)
-                    case .entity(.question(let question)):
-                        QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
-                            .id(row.presentationID)
-                    case .outbox(let entry):
-                        OutboxRow(entry: entry, retry: retry, discard: discard)
-                            .id(row.presentationID)
-                    case .entity(.unknown): EmptyView()
+                ForEach(rows.enumerated(), id: \.element.presentationID) { index, row in
+                    let next = index + 1 < rows.count ? rows[index + 1] : nil
+                    let grouped = row.messageRole != nil && row.messageRole == next?.messageRole
+                    Group {
+                        switch row {
+                        case .entity(.message(let message)):
+                            MessageRow(message: message, showsFooter: !grouped && (next != nil || status == nil || status?.state == .idle),
+                                       compacted: compactedThrough.map { message.order <= $0 } ?? false,
+                                       outboxState: message.clientId.flatMap { outboxStates[$0] }, retry: retry, discard: discard)
+                        case .entity(.question(let question)):
+                            QuestionCard(agentName: agentName, question: question, errorMessage: question.id == errorQuestionID ? errorMessage : nil) { answer(question.id, $0) }
+                        case .outbox(let entry):
+                            OutboxRow(entry: entry, retry: retry, discard: discard)
+                        case .entity(.unknown): EmptyView()
+                        }
                     }
+                    .padding(.bottom, grouped ? theme.space.s1 : theme.space.s5)
+                    .id(row.presentationID)
                 }
                 if showsCaptions { LiveCaptionRows(rows: rows) }
                 if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()
-            .padding(theme.space.s4)
+            .padding(.horizontal, theme.space.s4)
+            .padding(.top, theme.space.s3)
         }
         .defaultScrollAnchor(.bottom)
         .scrollPosition(id: $visibleID)
@@ -305,6 +312,14 @@ struct ThreadContent: View {
 }
 
 private extension ThreadRow {
+    var messageRole: Role? {
+        switch self {
+        case .entity(.message(let message)): message.role
+        case .outbox: .user
+        default: nil
+        }
+    }
+
     var presentationID: String {
         switch self {
         case .entity(.message(let message)): return message.clientId.map { "client.\($0)" } ?? message.id

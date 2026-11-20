@@ -66,6 +66,7 @@ JEV_CALL = '''\
 19:49:10.186 N call c=3667770a cid=0e77951f +65246ms finish site=provider(_:perform:) cause=caller cx=- host=- connected=true mic=true live=true streams=[transcription=7]
 19:49:10.264 N net cid=0e77951f end reason=hangup acknowledged ms=35
 '''
+JEV_APP_CALL = JEV_CALL.replace('commands=- review=-', 'commands=3').replace('transcription=7]', 'review=1,transcription=7]')
 PLAIN_CALL = '''\
 20:30:50.960 N call c=0a2dc0d8 +0ms claim paired=true
 20:30:50.961 N audio debug feed: wav frames=139264 after=12.0s
@@ -92,9 +93,11 @@ PROOF = ('connected', 'reply', 'audio', 'clean', 'ended', 'fed')
 
 class Grade(unittest.TestCase):
     def test_jev_call_passes(self):
-        grade = harness.grade(JEV_CALL)
-        self.assertEqual(grade['mode'], 'jev')
-        self.assertTrue(all(grade[key] for key in PROOF), grade)
+        for call in (JEV_CALL, JEV_APP_CALL):
+            with self.subTest(app_settings=call == JEV_APP_CALL):
+                grade = harness.grade(call)
+                self.assertEqual(grade['mode'], 'jev')
+                self.assertTrue(all(grade[key] for key in PROOF), grade)
 
     def test_plain_call_passes(self):
         grade = harness.grade(PLAIN_CALL)
@@ -103,7 +106,11 @@ class Grade(unittest.TestCase):
 
     def test_plain_call_needs_its_reply_event(self):
         without_reply = ''.join(line for line in PLAIN_CALL.splitlines(True) if 'e2e reply' not in line)
+        self.assertEqual(harness.grade(without_reply)['mode'], 'plain')
         self.assertFalse(harness.grade(without_reply)['reply'])
+        announced = 'command words announced send=1 discard=1\n' + JEV_APP_CALL
+        self.assertEqual(harness.grade(announced)['mode'], 'plain')
+        self.assertFalse(harness.grade(announced)['reply'])
         self.assertFalse(harness.grade('agent state=listening commands=- pending\n' + without_reply)['reply'])
         self.assertFalse(harness.grade(PLAIN_CALL.replace('notice=false', 'notice=true'))['reply'])
 
@@ -118,11 +125,11 @@ class Grade(unittest.TestCase):
     def test_paired_call_requires_mode_specific_marks_and_paired_end(self):
         caller = '\ncheck thread voice=caller id=msg_a\n'
         spoken = '\ncheck thread voice=spoken id=msg_b\n'
-        for original in (JEV_CALL, PLAIN_CALL):
+        for original in (JEV_CALL, JEV_APP_CALL, PLAIN_CALL):
             paired = original.replace('end reason=hangup acknowledged', 'end reason=hangup acknowledged paired=true')
             with self.subTest(mode=harness.grade(original)['mode']):
                 self.assertTrue(harness.grade_paired(paired + caller + spoken))
-                self.assertEqual(harness.grade_paired(paired + caller), original == JEV_CALL)
+                self.assertEqual(harness.grade_paired(paired + caller), original != PLAIN_CALL)
                 self.assertFalse(harness.grade_paired(paired + spoken))
                 self.assertFalse(harness.grade_paired(original + caller + spoken))
 

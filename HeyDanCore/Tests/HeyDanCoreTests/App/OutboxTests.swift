@@ -34,6 +34,17 @@ private func pending() -> Outbox.Entry {
     #expect(try JSONDecoder().decode(Outbox.Entry.self, from: encoded) == entry)
 }
 
+@Test func olderOutboxEntriesKeepTheirUnknownSendTime() throws {
+    let entry = pending()
+    #expect(entry.createdAt != nil)
+    let encoded = try JSONEncoder().encode(entry)
+    var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    legacy.removeValue(forKey: "createdAt")
+    let decoded = try JSONDecoder().decode(Outbox.Entry.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.createdAt == nil)
+    #expect(decoded.request == entry.request)
+}
+
 @Test func retryAndContractErrors() throws {
     let errors = try coreFixtures()["errors"] as! [String: [String: Any]]
     let now = Date(timeIntervalSince1970: 100)
