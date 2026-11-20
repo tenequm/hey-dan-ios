@@ -11,13 +11,18 @@ spec.loader.exec_module(testflight)
 
 
 class VersionGuardTests(unittest.TestCase):
+    bundle = "com.example.HeyDan.beta"
+    app = {"data": {"attributes": {"bundleId": bundle}}}
+
     def check(self, current, latest, mode="upload"):
         response = {"data": []}
         if latest:
             response = {"data": [{"attributes": {"version": "123"}}],
                         "included": [{"type": "preReleaseVersions", "attributes": {"version": latest}}]}
-        with patch.object(testflight, "get", return_value=response) as get:
-            testflight.check_version(current, mode)
+        with patch.object(testflight, "APP", "beta-record"), patch.object(testflight, "get", side_effect=[self.app, response]) as get:
+            testflight.check_version(current, mode, self.bundle)
+            self.assertEqual(get.call_args_list[0].args, ("/apps/beta-record",))
+            self.assertEqual(get.call_args.kwargs["filter[app]"], "beta-record")
             self.assertEqual(get.call_args.kwargs["sort"], "-uploadedDate")
             self.assertEqual(get.call_args.kwargs["include"], "preReleaseVersion")
 
@@ -35,10 +40,16 @@ class VersionGuardTests(unittest.TestCase):
         self.check("1.3.0", "1.2.9")
         self.check("1.3.0", None)
 
+    def test_wrong_app_record_refuses_even_with_override(self):
+        with patch.object(testflight, "get", return_value=self.app) as get:
+            with self.assertRaisesRegex(SystemExit, "archived bundle ID"):
+                testflight.check_version("1.2.9", "same-version", "com.example.HeyDan")
+            get.assert_called_once()
+
     def test_missing_marketing_version_refuses_upload_even_with_override(self):
-        with patch.object(testflight, "get", return_value={"data": [{}]}):
+        with patch.object(testflight, "get", side_effect=[self.app, {"data": [{}]}]):
             with self.assertRaisesRegex(SystemExit, "marketing version"):
-                testflight.check_version("1.2.9", "same-version")
+                testflight.check_version("1.2.9", "same-version", self.bundle)
 
 
 if __name__ == "__main__":

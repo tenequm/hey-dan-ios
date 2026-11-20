@@ -19,3 +19,13 @@ import Testing
         #expect(PairingLink("http://\(host):4101/app/pair#x", allowsLocalNetworking: true) != nil)
     }
 }
+
+@Test func betaLinksOpenOnlyHTTPSPairing() throws {
+    let url = try #require(URL(string: "heydan-beta://example.com:8443/app/pair#a%2Fb"))
+    #expect(PairingLink.betaDestination(url)?.absoluteString == "https://example.com:8443/app/pair#a%2Fb")
+    for invalid in ["facetime://example.com/app/pair#x", "heydan-beta://example.com/app/call#x",
+                    "heydan-beta://example.com/app/pair", "heydan-beta://user@example.com/app/pair#x",
+                    "heydan-beta://example.com/app/pair?code=x", "heydan-beta://example.com/app/pair#%0A"] {
+        #expect(PairingLink.betaDestination(try #require(URL(string: invalid))) == nil)
+    }
+}

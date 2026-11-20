@@ -1,6 +1,86 @@
 import XCTest
 
 final class ChatThreadChecks: XCTestCase {
+    @MainActor func testScrollToEnd() {
+        let session = ScreenCaptureSession()
+        defer { session.finish() }
+        session.openThread("full")
+        let app = session.app
+        let thread = app.scrollViews["chat.thread"]
+        let end = app.buttons["chat.scrollToEnd"]
+        let lastOption = app.buttons["Don't restore"]
+        XCTAssertTrue(lastOption.isHittable)
+        XCTAssertFalse(end.exists)
+
+        thread.swipeDown(velocity: .fast)
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        XCTAssertFalse(lastOption.isHittable)
+        let working = app.descendants(matching: .any)["chat.status"].firstMatch
+        XCTAssertTrue(working.exists)
+        XCTAssertEqual(working.label, "Working")
+        XCTAssertTrue(end.isHittable)
+        shot("thread-scroll-up")
+
+        end.tap()
+        XCTAssertTrue(end.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(lastOption.isHittable)
+        shot("thread-scroll-end")
+    }
+
+    @MainActor func testFollowComposerResizing() {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "text-only"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 10))
+        conversation.tap()
+        let field = app.textFields["composer.text"]
+        let last = app.buttons["Continue"]
+        XCTAssertTrue(last.waitForExistence(timeout: 5))
+        let feed = app.scrollViews["chat.thread"]
+        let gap = feed.frame.maxY - last.frame.maxY
+        XCTAssertGreaterThan(gap, 0)
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(feed.frame.maxY - last.frame.maxY, gap, accuracy: 0.5)
+        let height = field.frame.height
+        field.typeText("Please summarize the changes in the latest backup and include the verification results for each document.")
+        XCTAssertGreaterThan(field.frame.height, height)
+        XCTAssertEqual(feed.frame.maxY - last.frame.maxY, gap, accuracy: 0.5)
+        XCTAssertFalse(app.buttons["chat.scrollToEnd"].exists)
+    }
+
+    @MainActor func testFollowFixtureReplies() {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "text-only"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 10))
+        conversation.tap()
+        let field = app.textFields["composer.text"]
+        field.tap()
+        field.typeText("First fixture update")
+        let thread = app.scrollViews["chat.thread"]
+        thread.swipeDown(velocity: .fast)
+        let end = app.buttons["chat.scrollToEnd"]
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        let earlier = app.descendants(matching: .any)["chat.message.msg_2101"].firstMatch
+        let earlierY = earlier.frame.minY
+        let send = app.buttons["composer.send"]
+        send.tap()
+        XCTAssertTrue(end.exists)
+        XCTAssertEqual(earlier.frame.minY, earlierY, accuracy: 1)
+
+        end.tap()
+        let replies = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'chat.message.msg_reply_'"))
+        let first = replies.firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        let firstID = first.identifier
+        XCTAssertTrue(end.waitForNonExistence(timeout: 5))
+        field.typeText("Second fixture update")
+        send.tap()
+        let next = replies.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertTrue(next.isHittable)
+        XCTAssertFalse(end.exists)
+    }
+
     @MainActor func testCopyMessage() throws {
         seedPasteboard("Before Copy")
         let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1"])

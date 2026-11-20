@@ -10,7 +10,7 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.7.0"
+    MARKETING_VERSION: "0.7.1"
     # `just testflight` overrides this with a timestamp; uploads need a fresh build number.
     CURRENT_PROJECT_VERSION: "1"
 packages:
@@ -44,15 +44,15 @@ targets:
       properties:
         aps-environment: $(APS_ENVIRONMENT)
         com.apple.developer.usernotifications.communication: true
-        com.apple.security.application-groups: [group.$(HEYDAN_BUNDLE_ID)]
+        com.apple.security.application-groups: [group.$(HEYDAN_APP_ID)]
     # The Simulator has no FaceTime app, and callservicesd ends every CallKit call it cannot open
-    # `facetime://?showInCallUI=1` for ("no UI to host the call"). Simulator builds (Debug and Release) answer for that
+    # `facetime://?showInCallUI=1` for ("no UI to host the call"). Normal Simulator builds (Debug and Release) answer for that
     # scheme themselves, so CallKit keeps the call; no device build ever has it. Signing runs after this phase.
     # The Info.plist is the script's input and output, so it runs after ProcessInfoPlistFile, which rewrites the plist
     # without the claim on an incremental build, and again whenever that happened (Xcode wants a second output next
     # to one the script edits in place: the stamp).
     postBuildScripts:
-      - name: Host the Simulator's in-call UI
+      - name: Configure app URL handling
         inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
         outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/simulator-in-call-ui.stamp]
         showEnvVars: false
@@ -63,14 +63,16 @@ targets:
           else
             plutil -remove NSAppTransportSecurity "$TARGET_BUILD_DIR/$INFOPLIST_PATH" 2>/dev/null || true
           fi
-          [ "$PLATFORM_NAME" = iphonesimulator ] || exit 0
-          plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"simulator-in-call-ui","CFBundleURLSchemes":["facetime"]}]' \
-              "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          if [ "$HEYDAN_BUILD_CONDITION" = HEYDAN_BETA ]; then
+            plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"beta-pairing","CFBundleURLSchemes":["heydan-beta"]}]' "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          elif [ "$PLATFORM_NAME" = iphonesimulator ]; then
+            plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"simulator-in-call-ui","CFBundleURLSchemes":["facetime"]}]' "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          fi
     info:
       path: HeyDan/Info.plist
       properties:
-        CFBundleDisplayName: Hey Dan
-        HeyDanBadgeGroup: group.$(HEYDAN_BUNDLE_ID)
+        CFBundleDisplayName: $(HEYDAN_DISPLAY_NAME)
+        HeyDanBadgeGroup: group.$(HEYDAN_APP_ID)
         HeyDanAPSEnvironment: $(APS_ENVIRONMENT)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
@@ -90,9 +92,10 @@ targets:
           - DMSans/DMSans-Bold.ttf
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID)
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_APP_ID)
         TARGETED_DEVICE_FAMILY: "1"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_APPICON_NAME: $(HEYDAN_APP_ICON)
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(HEYDAN_BUILD_CONDITION)
       configs:
         Debug:
           APS_ENVIRONMENT: development
@@ -111,7 +114,7 @@ targets:
     info:
       path: HeyDanActivity/Info.plist
       properties:
-        CFBundleDisplayName: Hey Dan
+        CFBundleDisplayName: $(HEYDAN_DISPLAY_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
@@ -121,9 +124,9 @@ targets:
           - IBMPlexMono/IBMPlexMono-Medium.ttf
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Activity
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_APP_ID).Activity
         TARGETED_DEVICE_FAMILY: "1"
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) ACTIVITY_EXTENSION
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) ACTIVITY_EXTENSION $(HEYDAN_BUILD_CONDITION)
   HeyDanNotificationService:
     type: app-extension
     platform: iOS
@@ -138,12 +141,12 @@ targets:
       path: HeyDanNotificationService/HeyDanNotificationService.entitlements
       properties:
         com.apple.developer.usernotifications.communication: true
-        com.apple.security.application-groups: [group.$(HEYDAN_BUNDLE_ID)]
+        com.apple.security.application-groups: [group.$(HEYDAN_APP_ID)]
     info:
       path: HeyDanNotificationService/Info.plist
       properties:
-        CFBundleDisplayName: Hey Dan
-        HeyDanBadgeGroup: group.$(HEYDAN_BUNDLE_ID)
+        CFBundleDisplayName: $(HEYDAN_DISPLAY_NAME)
+        HeyDanBadgeGroup: group.$(HEYDAN_APP_ID)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
@@ -151,7 +154,7 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_APP_ID).NotificationService
         TARGETED_DEVICE_FAMILY: "1"
   HeyDanTests:
     type: bundle.unit-test
@@ -165,7 +168,7 @@ targets:
       - package: HeyDanCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Tests
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_APP_ID).Tests
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -182,7 +185,7 @@ targets:
       - target: HeyDan
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_BUNDLE_ID).Checks
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEYDAN_APP_ID).Checks
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)

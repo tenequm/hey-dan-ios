@@ -12,12 +12,19 @@ struct HeyDanActivityBundle: WidgetBundle {
 
 struct CallDefaultAgentControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "CallDefaultAgent") {
+        #if HEYDAN_BETA
+        let kind = "CallDefaultAgent.beta"
+        let name: LocalizedStringResource = "Call Default agent (beta)"
+        #else
+        let kind = "CallDefaultAgent"
+        let name: LocalizedStringResource = "Call Default agent"
+        #endif
+        StaticControlConfiguration(kind: kind) {
             ControlWidgetButton(action: CallDefaultAgentIntent()) {
-                Label("Call Default agent", systemImage: "phone")
+                Label(name, systemImage: "phone")
             }
         }
-        .displayName("Call Default agent")
+        .displayName(name)
         .description("Start a call with your default paired agent.")
     }
 }

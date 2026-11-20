@@ -84,18 +84,37 @@ device-call seconds="65" say="": gen
 # `just testflight dry` stops short of the upload: it exports the IPA locally and runs App Store validation on it
 # (the export still reserves its build number in App Store Connect, left AWAITING_UPLOAD).
 testflight mode="upload" override="": gen
-    ${ASC_ENV_CMD:-} just _testflight {{quote(mode)}} {{quote(override)}}
+    ${ASC_ENV_CMD:-} just _testflight normal {{quote(mode)}} {{quote(override)}}
+
+# Archive the current checkout for the separate beta app record.
+testflight-beta mode="upload" override="": gen
+    ${ASC_ENV_CMD:-} just _testflight beta {{quote(mode)}} {{quote(override)}}
 
 # Needs ASC_KEY_P8_B64 (the .p8 as one base64 line), ASC_KEY_ID and ASC_ISSUER_ID; an upload also ASC_APP_ID.
 [private]
 [positional-arguments]
-_testflight mode override="":
+_testflight variant mode override="":
     #!/usr/bin/env bash
     set -euo pipefail
+    variant=$1
+    shift
+    recipe=testflight
+    output=build/testflight
+    build_settings=(-derivedDataPath build)
+    if [ "$variant" = beta ]; then
+        recipe=testflight-beta
+        output=build/testflight-beta
+        build_settings=(-derivedDataPath "$output/DerivedData" -xcconfig Beta.xcconfig)
+        export ASC_APP_ID="${ASC_APP_ID_BETA:-}"
+        [ -n "$ASC_APP_ID" ] || { echo "set ASC_APP_ID_BETA in .env.local for the beta app" >&2; exit 1; }
+    elif [ "$1" = upload ] && [ "$(git branch --show-current)" != main ]; then
+        echo "normal uploads require main; use just testflight-beta for a branch build" >&2
+        exit 1
+    fi
     case "$1:$2" in
         upload:|upload:same-version) destination=upload ;;
         dry:) destination=export ;;
-        *) echo "usage: just testflight [dry | upload [same-version]]" >&2; exit 2 ;;
+        *) echo "usage: just $recipe [dry | upload [same-version]]" >&2; exit 2 ;;
     esac
     [ -n "{{team_id}}" ] || { echo "no DEVELOPMENT_TEAM: set it in Local.xcconfig (see Local.xcconfig.example)" >&2; exit 1; }
     needed="ASC_KEY_P8_B64 ASC_KEY_ID ASC_ISSUER_ID"
@@ -109,9 +128,9 @@ _testflight mode override="":
     (umask 077 && printf '%s' "$ASC_KEY_P8_B64" | base64 -d > "$key")
     auth=(-allowProvisioningUpdates -authenticationKeyPath "$key" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
     build_number=$(date +%y%m%d%H%M)
-    archive=build/testflight/HeyDan-$build_number.xcarchive
-    options=build/testflight/ExportOptions.plist
-    mkdir -p build/testflight
+    archive=$output/HeyDan-$build_number.xcarchive
+    options=$output/ExportOptions.plist
+    mkdir -p "$output"
     cat > "$options" <<PLIST
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -127,7 +146,7 @@ _testflight mode override="":
     </plist>
     PLIST
     xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -configuration Release -destination 'generic/platform=iOS' \
-        -derivedDataPath build -archivePath "$archive" "${auth[@]}" \
+        "${build_settings[@]}" -archivePath "$archive" "${auth[@]}" \
         CURRENT_PROJECT_VERSION="$build_number" archive -quiet
     # LiveKit's binary xcframeworks ship stripped and without dSYMs (none upstream either), so the upload warns.
     # A dsymutil dSYM carries only their UUID and exported symbol table, no DWARF: it silences the warning, nothing more.
@@ -136,16 +155,17 @@ _testflight mode override="":
         [ -e "$dsym" ] || xcrun dsymutil "$archive/Products/Applications/HeyDan.app/Frameworks/$fw.framework/$fw" -o "$dsym" 2>/dev/null
     done
     version=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleShortVersionString' "$archive/Info.plist")
-    if ! uv run -q scripts/testflight-wait.py check-version "$version" "${2:-$1}"; then
+    bundle=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$archive/Info.plist")
+    if ! uv run -q scripts/testflight-wait.py check-version "$version" "${2:-$1}" "$bundle"; then
         [ "$1" = dry ] || exit 1
         echo "warning: could not verify the latest TestFlight version" >&2
     fi
-    xcodebuild -exportArchive -archivePath "$archive" -exportPath build/testflight/export \
+    xcodebuild -exportArchive -archivePath "$archive" -exportPath "$output/export" \
         -exportOptionsPlist "$options" "${auth[@]}" -quiet
     if [ "$1" = dry ]; then
-        xcrun altool --validate-app build/testflight/export/HeyDan.ipa --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID" --p8-file-path "$key"
+        xcrun altool --validate-app "$output/export/HeyDan.ipa" --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID" --p8-file-path "$key"
         rm -f "$key"
-        echo "dry run: build $build_number exported to build/testflight/export and validated; nothing uploaded"
+        echo "dry run: build $build_number exported to $output/export and validated; nothing uploaded"
         exit 0
     fi
     # The wait reads the key from the environment: the decoded file goes now, not after half an hour.
