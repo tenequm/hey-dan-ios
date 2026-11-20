@@ -16,8 +16,9 @@ a workflow run `actionlint`; checkouts sync the agent skills in [kasetto.yaml](k
   (`HEYDAN_SKIP_TESTS`).
 - **`just sim-checks` selectors.** `ChatThreadChecks` (or any `*Checks` class) runs that class,
   `ChatThreadChecks/testRichCardTable` one method, and a bare name like `LiveActivityOnLockScreen` the
-  `HeyDanChecks/test<name>` method. A selector that matches no test, or whose tests all skip (the stack checks in
-  `ChatChecks` without a local stack), fails instead of passing.
+  `HeyDanChecks/test<name>` method; `smoke` runs the `SMOKE` list. Several selectors share one xcodebuild session
+  (screen captures excepted). A session that runs no test, or whose tests all skip (the stack checks in `ChatChecks`
+  without a local stack), fails instead of passing; `smoke` also fails unless every listed check passed.
 - **Build once.** `just app-test` and `just sim-checks` share one build-for-testing per HEAD and working tree
   (`build/HeyDanSimulatorTests.key`); a changed tree rebuilds, an unchanged one reuses the products.
 - **UI checks run without animations.** Checks launch the app with `HEYDAN_UITEST=1`, which DEBUG builds read to turn

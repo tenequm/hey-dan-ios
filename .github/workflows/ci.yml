@@ -112,11 +112,11 @@ jobs:
     name: UI smoke
     if: github.event_name != 'push'
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       HEYDAN_RETRY: "1"
-      # The script's own budget, under the job's 20 minutes: out of time ends red with what passed.
-      HEYDAN_DEADLINE: "1080"
+      # The script's own budget, under the job's 30 minutes: out of time ends red with what passed.
+      HEYDAN_DEADLINE: "1620"
     steps:
       - *checkout
       - uses: ./.github/actions/setup

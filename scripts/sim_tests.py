@@ -19,7 +19,7 @@ SMOKE = ['ChatPairingChecks/testUnpairedLaunchOpensPairing', 'ChatChecks/testFix
          'ChatThreadChecks/testFixtureThread', 'ChatThreadChecks/testRichCardTable', 'ChatComposerChecks/testTextSend',
          'ChatCallChecks/testFixtureCallAndPairingSettings', 'ChatCallChecks/testFailureOffersCallAgainInThread',
          'ChatAgentSettingsChecks/testSaveSettingsWhileWorking', 'PairedVoiceChecks/testCatalogFailure',
-         'HeyDanChecks/testLiveActivityOnLockScreen']
+         'HeyDanChecks/testDefaultAgentIsSuggestedToShortcuts']
 START = time.monotonic()
 TEST_FLAGS = ['-collect-test-diagnostics', 'never', '-enableCodeCoverage', 'NO',
               '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
@@ -156,7 +156,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 mark('enumerated')
             # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
             deadline = 240 + TEST_SECONDS * (count + (os.environ.get('HEYDAN_RETRY') == '1'))
-            # CI's budget for the whole script (HEYDAN_DEADLINE, seconds), so a shard out of time ends red with a
+            # CI's budget for the whole script (HEYDAN_DEADLINE, seconds), so a run out of time ends red with a
             # summary instead of being cancelled by the job timeout.
             if budget := os.environ.get('HEYDAN_DEADLINE'):
                 deadline = min(deadline, int(int(budget) - (time.monotonic() - START)))
@@ -195,6 +195,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 if os.environ.get('GITHUB_STEP_SUMMARY'):
                     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
                         out.write(f'### {note}\n\n' + ''.join(f'- `{name}` passed\n' for name in passed) + '\n')
+                raise RuntimeError(note)
             elif proc.returncode:
                 report(selector, result)
                 raise subprocess.CalledProcessError(proc.returncode, 'xcodebuild test-without-building')
@@ -202,6 +203,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                                                           'summary', '--path', result]))
             if mode == 'screens' and (summary['skippedTests'] or not summary['passedTests']):
                 raise RuntimeError('Incomplete screen checks')
+            # A renamed or skipped smoke check must not pass silently.
+            if check == 'smoke' and summary.get('passedTests') != len(SMOKE):
+                raise RuntimeError(f'{summary.get("passedTests", 0)} of {len(SMOKE)} smoke checks passed')
             if not summary['totalTestCount']:
                 raise RuntimeError(f'No tests ran for {selector}')
             # A skipped test counts in the total and exits 0: a run in which nothing passed proves nothing.
@@ -224,7 +228,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
 
         subprocess.run([*sim, 'install', udid, build / 'Build/Products/Debug-iphonesimulator/HeyDan.app'], check=True)
         mark('installed')
-        checks = SMOKE if check == 'smoke' else check.split()
+        checks = SMOKE if check == 'smoke' else (check or '').split()
         selectors = ['HeyDanTests'] if mode == 'app-test' else [ui_selector(c) for c in checks]
         if any('Push' in selector for selector in selectors) and bundle == 'com.example.HeyDan':
             raise RuntimeError('Simulator push checks need HEYDAN_BUNDLE_ID in Local.xcconfig')
@@ -245,7 +249,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             screens = [one for one in selectors if one.startswith('HeyDanChecks/ScreenCaptureChecks')]
             rest = [one for one in selectors if one not in screens]
             selectors = [' '.join(rest)] * bool(rest) + screens
-        # Every selector runs even after one fails, so a CI shard reports all its failures at once.
+        # Every selector runs even after one fails, so a CI run reports all its failures at once.
         for selector in selectors:
             runner.clear()
             runner.update(base)
