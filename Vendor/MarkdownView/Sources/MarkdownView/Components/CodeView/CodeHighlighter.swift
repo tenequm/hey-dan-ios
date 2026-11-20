@@ -154,12 +154,16 @@ public extension CodeHighlighter.HighlightMap {
             string: content,
             attributes: [
                 .font: theme.fonts.code,
-                .paragraphStyle: paragraphStyle,
                 .foregroundColor: plainTextColor,
             ],
         )
 
+        if let height = theme.sizes.bodyLineHeight {
+            attributedContent.setLineHeight(height, font: theme.fonts.code, style: paragraphStyle)
+        }
+
         let length = attributedContent.length
+        attributedContent.addAttribute(.paragraphStyle, value: paragraphStyle, range: NSRange(location: 0, length: length))
         for (range, token) in self {
             guard range.location >= 0, range.upperBound <= length else { continue }
             let color = theme.syntax.color(for: token)

@@ -91,6 +91,9 @@ final class ListProcessor {
         }
         string.append(item.paragraph.render(theme: theme, context: context, decoration: inlineTextDecoration))
 
+        if let height = theme.sizes.bodyLineHeight {
+            string.setLineHeight(height, font: theme.fonts.body, style: paragraphStyle)
+        }
         string.addAttributes(
             [.paragraphStyle: paragraphStyle],
             range: .init(location: 0, length: string.length),

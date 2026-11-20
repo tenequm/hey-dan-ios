@@ -23,6 +23,7 @@ public extension MarkdownTheme {
 
 public struct MarkdownTheme: Equatable, @unchecked Sendable {
     public struct Fonts: Equatable, @unchecked Sendable {
+        public var headingSizes: [CGFloat] = []
         #if canImport(UIKit)
             public var body = UIFont.preferredFont(forTextStyle: .body)
             public var codeInline = UIFont.monospacedSystemFont(
@@ -59,6 +60,8 @@ public struct MarkdownTheme: Equatable, @unchecked Sendable {
     public var fonts: Fonts = .init()
 
     public struct Colors: Equatable, @unchecked Sendable {
+        public var inlineCode: PlatformColor?
+        public var codeBlockBorder: PlatformColor = .clear
         #if canImport(UIKit)
             public var body = UIColor.label
             public var highlight =
@@ -116,7 +119,10 @@ public struct MarkdownTheme: Equatable, @unchecked Sendable {
     public var spacings: Spacings = .init()
 
     public struct Sizes: Equatable, Sendable {
-        public var bullet: CGFloat = 4
+        public var bullet: CGFloat = 6
+        public var bodyLineHeight: CGFloat?
+        public var headingLineHeightMultiple: CGFloat = 1.35
+        public var hairline: CGFloat = 0
     }
 
     public var sizes: Sizes = .init()

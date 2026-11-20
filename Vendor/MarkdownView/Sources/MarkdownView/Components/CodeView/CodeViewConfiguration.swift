@@ -14,10 +14,12 @@ import Litext
 @MainActor
 enum CodeViewConfiguration {
     nonisolated static let barPadding: CGFloat = 8
-    nonisolated static let codePadding: CGFloat = 8
+    nonisolated static let codePadding: CGFloat = 12
     nonisolated static let codeLineSpacing: CGFloat = 4
-    nonisolated static let lineNumberWidth: CGFloat = 40
-    nonisolated static let lineNumberPadding: CGFloat = 8
+
+    static func headerFont(_ theme: MarkdownTheme) -> PlatformFont {
+        .systemFont(ofSize: theme.fonts.code.pointSize * 0.85, weight: .medium)
+    }
 
     static func intrinsicHeight(
         for content: String,
@@ -37,10 +39,11 @@ enum CodeViewConfiguration {
         #elseif canImport(AppKit)
             let lineHeight = font.ascender + abs(font.descender) + font.leading
         #endif
-        let barHeight = lineHeight + barPadding * 2
-        let codeHeight = lineHeight * CGFloat(lineCount)
+        let header = headerFont(theme)
+        let barHeight = ceil(header.ascender - header.descender + header.leading) + barPadding * 2
+        let codeHeight = (theme.sizes.bodyLineHeight ?? lineHeight) * CGFloat(lineCount)
             + codePadding * 2
-            + codeLineSpacing * CGFloat(max(lineCount - 1, 0))
+            + (theme.sizes.bodyLineHeight == nil ? codeLineSpacing * CGFloat(max(lineCount - 1, 0)) : 0)
         return ceil(barHeight + codeHeight)
     }
 }
@@ -52,7 +55,6 @@ extension CodeView {
         setupButtons()
         setupScrollView()
         setupTextView()
-        setupLineNumberView()
         applyBackgroundColors()
     }
 
@@ -68,12 +70,9 @@ extension CodeView {
 
         layoutBarView(barHeight: barHeight, labelSize: labelSize)
         layoutButtons()
-        layoutLineNumberView(barHeight: barHeight)
         layoutScrollViewAndTextView(barHeight: barHeight)
     }
 
-    /// Lays the bar's buttons out from the trailing edge: Expand, Copy, then
-    /// Preview when there is a handler, then the host's actions.
     private func layoutButtons() {
         let buttonSize = CGSize(width: TableTitleBar.buttonWidth, height: 44)
         previewButton.isHidden = previewAction == nil
@@ -91,30 +90,22 @@ extension CodeView {
 
     private func layoutBarView(barHeight: CGFloat, labelSize: CGSize) {
         barView.frame = CGRect(origin: .zero, size: CGSize(width: bounds.width, height: barHeight))
+        #if canImport(UIKit)
+            barDivider.frame = CGRect(x: 0, y: barHeight - theme.sizes.hairline, width: bounds.width, height: theme.sizes.hairline)
+        #endif
         languageLabel.frame = CGRect(
-            origin: CGPoint(x: CodeViewConfiguration.barPadding, y: CodeViewConfiguration.barPadding),
+            origin: CGPoint(x: CodeViewConfiguration.codePadding, y: CodeViewConfiguration.barPadding),
             size: labelSize,
-        )
-    }
-
-    private func layoutLineNumberView(barHeight: CGFloat) {
-        let lineNumberSize = lineNumberView.intrinsicContentSize
-        lineNumberView.frame = CGRect(
-            x: 0,
-            y: barHeight,
-            width: lineNumberSize.width,
-            height: bounds.height - barHeight,
         )
     }
 
     private func layoutScrollViewAndTextView(barHeight: CGFloat) {
         let textContentSize = textView.intrinsicContentSize
-        let lineNumberWidth = lineNumberView.intrinsicContentSize.width
 
         scrollView.frame = CGRect(
-            x: lineNumberWidth,
+            x: 0,
             y: barHeight,
-            width: bounds.width - lineNumberWidth,
+            width: bounds.width,
             height: bounds.height - barHeight,
         )
 
@@ -151,6 +142,7 @@ extension CodeView {
         }
 
         func setupBarView() {
+            barView.layer.addSublayer(barDivider)
             barView.layer.cornerRadius = layer.cornerRadius
             barView.layer.cornerCurve = .continuous
             barView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
@@ -201,13 +193,6 @@ extension CodeView {
             textView.isSelectable = true
             textView.selectionBackgroundColor = theme.colors.selectionBackground
             scrollView.addSubview(textView)
-        }
-
-        func setupLineNumberView() {
-            lineNumberView.backgroundColor = .clear
-            // Under the code, so a selection's handles draw over the gutter.
-            insertSubview(lineNumberView, belowSubview: scrollView)
-            updateLineNumberView()
         }
     }
 
@@ -273,13 +258,6 @@ extension CodeView {
             textView.selectionBackgroundColor = theme.colors.selectionBackground
             scrollView.documentView = textView
         }
-
-        func setupLineNumberView() {
-            lineNumberView.wantsLayer = true
-            lineNumberView.layer?.backgroundColor = NSColor.clear.cgColor
-            addSubview(lineNumberView)
-            updateLineNumberView()
-        }
     }
 #endif
 
@@ -287,6 +265,10 @@ extension CodeView {
     /// Paints the body and the bar in the theme's code block colours.
     func applyBackgroundColors() {
         #if canImport(UIKit)
+            barDivider.backgroundColor = theme.colors.body.withAlphaComponent(0.2).cgColor
+            layer.borderColor = theme.colors.codeBlockBorder.cgColor
+            layer.borderWidth = theme.sizes.hairline
+            for button in barButtons { button.tintColor = languageLabel.textColor }
             backgroundColor = theme.colors.codeBlockBackground
             barView.backgroundColor = theme.colors.codeBlockBarBackground
         #elseif canImport(AppKit)

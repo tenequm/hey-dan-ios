@@ -57,6 +57,9 @@ enum InlineCode {
 
     static func attributedString(_ string: String, theme: MarkdownTheme) -> NSAttributedString {
         let font = theme.fonts.codeInline
+        if let color = theme.colors.inlineCode {
+            return NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color])
+        }
         let background = InlineCodeBackground(
             color: theme.colors.codeBackground,
             ascent: font.ascender,

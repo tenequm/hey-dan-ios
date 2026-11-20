@@ -40,10 +40,11 @@ final class BlockProcessor {
         self.inlineTextDecoration = inlineTextDecoration
     }
 
-    func processHeading(level _: Int, contents: [MarkdownInlineNode]) -> NSAttributedString {
-        let font: PlatformFont = theme.fonts.title
+    func processHeading(level: Int, contents: [MarkdownInlineNode]) -> NSAttributedString {
+        let sizes = theme.fonts.headingSizes
+        let font = sizes.indices.contains(level - 1) ? theme.fonts.title.withSize(sizes[level - 1]) : theme.fonts.title
 
-        return buildWithParagraphSync { paragraph in
+        return buildWithParagraphSync(font: font, lineHeight: font.pointSize * theme.sizes.headingLineHeightMultiple) { paragraph in
             paragraph.paragraphSpacing = theme.spacings.paragraph
             paragraph.paragraphSpacingBefore = theme.spacings.headingBefore
         } content: {
@@ -62,10 +63,7 @@ final class BlockProcessor {
     }
 
     func processParagraph(contents: [MarkdownInlineNode]) -> NSAttributedString {
-        buildWithParagraphSync { paragraph in
-            paragraph.paragraphSpacing = theme.spacings.paragraph
-            paragraph.lineSpacing = 4
-        } content: {
+        buildWithParagraphSync(font: theme.fonts.body, lineHeight: theme.sizes.bodyLineHeight) {
             let rendered = contents.render(theme: theme, context: context, decoration: inlineTextDecoration)
             if rendered.length == 0 {
                 return NSMutableAttributedString(string: " ", attributes: [.font: theme.fonts.body])
@@ -109,6 +107,8 @@ final class BlockProcessor {
             // the source text instead lets the two numbers drift apart, and the view
             // then paints over whatever follows it.
             paragraph.minimumLineHeight = appearance.size.height
+            paragraph.paragraphSpacingBefore = 4
+            paragraph.paragraphSpacing = 12
         } content: {
             .init(string: TextLabel.Attachment.replacementText, attributes: [
                 .font: theme.fonts.body,
@@ -158,6 +158,9 @@ final class BlockProcessor {
         // stroked while drawing: a line drawing action only runs for the lines a
         // redraw happens to touch, so a bar painted from one line's action comes
         // out clipped to whatever band was dirty.
+        if let height = theme.sizes.bodyLineHeight {
+            result.setLineHeight(height, font: theme.fonts.body, style: baseParagraphStyle)
+        }
         result.addAttributes(
             [
                 .paragraphStyle: baseParagraphStyle,
@@ -228,7 +231,8 @@ final class BlockProcessor {
 
 extension BlockProcessor {
     private func buildWithParagraphSync(
-        withNewLine: Bool = true,
+        font: PlatformFont? = nil,
+        lineHeight: CGFloat? = nil,
         modifier: (inout NSMutableParagraphStyle) -> Void = { _ in },
         content: () -> NSMutableAttributedString,
     ) -> NSMutableAttributedString {
@@ -238,13 +242,26 @@ extension BlockProcessor {
         modifier(&paragraphStyle)
 
         let string = content()
+        if let lineHeight, let font {
+            string.setLineHeight(lineHeight, font: font, style: paragraphStyle)
+        }
         string.addAttributes(
             [.paragraphStyle: paragraphStyle],
             range: .init(location: 0, length: string.length),
         )
-        if withNewLine, !string.string.hasSuffix("\n") {
+        if !string.string.hasSuffix("\n") {
             string.append(.init(string: "\n"))
         }
         return string
+    }
+}
+
+extension NSMutableAttributedString {
+    func setLineHeight(_ height: CGFloat, font: PlatformFont, style: NSMutableParagraphStyle) {
+        style.minimumLineHeight = height
+        style.maximumLineHeight = height
+        style.lineSpacing = 0
+        let naturalHeight = font.ascender - font.descender + font.leading
+        addAttribute(.baselineOffset, value: (height - naturalHeight) / 2, range: NSRange(location: 0, length: length))
     }
 }

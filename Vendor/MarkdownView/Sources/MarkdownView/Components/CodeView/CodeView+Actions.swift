@@ -25,11 +25,8 @@ extension CodeView {
     static let copiedSymbol = TableSymbol.copied
     static let expandSymbol = TableSymbol.expand
 
-    /// The bar's buttons from the trailing edge: Expand, Copy, Preview, then
-    /// the host's actions — Copy, Expand reading left to right. Download is
-    /// in the sheet Expand opens.
     var barButtons: [PlatformButton] {
-        [expandButton, copyButton, previewButton] + actionButtons.reversed()
+        [copyButton, expandButton, previewButton] + actionButtons.reversed()
     }
 
     /// Swaps Copy for a checkmark, and back after `copyFeedbackDuration`;

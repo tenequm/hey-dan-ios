@@ -109,9 +109,9 @@ extension TextBuilder {
                 let column = ListMarkerLayout.column(lineOrigin: lineOrigin, font: style.font)
                 context.setStrokeColor(style.color.cgColor)
                 context.setFillColor(style.color.cgColor)
-                let radius: CGFloat = 3
+                let radius = theme.sizes.bullet / 2
                 let rect = CGRect(
-                    x: column.midX - radius,
+                    x: lineOrigin.x - ListMarkerLayout.indent / 2 - radius,
                     y: column.midY - radius,
                     width: radius * 2,
                     height: radius * 2,

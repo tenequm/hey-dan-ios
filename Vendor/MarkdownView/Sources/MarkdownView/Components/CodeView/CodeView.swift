@@ -13,11 +13,12 @@ final class CodeView: PlatformView {
 
     var theme: MarkdownTheme = .default {
         didSet {
-            languageLabel.font = theme.fonts.code
+            languageLabel.font = CodeViewConfiguration.headerFont(theme)
+            languageLabel.textColor = theme.colors.body.withAlphaComponent(0.6)
             applyBackgroundColors()
             textView.selectionBackgroundColor = theme.colors.selectionBackground
-            updateLineNumberView()
             if oldValue.fonts.code != theme.fonts.code
+                || oldValue.sizes.bodyLineHeight != theme.sizes.bodyLineHeight
                 || oldValue.colors.code != theme.colors.code
                 || oldValue.syntax != theme.syntax
             {
@@ -57,8 +58,6 @@ final class CodeView: PlatformView {
             needsTextRebuild = false
             cachedLineCount = max(content.components(separatedBy: .newlines).count, 1)
             textView.attributedText = highlightMap.apply(to: content, with: theme)
-            lineNumberView.updateForContent(content)
-            updateLineNumberView()
             // A line can grow without the frame changing, and the text
             // view and scroll extent are sized in layout.
             markNeedsLayout()
@@ -119,6 +118,7 @@ final class CodeView: PlatformView {
 
     lazy var barView: PlatformView = .init()
     #if canImport(UIKit)
+        let barDivider = CALayer()
         lazy var scrollView: HorizontalClippingScrollView = .init()
         lazy var copyButton: UIButton = .init()
         lazy var expandButton: UIButton = .init()
@@ -143,12 +143,10 @@ final class CodeView: PlatformView {
     /// Animates streamed code only while a `MarkdownStreamView` gives it an
     /// animator; until then it draws exactly like a plain label.
     lazy var textView: LTXAnimatableLabel = .init()
-    lazy var lineNumberView: LineNumberView = .init()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         configureSubviews()
-        updateLineNumberView()
     }
 
     @available(*, unavailable)
@@ -164,7 +162,6 @@ final class CodeView: PlatformView {
         override func layoutSubviews() {
             super.layoutSubviews()
             performLayout()
-            updateLineNumberView()
         }
     #elseif canImport(AppKit)
         override nonisolated var isFlipped: Bool {
@@ -179,7 +176,6 @@ final class CodeView: PlatformView {
         override func layout() {
             super.layout()
             performLayout()
-            updateLineNumberView()
         }
     #endif
 
@@ -256,12 +252,10 @@ final class CodeView: PlatformView {
         let textSize = textView.intrinsicContentSize
         let supposedHeight = CodeViewConfiguration.intrinsicHeight(lineCount: cachedLineCount, theme: theme)
 
-        let lineNumberWidth = lineNumberView.intrinsicContentSize.width
-
         return CGSize(
             width: max(
                 labelSize.width + CodeViewConfiguration.barPadding * 2,
-                lineNumberWidth + textSize.width + CodeViewConfiguration.codePadding * 2,
+                textSize.width + CodeViewConfiguration.codePadding * 2,
             ),
             height: max(
                 barHeight + textSize.height + CodeViewConfiguration.codePadding * 2,
@@ -305,27 +299,6 @@ final class CodeView: PlatformView {
             CodeSheetPresenter.present(self)
         }
     #endif
-
-    func updateLineNumberView() {
-        let font = theme.fonts.code
-
-        let textViewContentHeight = textView.intrinsicContentSize.height
-
-        lineNumberView.configure(
-            lineCount: cachedLineCount,
-            contentHeight: textViewContentHeight,
-            lineSpacing: CodeViewConfiguration.codeLineSpacing,
-            font: font,
-            textColor: theme.colors.body.withAlphaComponent(0.5),
-        )
-
-        lineNumberView.padding = .init(
-            top: CodeViewConfiguration.codePadding,
-            left: CodeViewConfiguration.lineNumberPadding,
-            bottom: CodeViewConfiguration.codePadding,
-            right: CodeViewConfiguration.lineNumberPadding,
-        )
-    }
 }
 
 extension CodeView: TextLabel.AttachmentRepresentable {
