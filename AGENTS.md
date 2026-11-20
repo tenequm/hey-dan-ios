@@ -26,6 +26,18 @@ a workflow run `actionlint`; checkouts sync the agent skills in [kasetto.yaml](k
   Cached JSON contains only what its writer understood. The version change rebuilds history from the host and
   preserves the outbox. A cached unknown item also invalidates that thread's pages on the next load.
 
+## Which checks when
+
+- **Tier 0, every edit loop, no Simulator:** `just build`, `just test`.
+- **Tier 1, before a lane pushes:** only the UI check class or single test for the code it touched
+  (`just sim-checks ChatThreadChecks/testRichCardTable`).
+- **CI** runs the build, the unit tests and `just app-test` on every pull request. `just app-test` is CI only.
+- **The full UI set** runs locally, one class at a time with `just sim-checks <Class>`, only when a change needs it
+  or the owner asks, not routinely. `ChatPushChecks` needs a real bundle ID in `Local.xcconfig`; the stack rows are
+  `just sim-e2e`; a live call is `just sim-call`, test agent only.
+- **Machine rules:** at most one booted Simulator on the Mac across all agents, shut down after; delete only a
+  Simulator the lane created under its own `HEYDAN_SIM`, never `Hey Dan iPhone`. Review agents never build.
+
 ## How the app talks to the host
 
 `HeyDanCore` holds the contract and mirrors nanoclaw: chat is its
