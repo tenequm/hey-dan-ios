@@ -1019,10 +1019,10 @@ extension CallController: ConversationManagerDelegate {
         enqueue { await $0.perform(pending) }
     }
 
-    func perform(_ action: ConversationAction) async {
+    func perform(_ action: ConversationAction, fulfillEnd: (EndConversationAction) -> Void = { $0.fulfill(dateEnded: .now) }) async {
         let id = action.conversationUUID
         if let end = action as? EndConversationAction {
-            end.fulfill(dateEnded: .now)
+            fulfillEnd(end)
             trace(.callkit, "perform end current=\(call?.id == id)", id)
             return finish(id, .byCaller, endedBy: nil)
         }

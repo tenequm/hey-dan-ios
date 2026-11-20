@@ -154,8 +154,12 @@ private final class FixtureBundle {}
 
     func testSystemEndCompletesForAnUnknownConversation() async {
         let end = EndConversationAction(conversationUUID: UUID())
-        await CallController.shared.perform(end)
-        XCTAssertEqual(end.state, .complete)
+        var fulfilled: [UUID] = []
+        await CallController.shared.perform(end) { action in
+            fulfilled.append(action.conversationUUID)
+            action.fulfill(dateEnded: .now)
+        }
+        XCTAssertEqual(fulfilled, [end.conversationUUID])
     }
 
     func testJoiningRequiresConnectedRoomPublishedMicAndListeningWorker() throws {
