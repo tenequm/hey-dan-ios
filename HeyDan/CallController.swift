@@ -128,17 +128,15 @@ final class CallController: NSObject {
         /// The caller's microphone, made before it is published so a mute asked for during setup holds from the start
         /// (at the mixer: see `syncMic`).
         var mic: LocalAudioTrack?
-        var readiness = CallReadiness()
+        var micPublished = false
         /// A pass of `syncMic` is under way; a mute asked for meanwhile is taken by its next round.
         var micSync: Task<Void, Error>?
         var isPaused = false
         /// `room.connect` returned: only from then can the agent leave or the room end the call. A connect that
         /// times out makes the SDK report both while tearing the room down, and that is a failure to connect.
         var roomConnected = false
-        var cueTrack: RemoteAudioTrack?
-        var cuePlayback: ListeningCuePlayback?
-        var milestone: ConnectionMilestone?
-        var reportedConnected: Bool { milestone == .listeningCue || milestone == .cueMissed }
+        var pendingStart: StartConversationAction?
+        var reportedConnected = false
         /// The host names why it ended the call in the room metadata; the SDK clears it before it reports the disconnect.
         var endReason: String?
         var grantTask: Task<CallTarget.Grant, Error>?
@@ -368,13 +366,13 @@ final class CallController: NSObject {
     private func reconcileMic(_ id: UUID) async throws {
         while let current = call, current.id == id, let mic = current.mic {
             let silent = isMuted || current.isPaused
-            if !current.readiness.micPublished {
+            if !current.micPublished {
                 Self.silenceMixer(silent)
                 return
             }
             if silent != mic.isMuted {
                 if silent { try await mic.mute() } else { try await mic.unmute() }
-            } else if !silent, current.readiness.micPublished, let room = current.room, room.connectionState == .connected,
+            } else if !silent, current.micPublished, let room = current.room, room.connectionState == .connected,
                       !Self.isPublished(mic, in: room)
             {
                 try await room.localParticipant.publish(audioTrack: mic, options: Self.micPublishOptions)
@@ -452,7 +450,8 @@ final class CallController: NSObject {
                 let mic = try await microphone
                 guard call?.id == id else { return }
                 call?.connectingTone?.stop()
-                enter(.joining, for: id)
+                phase = .joining
+                report(.conversationStartedConnecting(.now), for: id)
                 let connecting = ContinuousClock.now
                 trace(.room, "connect start ice=\(target.usesRelay ? "relay" : "all")", id)
                 do { try await room.connect(url: grant.url, token: grant.token, connectOptions: ConnectOptions(iceTransportPolicy: target.usesRelay ? .relay : .all)) } catch {
@@ -462,7 +461,7 @@ final class CallController: NSObject {
                 guard call?.id == id else { return }
                 call?.roomConnected = true
                 trace(.room, "connected ms=\(CallLog.ms(since: connecting))", id)
-                updateSetup(in: room)
+                refresh()
                 let publishing = ContinuousClock.now
                 trace(.audio, "mic publish start", id)
                 do {
@@ -474,8 +473,7 @@ final class CallController: NSObject {
                 }
                 guard call?.id == id else { return }
                 let publishMS = CallLog.ms(since: publishing)
-                call?.readiness.micPublished = true
-                updateSetup(in: room)
+                call?.micPublished = true
                 // Keep setup silenced until the published track has taken any pending mute.
                 try await syncMic(id)
                 guard call?.id == id else { return }
@@ -522,151 +520,83 @@ final class CallController: NSObject {
     }
 
     struct SetupTimer {
-        enum Expiry { case cueMissed, noAgent, micUnpublished, disconnected }
-
-        private var waitingForCue = false
         private var remaining = VoiceProtocol.agentJoinTimeout
-        private var sawAgent = false
         private(set) var deadline: ContinuousClock.Instant?
+        private(set) var sawAgent = false
 
-        mutating func update(agent: Bool, published: Bool, paused: Bool, at now: ContinuousClock.Instant) -> Expiry? {
+        mutating func update(agent: Bool, paused: Bool, at now: ContinuousClock.Instant) {
             sawAgent = sawAgent || agent
-            let ready = agent && published
-            if ready != waitingForCue {
-                waitingForCue = ready
-                remaining = ready ? .seconds(6) : VoiceProtocol.agentJoinTimeout
-                deadline = nil
-            }
             if paused {
                 if let deadline { remaining = max(.zero, now.duration(to: deadline)) }
                 deadline = nil
-                return nil
+            } else if deadline == nil {
+                deadline = now + remaining
             }
-            let due = deadline ?? now + remaining
-            deadline = due
-            guard now >= due else { return nil }
-            if ready { return .cueMissed }
-            if agent { return .micUnpublished }
-            return sawAgent ? .disconnected : .noAgent
+        }
+
+        func failure(agentPresent: Bool, published: Bool) -> (CallFailure, CallTarget.EndReason?) {
+            if !sawAgent { return (.noAgent, .noAgent) }
+            if !agentPresent { return (.pairedTransport, nil) }
+            if !published { return (.micUnpublished, .micUnpublished) }
+            return (.agentNotListening, .agentNotListening)
         }
     }
 
-    private func updateSetup(in room: Room) {
-        guard let current = call, current.room === room, current.roomConnected, !current.reportedConnected else { return }
-        let connected = room.connectionState == .connected
-        let agent = room.remoteParticipants.values.contains(where: \.isAgent)
-        let published = connected && current.readiness.micPublished && current.mic.map { Self.isPublished($0, in: room) } == true
-        if !current.isPaused, agent, published, let cue = current.readiness.playableCue {
-            return join(cue, in: room)
+    static func readyToJoin(connected: Bool, published: Bool, attributes: [String: String], names: VoiceProtocol.Names) -> Bool {
+        connected && published && attributes[VoiceProtocol.agentStateAttribute] == "listening" && names.activity(attributes) == .listening
+    }
+
+    private func refresh() {
+        guard let current = call, let room = current.room, let names = current.names else { return }
+        let agent = room.remoteParticipants.values.first(where: \.isAgent)
+        let attributes = agent?.attributes ?? [:]
+        if names.isUpdating(attributes) {
+            return finish(current.id, .failure(.updating), endedBy: .failed, hostReason: .updating)
         }
-        let expiry = call?.setup.update(agent: agent, published: published, paused: current.isPaused, at: .now)
-        if let expiry {
-            switch expiry {
-            case .cueMissed:
-                trace(.call, "cue-missed", current.id)
-                return join(.cueMissed, in: room)
-            case .noAgent: return finish(current.id, .failure(.noAgent), endedBy: .failed, hostReason: .noAgent)
-            case .micUnpublished: return finish(current.id, .failure(.micUnpublished), endedBy: .failed, hostReason: .micUnpublished)
-            case .disconnected: return finish(current.id, .failure(.pairedTransport), endedBy: .failed)
-            }
+        if agent != nil {
+            refreshVoice(attributes, names: names, for: current.id)
+            refreshCommandWords(attributes, names: names, for: current.id)
+            refreshCommands(attributes, names: names, for: current)
         }
+        if current.reportedConnected {
+            if room.connectionState == .reconnecting { phase = .reconnecting }
+            else if let activity = names.activity(attributes) { phase = .live(activity) }
+            return
+        }
+        guard current.roomConnected else { return }
+        let published = current.micPublished && current.mic.map { Self.isPublished($0, in: room) } == true
+        if !current.isPaused, Self.readyToJoin(connected: room.connectionState == .connected, published: published,
+                                               attributes: attributes, names: names) {
+            let connectedAt = Date.now
+            call?.reportedConnected = true
+            current.setupTask?.cancel()
+            current.pendingStart?.fulfill(dateStarted: connectedAt)
+            call?.pendingStart = nil
+            let handle = Handle(type: .generic, value: current.target.paired.agentHandle.uuidString, displayName: agentName)
+            report(.conversationUpdated(.init(members: [handle], activeRemoteMembers: [handle], capabilities: [.pausing])), for: current.id)
+            report(.conversationConnected(connectedAt), for: current.id)
+            phase = .live(.listening)
+            trace(.call, "live")
+            #if DEBUG
+            ReconnectDrill.run(on: room, for: current.id)
+            #endif
+            return
+        }
+        let now = ContinuousClock.now
+        call?.setup.update(agent: agent != nil, paused: current.isPaused, at: now)
         let deadline = call?.setup.deadline
+        if let deadline, now >= deadline, let setup = call?.setup {
+            let (failure, reason) = setup.failure(agentPresent: agent != nil, published: published)
+            return finish(current.id, .failure(failure), endedBy: .failed, hostReason: reason)
+        }
         guard deadline != current.setup.deadline else { return }
         current.setupTask?.cancel()
         guard let deadline else { return }
+        let id = current.id
         call?.setupTask = Task {
             do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
-            updateSetup(in: room)
+            if call?.id == id { refresh() }
         }
-    }
-
-    /// Re-reads the room: every delegate callback lands here, so their order does not matter.
-    private func refresh() {
-        guard let call, let room = call.room, let names = call.names else { return }
-        updateSetup(in: room)
-        guard self.call?.id == call.id else { return }
-        if room.connectionState == .reconnecting {
-            if call.reportedConnected { phase = .reconnecting }
-            return
-        }
-        guard let agent = room.remoteParticipants.values.first(where: \.isAgent) else { return }
-        let attributes = agent.attributes
-        if names.isUpdating(attributes) {
-            trace(.room, "worker is updating", level: .error)
-            return finish(call.id, .failure(.updating), endedBy: .failed, hostReason: .updating)
-        }
-        refreshVoice(attributes, names: names, for: call.id)
-        refreshCommandWords(attributes, names: names, for: call.id)
-        refreshCommands(attributes, names: names, for: call)
-        if let update = call.milestone?.workerUpdate(names.activity(attributes)) { phase = update }
-    }
-
-    enum ConnectionMilestone: Sendable {
-        case joining, listeningCue, cueMissed
-
-        func workerUpdate(_ activity: VoiceProtocol.AgentActivity?) -> Phase? {
-            guard self != .joining, let activity else { return nil }
-            return .live(activity)
-        }
-
-        func transition(at date: Date) -> (phase: Phase, event: LiveCommunicationKit.Conversation.Event) {
-            switch self {
-            case .joining: (.joining, .conversationStartedConnecting(date))
-            case .listeningCue, .cueMissed: (.live(.listening), .conversationConnected(date))
-            }
-        }
-    }
-
-    private func enter(_ milestone: ConnectionMilestone, for id: UUID) {
-        call?.milestone = milestone
-        let transition = milestone.transition(at: .now)
-        phase = transition.phase
-        report(transition.event, for: id)
-    }
-
-    private func observeCue(_ track: RemoteAudioTrack, in room: Room) {
-        guard let current = call, current.room === room, !current.reportedConnected else { return }
-        if let prior = current.cueTrack { current.cuePlayback?.detach(from: prior) }
-        let playback = ListeningCuePlayback { [weak self, weak track, weak room] milestone in
-            Task { @MainActor in
-                guard let room, let track else { return }
-                self?.cuePlayed(milestone, track: track, in: room)
-            }
-        }
-        call?.cueTrack = track
-        call?.cuePlayback = playback
-        playback.attach(to: track)
-        refresh()
-    }
-
-    private func cuePlayed(_ milestone: ConnectionMilestone, track: RemoteAudioTrack, in room: Room) {
-        guard let call, call.room === room, call.cueTrack === track, !call.reportedConnected else { return }
-        self.call?.readiness.cue = milestone
-        updateSetup(in: room)
-    }
-
-    struct CallReadiness {
-        var micPublished = false
-        var cue: ConnectionMilestone?
-        var playableCue: ConnectionMilestone? { micPublished ? cue : nil }
-    }
-
-    private func join(_ milestone: ConnectionMilestone, in room: Room) {
-        guard let call, call.room === room, !call.reportedConnected else { return }
-        if let track = call.cueTrack { call.cuePlayback?.detach(from: track) }
-        self.call?.cuePlayback = nil
-        self.call?.cueTrack = nil
-        call.setupTask?.cancel()
-        let handle = Handle(type: .generic, value: call.target.paired.agentHandle.uuidString, displayName: agentName)
-        report(.conversationUpdated(.init(members: [handle], activeRemoteMembers: [handle], capabilities: [.pausing])), for: call.id)
-        enter(milestone, for: call.id)
-        if let agent = room.remoteParticipants.values.first(where: \.isAgent), let names = call.names, let joined = self.call {
-            refreshCommands(agent.attributes, names: names, for: joined)
-        }
-        trace(.call, "live")
-        #if DEBUG
-        ReconnectDrill.run(on: room, for: call.id)
-        #endif
     }
 
     /// Before `room.connect` returned this is the SDK cleaning up a connect that failed; `connect` reports that.
@@ -685,7 +615,7 @@ final class CallController: NSObject {
         trace(
             .call,
             "finish site=\(site) cause=\(ending.cause) cx=\(reason.map { "\($0.rawValue)" } ?? "-") host=\(hostReason?.rawValue ?? "-") "
-                + "connected=\(current.roomConnected) mic=\(current.readiness.micPublished) live=\(current.reportedConnected) "
+                + "connected=\(current.roomConnected) mic=\(current.micPublished) live=\(current.reportedConnected) "
                 + "streams=[\(streams.joined(separator: ","))]",
             id
         )
@@ -699,7 +629,7 @@ final class CallController: NSObject {
         #if DEBUG && targetEnvironment(simulator)
         VoiceDebug.callEnded(id)
         #endif
-        if let track = ended.cueTrack { ended.cuePlayback?.detach(from: track) }
+        ended.pendingStart?.fail()
         ended.micSync?.cancel()
         ended.grantTask?.cancel()
         ended.connectTask?.cancel()
@@ -960,10 +890,7 @@ extension CallController {
             commands = settings
         }
         guard !call.settingsSent else { return }
-        // The settings reply releases the worker's opening cue. Both media paths must be ready to hear it.
-        guard call.readiness.micPublished, call.cuePlayback != nil || call.reportedConnected else {
-            return trace(.rpc, "settings wait for setup", call.id, level: .debug)
-        }
+        guard call.micPublished else { return trace(.rpc, "settings wait for setup", call.id, level: .debug) }
         self.call?.settingsSent = true
         let id = call.id
         trace(.rpc, "settings send once", id, level: .info)
@@ -1105,7 +1032,7 @@ extension CallController: ConversationManagerDelegate {
             trace(.callkit, "perform start current=true", id)
             Self.configureAudioSession()
             startActivationTimer(id)
-            start.fulfill(dateStarted: .now)
+            call?.pendingStart = start
             #if targetEnvironment(simulator)
             activateAudioByHand()
             #endif
@@ -1137,7 +1064,7 @@ extension CallController: ConversationManagerDelegate {
             try AudioManager.shared.setEngineAvailability(.init(isInputAvailable: true, isOutputAvailable: !paused))
         }
         call?.isPaused = paused
-        if let room = call?.room { updateSetup(in: room) }
+        refresh()
         if paused { call?.connectingTone?.stop() }
         Self.silenceMixer(paused || isMuted)
     }
@@ -1162,8 +1089,8 @@ extension CallController: ConversationManagerDelegate {
 
     #if targetEnvironment(simulator)
     /// The Simulator's callservicesd cannot activate an app's audio session from outside the app (it logs "Error
-    /// setting audio active to true" with OSStatus -50), so `didActivate` never comes there. Once the start action is
-    /// fulfilled the app activates the session itself, where iOS would, and the rest of the call runs as on a phone.
+    /// setting audio active to true" with OSStatus -50), so `didActivate` never comes there. During outgoing setup
+    /// the app activates the session itself, where iOS would, and the rest of the call runs as on a phone.
     private func activateAudioByHand() {
         do { try AVAudioSession.sharedInstance().setActive(true) } catch {
             return trace(.callkit, "simulator audio activation failed \(CallLog.describe(error))", level: .error)
@@ -1225,17 +1152,14 @@ extension CallController: RoomDelegate {
         }
     }
 
+    #if DEBUG
     nonisolated func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         guard participant.isAgent, let track = publication.track as? RemoteAudioTrack else { return }
-        if publication.name == ListeningCuePlayback.trackName {
-            Task { @MainActor in observeCue(track, in: room) }
-        }
-        #if DEBUG
         let sid = publication.sid.stringValue
         if ProcessInfo.processInfo.environment["HEYDAN_AUDIO_METER"] == "1" { track.add(audioRenderer: AudioMeter.track) }
         Task { @MainActor in if room === call?.room { trace(.room, "agent audio subscribed sid=\(sid)") } }
-        #endif
     }
+    #endif
 
     nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
         let who = "sid=\(participant.sid?.stringValue ?? "-") agent=\(participant.isAgent)"

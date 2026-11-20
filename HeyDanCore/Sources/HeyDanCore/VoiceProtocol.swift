@@ -11,6 +11,7 @@ public enum CallFailure: Error, Equatable, Sendable {
     /// CallKit never activated the call's audio session.
     case audioNotStarted
     case malformedGrant
+    case agentNotListening
     case micUnpublished
     case microphoneDenied
     case noAgent
@@ -36,6 +37,7 @@ public enum CallFailure: Error, Equatable, Sendable {
         case .setupFailed: "The call could not start. Try again."
         case .audioNotStarted: "The phone did not start the call's audio. Try again."
         case .malformedGrant: "The host answered with something this app does not understand."
+        case .agentNotListening: "The voice service joined but did not start listening. Try again."
         case .micUnpublished: "The microphone could not connect to the call. Try again."
         case .microphoneDenied: "Microphone access is off. Turn it on in Settings > Hey Dan."
         case .noAgent: "The voice service did not answer the call."

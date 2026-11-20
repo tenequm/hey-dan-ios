@@ -158,93 +158,39 @@ private final class FixtureBundle {}
         XCTAssertEqual(end.state, .complete)
     }
 
-    func testListeningWaitsForCueAndPublishedMicInEitherOrder() {
-        var earlyCue = CallController.CallReadiness()
-        earlyCue.cue = .listeningCue
-        XCTAssertNil(earlyCue.playableCue)
-        earlyCue.micPublished = true
-        XCTAssertEqual(earlyCue.playableCue, .listeningCue)
-
-        var earlyMic = CallController.CallReadiness()
-        earlyMic.micPublished = true
-        XCTAssertNil(earlyMic.playableCue)
-        earlyMic.cue = .listeningCue
-        XCTAssertEqual(earlyMic.playableCue, .listeningCue)
+    func testJoiningRequiresConnectedRoomPublishedMicAndListeningWorker() throws {
+        let names = try XCTUnwrap(VoiceProtocol.Names(version: 6))
+        let listening = [VoiceProtocol.agentStateAttribute: "listening"]
+        for connected in [false, true] {
+            for published in [false, true] {
+                XCTAssertEqual(CallController.readyToJoin(connected: connected, published: published, attributes: listening, names: names),
+                               connected && published)
+            }
+        }
+        for attributes in [[:], [VoiceProtocol.agentStateAttribute: "thinking"], [VoiceProtocol.agentStateAttribute: "speaking"],
+                           [VoiceProtocol.agentStateAttribute: "idle"], [VoiceProtocol.agentStateAttribute: "listening", names.thinkingAttribute: "1"]] {
+            XCTAssertFalse(CallController.readyToJoin(connected: true, published: true, attributes: attributes, names: names))
+        }
     }
 
-    func testMissingCueGetsTheFullGracePeriodAfterBothMediaAreReady() {
+    func testHoldPreservesSetupTimeAndTimeoutReportsTheMissingPrerequisite() {
         let start = ContinuousClock.now
-        for agentFirst in [true, false] {
-            var timer = CallController.SetupTimer()
-            XCTAssertNil(timer.update(agent: agentFirst, published: !agentFirst, paused: false, at: start))
-            let ready = start + .seconds(24)
-            XCTAssertNil(timer.update(agent: true, published: true, paused: false, at: ready))
-            XCTAssertNil(timer.update(agent: true, published: true, paused: false, at: ready + .seconds(5)))
-            XCTAssertEqual(timer.update(agent: true, published: true, paused: false, at: ready + .seconds(6)), .cueMissed)
-        }
-        let date = Date.now
-        let joined = CallController.ConnectionMilestone.cueMissed.transition(at: date)
-        XCTAssertEqual(joined.phase, .live(.listening))
-        XCTAssertEqual(joined.event, .conversationConnected(date))
-    }
-
-    func testHoldPreservesRemainingTimeAndSetupFailuresDistinguishAgentFromMic() {
-        let start = ContinuousClock.now
-        for (agent, mic, seconds, expiry) in [(false, true, 25, CallController.SetupTimer.Expiry.noAgent),
-                                              (true, false, 25, .micUnpublished), (true, true, 6, .cueMissed)] {
-            var timer = CallController.SetupTimer()
-            XCTAssertNil(timer.update(agent: agent, published: mic, paused: false, at: start))
-            XCTAssertNil(timer.update(agent: agent, published: mic, paused: true, at: start + .seconds(4)))
-            XCTAssertNil(timer.deadline)
-            let resume = start + .seconds(100)
-            XCTAssertNil(timer.update(agent: agent, published: mic, paused: false, at: resume))
-            XCTAssertEqual(timer.deadline, resume + .seconds(seconds - 4))
-            XCTAssertEqual(timer.update(agent: agent, published: mic, paused: false, at: resume + .seconds(seconds - 4)), expiry)
-        }
-        XCTAssertEqual(CallTarget.EndReason.micUnpublished.rawValue, "mic-unpublished")
-    }
-
-    func testListeningCueReportsListeningAndSystemJoined() throws {
-        let date = Date(timeIntervalSince1970: 10)
-        let joining = CallController.ConnectionMilestone.joining.transition(at: date)
-        XCTAssertEqual(joining.phase, .joining)
-        XCTAssertEqual(joining.event, .conversationStartedConnecting(date))
-
-        let events = Mutex<[CallController.ConnectionMilestone]>([])
-        let playback = ListeningCuePlayback { event in events.withLock { $0.append(event) } }
-        for activity in [VoiceProtocol.AgentActivity.listening, .thinking, .speaking] {
-            XCTAssertNil(CallController.ConnectionMilestone.joining.workerUpdate(activity))
-        }
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
-        func render(_ hz: Double, milliseconds: Int, to renderer: ListeningCueRenderer) throws {
-            let frames = AVAudioFrameCount(milliseconds * 48)
-            let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
-            pcm.frameLength = frames
-            let samples = try XCTUnwrap(pcm.floatChannelData?[0])
-            for i in 0 ..< Int(frames) { samples[i] = Float(0.15 * sin(2 * .pi * hz * Double(i) / 48_000)) }
-            renderer.render(pcmBuffer: pcm)
-        }
-
-        for renderer in [playback.output, playback.track] {
-            try render(0, milliseconds: 100, to: renderer)
-            try render(784, milliseconds: 90, to: renderer)
-            try render(523, milliseconds: 140, to: renderer) // Discard shares the opening note.
-            try render(1175, milliseconds: 80, to: renderer)
-            try render(1568, milliseconds: 110, to: renderer)
-            try render(784, milliseconds: 110, to: renderer)
-        }
-        XCTAssertTrue(events.withLock { $0.isEmpty })
-        try render(1175, milliseconds: 10, to: playback.track)
-        XCTAssertTrue(events.withLock { $0.isEmpty }, "Decoded audio has yet to play.")
-        try render(1175, milliseconds: 10, to: playback.output)
-        let event = try XCTUnwrap(events.withLock { $0.first }).transition(at: date)
-        XCTAssertEqual(event.phase, .live(.listening))
-        XCTAssertEqual(event.event, .conversationConnected(date))
-        for renderer in [playback.track, playback.output] {
-            try render(784, milliseconds: 110, to: renderer)
-            try render(1175, milliseconds: 130, to: renderer)
-        }
-        XCTAssertEqual(events.withLock { $0.count }, 1)
+        var timer = CallController.SetupTimer()
+        timer.update(agent: false, paused: false, at: start)
+        XCTAssertEqual(timer.deadline, start + .seconds(25))
+        XCTAssertEqual(timer.failure(agentPresent: false, published: true).0, .noAgent)
+        XCTAssertEqual(timer.failure(agentPresent: false, published: true).1, .noAgent)
+        timer.update(agent: true, paused: true, at: start + .seconds(4))
+        XCTAssertNil(timer.deadline)
+        let resume = start + .seconds(100)
+        timer.update(agent: true, paused: false, at: resume)
+        XCTAssertEqual(timer.deadline, resume + .seconds(21))
+        XCTAssertEqual(timer.failure(agentPresent: true, published: false).0, .micUnpublished)
+        XCTAssertEqual(timer.failure(agentPresent: true, published: false).1?.rawValue, "mic-unpublished")
+        XCTAssertEqual(timer.failure(agentPresent: true, published: true).0, .agentNotListening)
+        XCTAssertEqual(timer.failure(agentPresent: true, published: true).1?.rawValue, "agent-not-listening")
+        XCTAssertEqual(timer.failure(agentPresent: false, published: true).0, .pairedTransport)
+        XCTAssertNil(timer.failure(agentPresent: false, published: true).1)
     }
 
     func testCallSetupLabelsAndBundledTone() throws {
