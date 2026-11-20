@@ -98,6 +98,32 @@ struct SettingsTests {
         #expect(WorkerReply(payload: "") == nil)
     }
 
+    @Test func listenModeUsesTheWorkersEchoAndMarkers() throws {
+        #expect(VoiceProtocol.commandsVersions.isSuperset(of: ["2", "3", "4"]))
+        let old = try #require(WorkerReply(payload: #"{"gen":1,"ok":true,"seq":0}"#))
+        #expect(old.listenUntilOver == nil)
+        let reply = try #require(WorkerReply(payload:
+            #"{"gen":2,"ok":true,"seq":0,"listenUntilOver":false,"overWords":["прийом","зулу","овер"]}"#))
+        #expect(reply.listenUntilOver == false)
+        #expect(reply.overWords == ["прийом", "зулу", "овер"])
+        for enabled in [true, false] {
+            let payload = SettingsRequest(gen: 3, picks: .defaults, listenUntilOver: enabled).payload
+            #expect(payload.contains("\"listenUntilOver\":\(enabled)"))
+        }
+    }
+
+    @Test func rememberedListenModePreservesEarlierCallPreferences() throws {
+        let legacy = Data(#"{"wake":false,"pauseSends":true,"typing":false}"#.utf8)
+        var picks = try JSONDecoder().decode(SettingsPicks.self, from: legacy)
+        #expect(!picks.wake && picks.pauseSends && !picks.typing)
+        #expect(picks.listenUntilOver == nil)
+        for enabled in [true, false] {
+            picks.listenUntilOver = enabled
+            let stored = try JSONEncoder().encode(picks)
+            #expect(try JSONDecoder().decode(SettingsPicks.self, from: stored) == picks)
+        }
+    }
+
     @Test func onlyTheCallsFirstSettingsSendIsCutShort() {
         #expect(VoiceProtocol.settingsAckTimeout(send: 1) == VoiceProtocol.firstSettingsAckTimeout)
         #expect(VoiceProtocol.firstSettingsAckTimeout < VoiceProtocol.rpcAckTimeout)

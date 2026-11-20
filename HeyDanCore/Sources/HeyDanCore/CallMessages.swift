@@ -76,7 +76,8 @@ public extension VoiceProtocol {
     /// A `Names.commandsAttribute` value this app knows; any other value (or none) is a vocabulary it does not, so it offers
     /// no commands. "2" and "3" are the same words (the ones the worker announces); "3" was bumped so an already-open
     /// older browser page stops quoting "send it". This is the vocabulary's version, not the protocol's.
-    static let commandsVersions: Set<String> = ["2", "3"]
+    static let listenUntilOverVersion = "4"
+    static let commandsVersions: Set<String> = ["2", "3", listenUntilOverVersion]
 
     static let rpcTimeout: TimeInterval = 10
     /// LiveKit's own wait for an RPC's ack (`maxRoundTripLatency`): an RPC whose ack comes later fails, though the
@@ -366,8 +367,10 @@ public struct SettingsRequest: Encodable, Sendable, Equatable {
     public let pauseSends: Bool
     public let cues: Bool
     public let typing: Bool
+    public let listenUntilOver: Bool?
 
-    public init(gen: Int, picks: SettingsPicks, cues: Bool = true) {
+    public init(gen: Int, picks: SettingsPicks, cues: Bool = true, listenUntilOver: Bool? = nil) {
+        self.listenUntilOver = listenUntilOver
         self.gen = gen
         wake = picks.wake
         pauseSends = picks.pauseSends
@@ -392,6 +395,9 @@ public struct WorkerReply: Decodable, Sendable, Equatable {
     public let seq: Int
     public let error: String?
 
+    public let listenUntilOver: Bool?
+    public let overWords: [String]?
+
     /// Nil when the payload is not a reply.
     public init?(payload: String) {
         guard let reply = try? JSONDecoder().decode(Self.self, from: Data(payload.utf8)) else { return nil }
@@ -404,6 +410,9 @@ public struct SettingsPicks: Codable, Sendable, Equatable {
     public var wake: Bool
     public var pauseSends: Bool
     public var typing: Bool
+
+    /// Absent in preferences saved before the worker supported this mode.
+    public var listenUntilOver: Bool?
 
     /// A caller with nothing remembered, and what a worker runs before it is told: wake switch and typing on.
     public static let defaults = SettingsPicks(wake: true, pauseSends: false, typing: true)
@@ -427,6 +436,10 @@ public struct CommandSettings: Sendable, Equatable {
     public var phrase: String?
     public var cues: Bool
     public var typing: Bool
+
+    /// Only an echo from a supporting worker makes this switch available.
+    public var listenUntilOver: Bool?
+    public var overWords: [String] = []
 
     public init(picks: SettingsPicks, cues: Bool = true) {
         wake = picks.wake
