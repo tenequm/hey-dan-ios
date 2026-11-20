@@ -50,15 +50,27 @@ jobs:
         id: compiler
         run: |
           xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')
+          echo "xcode=xcode-$xcode-$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
           echo "prefix=xcode-$xcode-$RUNNER_ARCH-$GITHUB_JOB" >> "$GITHUB_OUTPUT"
           cat > "$RUNNER_TEMP/compile-cache.xcconfig" <<'EOF'
           COMPILATION_CACHE_ENABLE_CACHING = YES
           COMPILATION_CACHE_KEEP_CAS_DIRECTORY = YES
           EOF
           echo "XCODE_XCCONFIG_FILE=$RUNNER_TEMP/compile-cache.xcconfig" >> "$GITHUB_ENV"
+      # Packages only, never Products: a stale checkout cannot make a build pass, a stale binary could.
+      - &package-cache
+        name: Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/SourcePackages
+          key: ${{ steps.compiler.outputs.xcode }}-packages-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ steps.compiler.outputs.xcode }}-packages-
+      # Pull requests only read it, so each PR commit does not add a several-hundred-MB entry.
       - &compile-cache
         name: Restore compilation cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: compile-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/CompilationCache.noindex
           key: ${{ steps.compiler.outputs.prefix }}-${{ hashFiles('project.yml', 'Config.xcconfig', '**/Package.resolved', 'HeyDanCore/Package.swift', 'justfile', 'scripts/sim_tests.py', '**/*.swift') }}
@@ -67,10 +79,36 @@ jobs:
       - run: just build
       - name: Beta variant build
         run: xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -destination 'generic/platform=iOS' -derivedDataPath build -xcconfig Beta.xcconfig CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build
+      - &compile-cache-save
+        if: github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/CompilationCache.noindex
+          key: ${{ steps.compile-cache.outputs.cache-primary-key }}
 
-  # Builds the Simulator test products once; the shards below only install and run them.
+  app-tests:
+    name: App tests
+    runs-on: xcode-27
+    timeout-minutes: 25
+    env:
+      # No CLI grants notification permission on a Simulator that never ran the app (AGENTS.md); this test needs it.
+      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+    steps:
+      - *checkout
+      - uses: ./.github/actions/setup
+        with:
+          simulator: true
+      - *cache-config
+      - *package-cache
+      - *compile-cache
+      - run: just app-test
+      - *compile-cache-save
+
+  # The UI checks run on pull requests and by hand, not again on the push to main. One job builds the Simulator test
+  # products; each shard only installs and runs them.
   sim-build:
     name: Simulator build
+    if: github.event_name != 'push'
     runs-on: xcode-27
     timeout-minutes: 20
     steps:
@@ -79,63 +117,56 @@ jobs:
         with:
           simulator: true
       - *cache-config
+      - *package-cache
       - *compile-cache
       - run: python3 scripts/sim_tests.py build "Hey Dan iPhone" build com.example.HeyDan
       # tar keeps the modification times the reuse check compares against the key file.
       - run: tar -cf "$RUNNER_TEMP/sim-products.tar" build/Build/Products build/HeyDanSimulatorTests.key
-      # The cache hands the products over in seconds; an artifact of the same 80 MB took 3 to 7 minutes to download.
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          name: sim-products
           path: ${{ runner.temp }}/sim-products.tar
-          key: sim-products-${{ github.run_id }}-${{ github.run_attempt }}
+          compression-level: 1
+          retention-days: 1
+      - *compile-cache-save
 
-  sim-tests:
+  ui-checks:
     name: ${{ matrix.name }}
     needs: sim-build
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
+      # Three shards: with App tests beside them that is the account's cap of five macOS jobs.
+      # Every HeyDanChecks class is in one shard or in CI_SKIPPED (scripts/sim-e2e-test.py checks it). Not here:
+      # ChatPushChecks needs notification permission, which no CLI grants on a Simulator that never ran the app, and
+      # a real bundle ID. ChatChecks runs whole: its stack and pairing tests skip themselves without secrets.
       matrix:
         include:
-          - name: App tests
-            mode: app-test
-          - name: UI checks (calls)
-            mode: sim-checks
-            checks: ChatCallChecks
-          - name: UI checks (voices, pairing)
-            mode: sim-checks
-            checks: PairedVoiceChecks ChatPairingChecks
-          - name: UI checks (screens, threads)
-            mode: sim-checks
-            checks: ScreenCaptureChecks ChatThreadChecks
-          - name: UI checks (composer, settings, system)
-            mode: sim-checks
-            # ChatChecks' other tests need a local nanoclaw stack or a test pairing (secrets); ChatPushChecks needs
-            # notification permission, which no CLI grants on a Simulator that never ran the app, and a real bundle ID.
-            checks: ChatComposerChecks ChatAgentSettingsChecks HeyDanChecks ChatChecks/testFixtureUnreadRelaunch
+          - name: UI checks (calls, pairing)
+            checks: ChatCallChecks ChatPairingChecks
+          - name: UI checks (voices, screens, settings)
+            checks: PairedVoiceChecks ScreenCaptureChecks ChatAgentSettingsChecks
+          - name: UI checks (threads, composer, system)
+            checks: ChatThreadChecks ChatComposerChecks HeyDanChecks ChatChecks
     env:
       HEYDAN_PREBUILT: "1"
       HEYDAN_RETRY: "1"
-      # No CLI grants notification permission on a Simulator that never ran the app (AGENTS.md); this test needs it.
-      HEYDAN_SKIP_TESTS: HeyDanTests/MessageNotificationTests/communicationNotificationsAreEntitled()
+      # On the runner's Simulator the system photo picker shows no photo within this check's 10 s.
+      HEYDAN_SKIP_TESTS: HeyDanChecks/ChatComposerChecks/testPhotosPicker
     steps:
       - *checkout
       - uses: ./.github/actions/setup
         with:
           simulator: true
-      # Boots while the products download; nothing builds beside it in this job.
-      - run: |
-          udid=$(xcrun simctl list devices available -j | jq -r '.devices[][] | select(.name == "Hey Dan iPhone") | .udid')
-          xcrun simctl boot "$udid"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Hand over before anything boots: beside a booting Simulator the download stalled for 4 to 7 minutes.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: ${{ runner.temp }}/sim-products.tar
-          key: sim-products-${{ github.run_id }}-${{ github.run_attempt }}
-          fail-on-cache-miss: true
+          name: sim-products
+          path: ${{ runner.temp }}
       - run: tar -xpf "$RUNNER_TEMP/sim-products.tar"
-      - run: python3 scripts/sim_tests.py "${{ matrix.mode }}" "Hey Dan iPhone" build com.example.HeyDan "${{ matrix.checks }}"
-      - if: failure() && matrix.mode == 'sim-checks'
+      - run: python3 scripts/sim_tests.py sim-checks "Hey Dan iPhone" build com.example.HeyDan "${{ matrix.checks }}"
+      - if: (failure() || cancelled())
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: screenshots-${{ strategy.job-index }}

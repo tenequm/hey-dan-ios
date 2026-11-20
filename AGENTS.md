@@ -30,11 +30,14 @@ a workflow run `actionlint`; checkouts sync the agent skills in [kasetto.yaml](k
 
 - **Tier 0, every edit loop, no Simulator:** `just build`, `just test`.
 - **Tier 1, before a lane pushes:** only the UI check class or single test for the code it touched
-  (`just sim-checks ChatThreadChecks/testRichCardTable`), on one Simulator, deleted right after.
-- **Tier 2, once per integration or release candidate:** the full UI check set (CI's `sim-tests` shards run it on
-  every pull request) plus one live call, `just sim-call`, local only and with the test agent only.
+  (`just sim-checks ChatThreadChecks/testRichCardTable`), on one Simulator, shut down right after. Delete only a
+  Simulator the lane created under its own `HEYDAN_SIM`, never `Hey Dan iPhone`.
+- **Tier 2, once per integration or release candidate:** the fixture UI checks and `just app-test` (CI only: the
+  `ui-checks` shards and App tests run them on every pull request that touches code), plus what CI cannot run, locally:
+  `just sim-checks ChatPushChecks` (needs a real bundle ID in `Local.xcconfig`), `just sim-e2e` (the stack rows) and
+  one live call, `just sim-call`, with the test agent only.
 - **Machine rules:** at most one booted Simulator on the Mac at a time across all agents; review agents never build;
-  never run locally what CI already runs.
+  never run the full UI set or `just app-test` locally.
 
 ## How the app talks to the host
 

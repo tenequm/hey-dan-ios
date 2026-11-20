@@ -23,3 +23,4 @@ local.just
 # Agent skills that kasetto installs from kasetto.yaml.
 .claude/skills/
 .agents/skills/
+__pycache__/

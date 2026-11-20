@@ -7,10 +7,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # One of the paths the xcode-27 image lists (actions/runner-images, images/macos/xcode-27-arm64-Readme.md).
     - shell: bash
+      run: echo "DEVELOPER_DIR=/Applications/Xcode_27.2.app/Contents/Developer" >> "$GITHUB_ENV"
+    - id: tools
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/tools
+        # just and XcodeGen pins with their checksums; GNU timeout links only libSystem, so a copy works anywhere.
+        key: tools-${{ runner.os }}-${{ runner.arch }}-just-1.59.0-6574cea774ed-xcodegen-2.47.0-6ef12a3ef532-timeout-v1
+    - if: steps.tools.outputs.cache-hit != 'true'
+      shell: bash
       env:
-        # One of the paths the xcode-27 image lists (actions/runner-images, images/macos/xcode-27-arm64-Readme.md).
-        XCODE: /Applications/Xcode_27.2.app
         JUST_VERSION: 1.59.0
         JUST_SHA256: 6574cea774ed4cae12e24b6aa11857de33e80dab4667cf628fd5840df96a2a9d
         XCODEGEN_VERSION: 2.47.0
@@ -18,17 +26,20 @@ runs:
         HOMEBREW_NO_AUTO_UPDATE: 1
         HOMEBREW_NO_INSTALL_CLEANUP: 1
       run: |
-        echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
         mkdir -p "$RUNNER_TEMP/tools/bin" && cd "$RUNNER_TEMP/tools"
         curl -fsSL --retry 3 -o just.tar.gz "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-aarch64-apple-darwin.tar.gz"
         curl -fsSL --retry 3 -o xcodegen.zip "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
         printf '%s  %s\n' "$JUST_SHA256" just.tar.gz "$XCODEGEN_SHA256" xcodegen.zip | shasum -a 256 -c
         tar -xzf just.tar.gz -C bin just
         unzip -q xcodegen.zip
-        echo "$PWD/bin" >> "$GITHUB_PATH"
-        echo "$PWD/xcodegen/bin" >> "$GITHUB_PATH"
+        rm just.tar.gz xcodegen.zip
         # The image has no `timeout`; the Simulator scripts and two harness tests need it.
         brew install coreutils
+        cp "$(brew --prefix coreutils)/bin/gtimeout" bin/timeout
+    - shell: bash
+      run: |
+        echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+        echo "$RUNNER_TEMP/tools/xcodegen/bin" >> "$GITHUB_PATH"
     # One of the image's own Simulators: its first boot takes about 90 s, a created one's over 5 minutes. The
     # script boots it after the build, which takes two to three times as long beside a booted Simulator here.
     - if: inputs.simulator == 'true'

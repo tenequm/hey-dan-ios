@@ -141,7 +141,7 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             count = 1
             # Enumerating starts its own test session, which outran its 3-minute limit on a fresh CI Simulator; the app tests are
             # quick, so one test's allowance plus the startup margin covers them without it.
-            # CI skips it: its session outran the limit there too, and the job's own timeout bounds the run.
+            # CI skips it (it outran the limit there on whole classes too); the job's own timeout bounds the run.
             if os.environ.get('HEYDAN_PREBUILT') == '1':
                 count = 20
             elif mode != 'app-test' and selector.count('/') < 2:
@@ -153,27 +153,30 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 mark('enumerated')
             # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
             deadline = str(240 + TEST_SECONDS * (count + (os.environ.get('HEYDAN_RETRY') == '1')))
-            proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', deadline, *command,
-                                   '-resultBundlePath', result],
-                                  env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            # XCTest activity trees and assertion values can contain chat text or pairing links.
+            proc = subprocess.Popen(['timeout', '--foreground', '--kill-after=10', deadline, *command,
+                                     '-resultBundlePath', result],
+                                    env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            # XCTest activity trees and assertion values can contain chat text or pairing links. Lines print as they
+            # arrive, so a job killed by its timeout still shows which tests passed and which one hung.
             outcomes = {}
-            for line in proc.stdout.splitlines():
+            for line in proc.stdout:
+                line = line.rstrip('\n')
                 if case := re.match(r"^Test Case '-\[\S+ (\S+)\]' (passed|failed)", line):
                     outcomes.setdefault(case[1], set()).add(case[2])
                 if re.match(r"^(check:|Test Case '.*' (passed|failed|skipped)|\s*Executed \d+ tests?|.*Test run with \d+ tests|\*\* TEST)", line):
-                    print(line)
+                    print(line, flush=True)
                 elif 'error:' in line and os.environ.get('HEYDAN_PREBUILT') == '1':
                     # On a hosted runner the app shows only fixtures, so the assertion text is safe to print.
-                    print(re.sub(r'^.*/', '', line))
+                    print(re.sub(r'^\S*/', '', line), flush=True)
                 elif 'error:' in line:
                     print(re.search(r'[^ /]+\.swift:\d+: error:', line)[0] if re.search(r'[^ /]+\.swift:\d+: error:', line)
                           else 'xcodebuild reported an error')
+            proc.wait()
             mark('tested')
             flaky.extend(f'{selector}/{name}' for name, seen in outcomes.items() if seen == {'passed', 'failed'})
             if proc.returncode:
                 report(selector, result)
-            proc.check_returncode()
+                raise subprocess.CalledProcessError(proc.returncode, 'xcodebuild test-without-building')
             summary = json.loads(subprocess.check_output(['xcrun', 'xcresulttool', 'get', 'test-results',
                                                           'summary', '--path', result]))
             if mode == 'screens' and (summary['skippedTests'] or not summary['passedTests']):
@@ -240,6 +243,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                 failed.append(selector)
         if flaky:
             print('Flaky (failed, then passed on the rerun): ' + ', '.join(flaky), flush=True)
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                for name in flaky:
+                    print(f'::warning title=Flaky UI check::{name} failed, then passed on the rerun', flush=True)
             if os.environ.get('GITHUB_STEP_SUMMARY'):
                 with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
                     out.write('### Flaky\n\n' + ''.join(f'- `{name}` failed, then passed on the rerun\n' for name in flaky))
