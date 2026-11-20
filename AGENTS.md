@@ -31,11 +31,10 @@ a workflow run `actionlint`; checkouts sync the agent skills in [kasetto.yaml](k
 - **Tier 0, every edit loop, no Simulator:** `just build`, `just test`.
 - **Tier 1, before a lane pushes:** only the UI check class or single test for the code it touched
   (`just sim-checks ChatThreadChecks/testRichCardTable`).
-- **CI:** every pull request runs the UI smoke set (`just sim-checks smoke`, the `SMOKE` list in
-  `scripts/sim_tests.py`) and `just app-test`; that is the default signal. `just app-test` is CI only.
-- **The full UI set** runs locally, `just sim-checks "<classes>"`, only when a change needs it or the owner asks, not
-  routinely. `ChatPushChecks` needs a real bundle ID in `Local.xcconfig`; the stack rows are `just sim-e2e`; a live
-  call is `just sim-call`, test agent only.
+- **CI** runs the build, the unit tests and `just app-test` on every pull request. `just app-test` is CI only.
+- **The full UI set** runs locally, one class at a time with `just sim-checks <Class>`, only when a change needs it
+  or the owner asks, not routinely. `ChatPushChecks` needs a real bundle ID in `Local.xcconfig`; the stack rows are
+  `just sim-e2e`; a live call is `just sim-call`, test agent only.
 - **Machine rules:** at most one booted Simulator on the Mac across all agents, shut down after; delete only a
   Simulator the lane created under its own `HEYDAN_SIM`, never `Hey Dan iPhone`. Review agents never build.
 

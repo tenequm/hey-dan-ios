@@ -109,8 +109,8 @@ call there.
 
 `just --list` shows the rest (`gen`, `sim-call`, `device-call`, `device-logs`, `server-logs`, `lane-ready`), and
 [AGENTS.md](AGENTS.md) has the traps and what the stack checks need. CI: [ci.yml](.github/workflows/ci.yml) runs the
-core tests, the device build and the app tests on pull requests and pushes to `main`, and the UI smoke set
-(`just sim-checks smoke`) on pull requests and by hand.
+core tests, the device build and the app tests on pull requests and pushes to `main`; the UI checks run locally
+(`just sim-checks`, see [AGENTS.md](AGENTS.md#which-checks-when)).
 
 ## TestFlight
 

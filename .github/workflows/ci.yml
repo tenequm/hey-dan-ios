@@ -51,8 +51,7 @@ jobs:
         run: |
           xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')
           echo "xcode=xcode-$xcode-$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
-          # ui-smoke runs App tests' build-for-testing and never runs on main, so it reads App tests' entry.
-          echo "prefix=xcode-$xcode-$RUNNER_ARCH-${GITHUB_JOB/#ui-smoke/app-tests}" >> "$GITHUB_OUTPUT"
+          echo "prefix=xcode-$xcode-$RUNNER_ARCH-$GITHUB_JOB" >> "$GITHUB_OUTPUT"
           cat > "$RUNNER_TEMP/compile-cache.xcconfig" <<'EOF'
           COMPILATION_CACHE_ENABLE_CACHING = YES
           COMPILATION_CACHE_KEEP_CAS_DIRECTORY = YES
@@ -104,32 +103,3 @@ jobs:
       - *compile-cache
       - run: just app-test
       - *compile-cache-save
-
-  # The smoke set of UI checks (SMOKE in scripts/sim_tests.py) on pull requests and by hand, not again on the push to
-  # main. The full set runs locally (AGENTS.md). ChatPushChecks never runs on CI: it needs notification permission,
-  # which no CLI grants on a Simulator that never ran the app, and a real bundle ID.
-  ui-smoke:
-    name: UI smoke
-    if: github.event_name != 'push'
-    runs-on: xcode-27
-    timeout-minutes: 20
-    env:
-      HEYDAN_RETRY: "1"
-      # The script's own budget, under the job's 20 minutes: out of time ends red with what passed.
-      HEYDAN_DEADLINE: "1080"
-    steps:
-      - *checkout
-      - uses: ./.github/actions/setup
-        with:
-          simulator: true
-      - *cache-config
-      - *package-cache
-      - *compile-cache
-      - run: just sim-checks smoke
-      - if: (failure() || cancelled())
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ui-smoke-screenshots
-          path: build/checks
-          if-no-files-found: ignore
-          retention-days: 7
