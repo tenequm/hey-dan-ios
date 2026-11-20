@@ -27,6 +27,27 @@ final class ChatThreadChecks: XCTestCase {
         shot("thread-scroll-end")
     }
 
+    @MainActor func testFollowComposerResizing() {
+        let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "text-only"])
+        let conversation = app.buttons["chat.conversation.conv_taylor01"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 10))
+        conversation.tap()
+        let field = app.textFields["composer.text"]
+        let last = app.buttons["Continue"]
+        XCTAssertTrue(last.waitForExistence(timeout: 5))
+        let feed = app.scrollViews["chat.thread"]
+        let gap = feed.frame.maxY - last.frame.maxY
+        XCTAssertGreaterThan(gap, 0)
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(feed.frame.maxY - last.frame.maxY, gap, accuracy: 0.5)
+        let height = field.frame.height
+        field.typeText("Please summarize the changes in the latest backup and include the verification results for each document.")
+        XCTAssertGreaterThan(field.frame.height, height)
+        XCTAssertEqual(feed.frame.maxY - last.frame.maxY, gap, accuracy: 0.5)
+        XCTAssertFalse(app.buttons["chat.scrollToEnd"].exists)
+    }
+
     @MainActor func testFollowFixtureReplies() {
         let app = launchChat(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_THREAD": "text-only"])
         let conversation = app.buttons["chat.conversation.conv_taylor01"]
