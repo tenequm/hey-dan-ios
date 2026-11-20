@@ -13,6 +13,10 @@ import time
 
 
 TEST_SECONDS = 180
+# `smoke` (CI on every pull request): the quickest asserting check of each core path - launch and list, thread,
+# composer send, fixture call start, agent settings.
+SMOKE = ['ChatChecks/testFixtureUnreadRelaunch', 'ChatThreadChecks/testFixtureThread', 'ChatComposerChecks/testTextSend',
+         'ChatCallChecks/testFixtureCallAndPairingSettings', 'ChatAgentSettingsChecks/testSaveSettingsWhileWorking']
 START = time.monotonic()
 TEST_FLAGS = ['-collect-test-diagnostics', 'never', '-enableCodeCoverage', 'NO',
               '-parallel-testing-enabled', 'NO', '-test-timeouts-enabled', 'YES',
@@ -124,50 +128,108 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
         started = time.monotonic()
         runner = env.copy()
 
+        flaky = []
+
         def test(selector):
-            result = Path(results) / (selector.replace('/', '-') + '.xcresult')
+            # A selector may be several, space-separated: one xcodebuild session costs 100 s on a CI runner.
+            # A long joined name exceeds the 255-byte file name limit (xcodebuild exits 73 after the tests pass).
+            name = selector.replace('/', '-') if ' ' not in selector else f'session-{len(selector.split())}-checks'
+            result = Path(results) / (name + '.xcresult')
             command = ['xcodebuild', 'test-without-building', '-xctestrun', manifest, '-destination', destination,
-                       *TEST_FLAGS, '-only-testing:' + selector,
+                       *TEST_FLAGS, *('-only-testing:' + one for one in selector.split()),
+                       # CI reruns a failed test once (HEYDAN_RETRY=1) and names it as flaky when the rerun passes.
+                       *(['-retry-tests-on-failure', '-test-iterations', '2'] if os.environ.get('HEYDAN_RETRY') == '1' else []),
                        # CI names what a Simulator that never ran the app cannot pass.
                        *('-skip-testing:' + skip for skip in os.environ.get('HEYDAN_SKIP_TESTS', '').split())]
             count = 1
             # Enumerating starts its own test session, which outran its 3-minute limit on a fresh CI Simulator; the app tests are
             # quick, so one test's allowance plus the startup margin covers them without it.
-            if mode != 'app-test' and selector.count('/') < 2:
-                inventory = Path(results) / 'tests.txt'
+            if ' ' in selector:
+                count = sum(1 if one.count('/') > 1 else 20 for one in selector.split())
+            elif mode != 'app-test' and selector.count('/') < 2:
+                inventory = Path(results) / (selector.replace('/', '-') + '.txt')
                 subprocess.run(['timeout', '180', *command, '-enumerate-tests', '-test-enumeration-style', 'flat',
                                 '-test-enumeration-format', 'text', '-test-enumeration-output-path', inventory],
                                check=True, env=runner, stdout=subprocess.DEVNULL)
                 count = max(1, selected_tests(inventory.read_text(), selector))
                 mark('enumerated')
             # XCTest enforces each method's limit. The process watchdog also allows for Simulator startup and teardown.
-            deadline = str(240 + TEST_SECONDS * count)
-            proc = subprocess.run(['timeout', '--foreground', '--kill-after=10', deadline, *command,
-                                   '-resultBundlePath', result],
-                                  env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            # XCTest activity trees and assertion values can contain chat text or pairing links.
-            for line in proc.stdout.splitlines():
+            deadline = 240 + TEST_SECONDS * (count + (os.environ.get('HEYDAN_RETRY') == '1'))
+            # CI's budget for the whole script (HEYDAN_DEADLINE, seconds), so a run out of time ends red with a
+            # summary instead of being cancelled by the job timeout.
+            if budget := os.environ.get('HEYDAN_DEADLINE'):
+                deadline = min(deadline, int(int(budget) - (time.monotonic() - START)))
+            deadline = str(max(deadline, 1))
+            proc = subprocess.Popen(['timeout', '--foreground', '--kill-after=10', deadline, *command,
+                                     '-resultBundlePath', result],
+                                    env=runner, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            # XCTest activity trees and assertion values can contain chat text or pairing links. Lines print as they
+            # arrive, so a job killed by its timeout still shows which tests passed and which one hung.
+            outcomes = {}
+            running = None
+            for line in proc.stdout:
+                line = line.rstrip('\n')
+                if case := re.match(r"^Test Case '-\[(\S+) (\S+)\]' started", line):
+                    running = f'{case[1]}/{case[2]}'
+                elif re.match(r"^Test Case '.*' (passed|failed|skipped)", line):
+                    running = None
+                if case := re.match(r"^Test Case '-\[(\S+) (\S+)\]' (passed|failed)", line):
+                    outcomes.setdefault(f'{case[1]}/{case[2]}', set()).add(case[3])
                 if re.match(r"^(check:|Test Case '.*' (passed|failed|skipped)|\s*Executed \d+ tests?|.*Test run with \d+ tests|\*\* TEST)", line):
-                    print(line)
+                    print(line, flush=True)
+                elif 'error:' in line and os.environ.get('GITHUB_ACTIONS') == 'true':
+                    # On a hosted runner the app shows only fixtures, so the assertion text is safe to print.
+                    print(re.sub(r'^\S*/', '', line), flush=True)
                 elif 'error:' in line:
                     print(re.search(r'[^ /]+\.swift:\d+: error:', line)[0] if re.search(r'[^ /]+\.swift:\d+: error:', line)
                           else 'xcodebuild reported an error')
+            proc.wait()
             mark('tested')
-            proc.check_returncode()
+            flaky.extend(name for name, seen in outcomes.items() if seen == {'passed', 'failed'})
+            if proc.returncode == 124:
+                passed = sorted(name for name, seen in outcomes.items() if 'passed' in seen)
+                note = (f'Out of time in {selector}: {len(passed)} passed, '
+                        f'{"running " + running if running else "between tests"} when the watchdog fired')
+                print(f'::error title=UI checks out of time::{note}', flush=True)
+                if os.environ.get('GITHUB_STEP_SUMMARY'):
+                    with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+                        out.write(f'### {note}\n\n' + ''.join(f'- `{name}` passed\n' for name in passed) + '\n')
+                raise RuntimeError(note)
+            elif proc.returncode:
+                report(selector, result)
+                raise subprocess.CalledProcessError(proc.returncode, 'xcodebuild test-without-building')
             summary = json.loads(subprocess.check_output(['xcrun', 'xcresulttool', 'get', 'test-results',
                                                           'summary', '--path', result]))
             if mode == 'screens' and (summary['skippedTests'] or not summary['passedTests']):
                 raise RuntimeError('Incomplete screen checks')
+            # A renamed or skipped smoke check must not pass silently.
+            if check == 'smoke' and summary.get('passedTests') != len(SMOKE):
+                raise RuntimeError(f'{summary.get("passedTests", 0)} of {len(SMOKE)} smoke checks passed')
             if not summary['totalTestCount']:
                 raise RuntimeError(f'No tests ran for {selector}')
             # A skipped test counts in the total and exits 0: a run in which nothing passed proves nothing.
             if not summary.get('passedTests'):
                 raise RuntimeError(f'No test passed for {selector} ({summary.get("skippedTests", 0)} skipped)')
 
+        def report(selector, result):
+            # CI only: on a hosted runner the messages come from fixtures, never from a pairing or a host.
+            summary = os.environ.get('GITHUB_STEP_SUMMARY')
+            if not summary or not Path(result).exists():
+                return
+            failures = json.loads(subprocess.check_output(['xcrun', 'xcresulttool', 'get', 'test-results', 'summary',
+                                                           '--path', result])).get('testFailures', [])
+            with open(summary, 'a') as out:
+                out.write(f'### Failed in {selector}\n\n')
+                for failure in failures:
+                    text = failure.get('failureText', '').replace('\n', ' ')
+                    out.write(f"- `{failure.get('testIdentifierString') or failure.get('testName')}`: {text}\n")
+                out.write('\n' if failures else 'No test failure recorded (a timeout or a crash): see the log.\n\n')
+
         subprocess.run([*sim, 'install', udid, build / 'Build/Products/Debug-iphonesimulator/HeyDan.app'], check=True)
         mark('installed')
-        selector = 'HeyDanTests' if mode == 'app-test' else ui_selector(check)
-        if 'Push' in selector and bundle == 'com.example.HeyDan':
+        checks = SMOKE if check == 'smoke' else (check or '').split()
+        selectors = ['HeyDanTests'] if mode == 'app-test' else [ui_selector(c) for c in checks]
+        if any('Push' in selector for selector in selectors) and bundle == 'com.example.HeyDan':
             raise RuntimeError('Simulator push checks need HEYDAN_BUNDLE_ID in Local.xcconfig')
         if mode == 'sim-checks':
             subprocess.run([*sim, 'privacy', udid, 'grant', 'microphone', bundle], check=True)
@@ -178,23 +240,48 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             runner.update({'TEST_RUNNER_' + k: v for k, v in os.environ.items()
                            if k.startswith('HEYDAN_') and k not in withheld and not k.endswith('_CMD')})
             runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(out)
-        if mode == 'screens' or selector.startswith('HeyDanChecks/ScreenCaptureChecks'):
-            runner['TEST_RUNNER_HEYDAN_SCREENS'] = '1'
-            if capture_dir:
-                runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(capture_dir)
-            if mode == 'screens' or selector.endswith(('/testPairing', '/testVoiceLines', '/ScreenCaptureChecks')):
-                subprocess.run([*sim, 'keychain', udid, 'reset'], check=True)
-            appearance = [*sim, 'ui', udid, 'appearance']
-            original = subprocess.check_output(appearance, text=True).strip().split()[-1].lower()
+        failed = []
+        base = runner.copy()
+        if mode == 'sim-checks':
+            # One session for everything but the screen captures, which need their own environment: each session
+            # costs about 100 s on a CI runner.
+            screens = [one for one in selectors if one.startswith('HeyDanChecks/ScreenCaptureChecks')]
+            rest = [one for one in selectors if one not in screens]
+            selectors = [' '.join(rest)] * bool(rest) + screens
+        # Every selector runs even after one fails, so a CI run reports all its failures at once.
+        for selector in selectors:
+            runner.clear()
+            runner.update(base)
             try:
-                subprocess.run([*appearance, 'dark'], check=True)
-                test(selector)
-            finally:
-                subprocess.run([*appearance, original], check=True)
-                print(f'Build: {build_seconds:.1f}s; capture: {time.monotonic() - started:.1f}s', flush=True)
-        else:
-            test(selector)
-
+                if mode == 'screens' or selector.startswith('HeyDanChecks/ScreenCaptureChecks'):
+                    runner['TEST_RUNNER_HEYDAN_SCREENS'] = '1'
+                    if capture_dir:
+                        runner['TEST_RUNNER_HEYDAN_CHECKS_OUT'] = str(capture_dir)
+                    if mode == 'screens' or selector.endswith(('/testPairing', '/testVoiceLines', '/ScreenCaptureChecks')):
+                        subprocess.run([*sim, 'keychain', udid, 'reset'], check=True)
+                    appearance = [*sim, 'ui', udid, 'appearance']
+                    original = subprocess.check_output(appearance, text=True).strip().split()[-1].lower()
+                    try:
+                        subprocess.run([*appearance, 'dark'], check=True)
+                        test(selector)
+                    finally:
+                        subprocess.run([*appearance, original], check=True)
+                        print(f'Build: {build_seconds:.1f}s; capture: {time.monotonic() - started:.1f}s', flush=True)
+                else:
+                    test(selector)
+            except (RuntimeError, subprocess.CalledProcessError) as error:
+                print(f'{selector}: {error}', file=sys.stderr, flush=True)
+                failed.append(selector)
+        if flaky:
+            print('Flaky (failed, then passed on the rerun): ' + ', '.join(flaky), flush=True)
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                for name in flaky:
+                    print(f'::warning title=Flaky UI check::{name} failed, then passed on the rerun', flush=True)
+            if os.environ.get('GITHUB_STEP_SUMMARY'):
+                with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+                    out.write('### Flaky\n\n' + ''.join(f'- `{name}` failed, then passed on the rerun\n' for name in flaky))
+        if failed:
+            raise RuntimeError('Failed: ' + ' '.join(failed))
 
 if __name__ == '__main__':
     try:
