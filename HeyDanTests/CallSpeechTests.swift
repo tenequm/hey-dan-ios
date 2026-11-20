@@ -4,6 +4,42 @@ import XCTest
 @testable import HeyDan
 
 @MainActor final class CallSpeechTests: XCTestCase {
+    func testOnlyPairedHostsAdvertisingCallsAreEligibleForSpeech() throws {
+        let account = "test-call-speech-" + UUID().uuidString
+        defer { try? IdentityKeychain.remove(account: account) }
+        let pairings = Pairings(account: account, publishes: false)
+        pairings.loadIfNeeded()
+        XCTAssertTrue(pairings.callEntries.isEmpty)
+        let host = FixtureAppService.host
+        try pairings.add(FixtureAppService.pairing, host: host, features: ["voice-picker"])
+        XCTAssertTrue(pairings.callEntries.isEmpty)
+        pairings.refreshFeatures(["calls"], host: host)
+        XCTAssertEqual(pairings.callEntries.map(\.host), [host])
+        pairings.refreshFeatures([], host: host)
+        XCTAssertTrue(pairings.callEntries.isEmpty)
+    }
+
+    func testUnsupportedCallLanguageDoesNotTryPhoneLanguage() async {
+        var candidates: [Locale] = []
+        let resolved = await CallSpeech.supportedLocale(language: "uk") { candidate in
+            candidates.append(candidate)
+            return nil
+        }
+        XCTAssertNil(resolved)
+        XCTAssertEqual(candidates, [Locale(identifier: "uk")])
+
+        let phone = await CallSpeech.supportedLocale(language: nil) { $0 }
+        XCTAssertEqual(phone, Locale.preferredLanguages.first.map(Locale.init(identifier:)) ?? .current)
+    }
+
+    func testOnlyNumericRepresentableSpeechTimesBecomeMilliseconds() {
+        XCTAssertNil(CallSpeech.milliseconds(at: .invalid))
+        XCTAssertNil(CallSpeech.milliseconds(at: .indefinite))
+        XCTAssertNil(CallSpeech.milliseconds(at: .positiveInfinity))
+        XCTAssertNil(CallSpeech.milliseconds(at: CMTime(value: .max, timescale: 1)))
+        XCTAssertEqual(CallSpeech.milliseconds(at: CMTime(value: 3, timescale: 2)), 1500)
+    }
+
     func testBackchannelsAndConfidence() {
         for ack in ["Uh-huh.", "OK!", "угу", "АГА", "так", "ну", "да", "ugu", "aga", "tak", "nu", "da", "uh huh"] {
             XCTAssertFalse(CallerWord(text: ack, startMs: 0, confidence: 1).interrupts, ack)
