@@ -138,7 +138,9 @@ import XCTest
         XCTAssertTrue(app.buttons["Stop sample: Roger"].waitForExistence(timeout: 5))
         let bundle = String(Bundle(for: Self.self).bundleIdentifier!.dropLast(".Checks".count))
         let definitions = IntentDefinitions(bundleIdentifier: bundle)
-        let agents = try await definitions.entities["VoiceLineEntity"].entities(identifiers: [UUID(uuidString: "00000000-0000-0000-0000-000000000000")!])
+        let agents = try await withRegisteredIntentMetadata {
+            try await definitions.entities["VoiceLineEntity"].entities(identifiers: [UUID(uuidString: "00000000-0000-0000-0000-000000000000")!])
+        }
         try await definitions.intents["CallLineIntent"].makeIntent(destination: XCTUnwrap(agents.first),
             audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio")).run()
         XCTAssertTrue(app.buttons["Stop sample: Roger"].waitForNonExistence(timeout: 5))

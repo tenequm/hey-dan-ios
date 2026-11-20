@@ -185,9 +185,13 @@ final class ChatChecks: XCTestCase {
         let bundle = String(Bundle(for: ChatChecks.self).bundleIdentifier!.dropLast(".Checks".count))
         let definitions = IntentDefinitions(bundleIdentifier: bundle)
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-        let matches = try await definitions.entities["VoiceLineEntity"].entities(identifiers: [id])
+        let matches = try await withRegisteredIntentMetadata {
+            try await definitions.entities["VoiceLineEntity"].entities(identifiers: [id])
+        }
         let agent = try XCTUnwrap(matches.first)
-        let suggestions = try await definitions.entities["VoiceLineEntity"].suggestedEntities()
+        let suggestions = try await withRegisteredIntentMetadata {
+            try await definitions.entities["VoiceLineEntity"].suggestedEntities()
+        }
         XCTAssertTrue(suggestions.contains(agent))
         let intent = definitions.intents["CallLineIntent"].makeIntent(
             destination: agent, audioVisualMode: definitions.enums["CallAVMode"].makeCase("audio"))

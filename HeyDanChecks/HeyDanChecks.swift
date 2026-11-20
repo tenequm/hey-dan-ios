@@ -55,18 +55,10 @@ final class HeyDanChecks: XCTestCase {
         let definitions = IntentDefinitions(bundleIdentifier: Self.appID)
         let agents = definitions.entities["VoiceLineEntity"]
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-        let deadline = ContinuousClock.now + .seconds(15)
-        // After simctl install the app can already be open while iOS still registers its intent metadata.
-        let defaults = try await {
-            while true {
-                do { return try await agents.entities(identifiers: [id]) }
-                catch let error as NSError where error.domain == "AppIntentsServicesMetadataErrorDomain"
-                        && error.code == 400 && ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(250))
-                }
-            }
-        }()
-        let suggested = try await agents.suggestedEntities()
+        let defaults = try await withRegisteredIntentMetadata { try await agents.entities(identifiers: [id]) }
+        let suggested = try await withRegisteredIntentMetadata {
+            try await agents.suggestedEntities()
+        }
         XCTAssertTrue(suggested.contains(try XCTUnwrap(defaults.first)))
         XCTAssertGreaterThan(suggested.count, 1)
     }
@@ -91,6 +83,18 @@ extension XCUIApplication {
 }
 
 extension XCTestCase {
+    // On a fresh install the app can launch before iOS registers its intent metadata.
+    @MainActor func withRegisteredIntentMetadata<T>(_ read: @MainActor () async throws -> T) async throws -> T {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while true {
+            do { return try await read() }
+            catch let error as NSError where error.domain == "AppIntentsServicesMetadataErrorDomain"
+                    && error.code == 400 && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
     /// The fixture host lists push, so the notification prompt can cover the list on a fresh Simulator.
     @MainActor func launchChat(_ environment: [String: String]) -> XCUIApplication {
         let app = XCUIApplication()

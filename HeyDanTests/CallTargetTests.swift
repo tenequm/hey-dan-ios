@@ -2,6 +2,9 @@ import AVFAudio
 import CryptoKit
 import Foundation
 import HeyDanCore
+import class LiveCommunicationKit.EndConversationAction
+import class LiveCommunicationKit.MuteConversationAction
+import Intents
 import XCTest
 import Security
 import Synchronization
@@ -31,6 +34,32 @@ private final class FixtureBundle {}
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent, agent]), expected: agent.name))
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: "Other"))
         XCTAssertThrowsError(try IntentCall.testAgent(in: entry([agent]), expected: nil))
+    }
+
+    func testRedialAlertsOnlyForFailuresBeforeAThreadCallStarts() {
+        XCTAssertNotNil(IntentCall.unavailableAgent.redialAlert)
+        let failed = IntentCall.notStarted(.failure(.noAgent), false)
+        XCTAssertNil(failed.redialAlert)
+        XCTAssertEqual(failed.message, CallFailure.noAgent.message)
+    }
+
+    func testRecentsUsesOnlyOneConcreteAgentHandle() {
+        let host = URL(string: "https://example.invalid")!
+        let target = PairedCallTarget(host: host, deviceId: "fixture", conversation: conversation)
+        func intent(_ handles: [String]) -> INStartCallIntent {
+            let people = handles.map {
+                INPerson(personHandle: INPersonHandle(value: $0, type: .unknown), nameComponents: nil,
+                    displayName: conversation.agent.name, image: nil, contactIdentifier: nil, customIdentifier: nil)
+            }
+            return INStartCallIntent(callRecordFilter: nil, callRecordToCallBack: nil, audioRoute: .unknown,
+                destinationType: .redial, contacts: people, callCapability: .audioCall)
+        }
+        XCTAssertEqual(IntentCall.redialAgent(in: intent([target.agentHandle.uuidString])),
+                       PairedAgentID.make(host: host, agentId: conversation.agent.id))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([conversation.agent.name])))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([AgentEntity.defaultID.uuidString])))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([target.agentHandle.uuidString, UUID().uuidString])))
+        XCTAssertNil(IntentCall.redialAgent(in: intent([])))
     }
 
     func testLegacyCleanupDeletesBackupsAndPreservesUnrelatedAccounts() {
@@ -106,6 +135,81 @@ private final class FixtureBundle {}
             transcript.caption(segment: "two", text: "Again", isFinal: false, fromCaller: true, at: .now)
             XCTAssertNil(transcript.deliveryMarker)
         }
+    }
+
+    #if targetEnvironment(simulator)
+    func testEndTearsDownTheCallWhileMuteWorkIsPending() async throws {
+        let previous = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"]
+        setenv("HEYDAN_FIXTURE_LIVE_CALL", "1", 1)
+        defer {
+            if let previous { setenv("HEYDAN_FIXTURE_LIVE_CALL", previous, 1) }
+            else { unsetenv("HEYDAN_FIXTURE_LIVE_CALL") }
+        }
+        let controller = CallController.shared
+        let target = CallTarget(paired: .init(host: FixtureAppService.host, deviceId: "dev_fixture",
+                                               conversation: conversation), service: FixtureAppService())
+        let started = await controller.start(target: target)
+        let id = try XCTUnwrap(started)
+        controller.perform(MuteConversationAction(conversationUUID: id, isMuted: true))
+        XCTAssertTrue(controller.isMuted)
+        controller.perform(EndConversationAction(conversationUUID: id))
+        XCTAssertFalse(controller.isCurrent(id))
+        XCTAssertFalse(controller.isMuted)
+    }
+    #endif
+
+    func testManagerCallbacksRunInDeliveryOrder() async {
+        let controller = CallController.shared
+        var order: [Int] = []
+        controller.enqueue { _ in order.append(1) }
+        controller.enqueue { _ in order.append(2) }
+        await withCheckedContinuation { done in controller.enqueue { _ in done.resume() } }
+        XCTAssertEqual(order, [1, 2])
+    }
+
+    func testEndIsFulfilledBeforeCheckingForTheCurrentConversation() {
+        let end = EndConversationAction(conversationUUID: UUID())
+        var fulfilled: [UUID] = []
+        CallController.shared.perform(end) { action in
+            fulfilled.append(action.conversationUUID)
+            action.fulfill(dateEnded: .now)
+        }
+        XCTAssertEqual(fulfilled, [end.conversationUUID])
+    }
+
+    func testJoiningRequiresConnectedRoomPublishedMicAndListeningWorker() throws {
+        let names = try XCTUnwrap(VoiceProtocol.Names(version: 6))
+        let listening = [VoiceProtocol.agentStateAttribute: "listening"]
+        for connected in [false, true] {
+            for published in [false, true] {
+                XCTAssertEqual(CallController.readyToJoin(connected: connected, published: published, attributes: listening, names: names),
+                               connected && published)
+            }
+        }
+        for attributes in [[:], [VoiceProtocol.agentStateAttribute: "thinking"], [VoiceProtocol.agentStateAttribute: "speaking"],
+                           [VoiceProtocol.agentStateAttribute: "idle"], [VoiceProtocol.agentStateAttribute: "listening", names.thinkingAttribute: "1"]] {
+            XCTAssertFalse(CallController.readyToJoin(connected: true, published: true, attributes: attributes, names: names))
+        }
+    }
+
+    func testHoldPreservesSetupTimeAndTimeoutReportsTheMissingPrerequisite() {
+        let start = ContinuousClock.now
+        var timer = CallController.SetupTimer()
+        timer.update(agent: false, paused: false, at: start)
+        XCTAssertEqual(timer.deadline, start + .seconds(25))
+        XCTAssertEqual(timer.failure(agentPresent: false, published: true).0, .noAgent)
+        XCTAssertEqual(timer.failure(agentPresent: false, published: true).1, .noAgent)
+        timer.update(agent: true, paused: true, at: start + .seconds(4))
+        XCTAssertNil(timer.deadline)
+        let resume = start + .seconds(100)
+        timer.update(agent: true, paused: false, at: resume)
+        XCTAssertEqual(timer.deadline, resume + .seconds(21))
+        XCTAssertEqual(timer.failure(agentPresent: true, published: false).0, .micUnpublished)
+        XCTAssertEqual(timer.failure(agentPresent: true, published: false).1?.rawValue, "mic-unpublished")
+        XCTAssertEqual(timer.failure(agentPresent: true, published: true).0, .agentNotListening)
+        XCTAssertEqual(timer.failure(agentPresent: true, published: true).1?.rawValue, "agent-not-listening")
+        XCTAssertEqual(timer.failure(agentPresent: false, published: true).0, .pairedTransport)
+        XCTAssertNil(timer.failure(agentPresent: false, published: true).1)
     }
 
     func testCallSetupLabelsAndBundledTone() throws {

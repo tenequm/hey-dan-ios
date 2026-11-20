@@ -16,7 +16,7 @@ settings:
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
-    from: 2.17.0
+    exactVersion: 2.19.0
   MarkdownView:
     path: Vendor/MarkdownView
   HeyDanCore:
@@ -84,7 +84,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
-        NSUserActivityTypes: [INSendMessageIntent]
+        NSUserActivityTypes: [INSendMessageIntent, INStartCallIntent]
         UIAppFonts:
           - DMSans/DMSans-Regular.ttf
           - DMSans/DMSans-Medium.ttf
