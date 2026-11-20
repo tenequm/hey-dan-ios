@@ -30,6 +30,9 @@ actor FixtureAppService: AppService {
             }
         } else { previewOutbox = [] }
         switch scenario {
+        case "call-stream":
+            messages.append(Message(kind: .message, id: "msg_stream", conversationId: conversation.id, order: 6, seq: 6,
+                role: .agent, text: "The backup finished.", files: [], reactions: [], createdAt: 0))
         case "message-menus":
             messages = [Message(kind: .message, id: "msg_5", conversationId: "conv_taylor01", order: 6, seq: 6,
                 role: .user, text: "Example", files: [], reactions: [], delivery: .reached, createdAt: 0)]
@@ -212,6 +215,14 @@ actor FixtureAppService: AppService {
         if scenario == "history", query.before != nil { try? await Task.sleep(for: .seconds(15)) }
         return HistoryPage(items: items, hasMoreBefore: scenario == "history" && query.before == nil, hasMoreAfter: false)
     }
+    func extendStreamedReply(_ text: String) throws(AppError) {
+        guard let index = messages.firstIndex(where: { $0.id == "msg_stream" }) else { return }
+        sequence += 1
+        messages[index].seq = sequence
+        messages[index].text += "\n\n" + text
+        try publish(event(.message, messages[index], id: sequence))
+    }
+
     func send(conversationId: String, request: SendRequest) async throws(AppError) -> SendResponse {
         if let existing = messages.first(where: { $0.clientId == request.clientId }) { return SendResponse(message: existing) }
         sequence += 1

@@ -54,6 +54,21 @@ private struct UserBubble: ViewModifier {
     }
 }
 
+private struct OutgoingWidth: ViewModifier {
+    @Environment(\.theme) private var theme
+    var outgoing: Bool
+
+    func body(content: Content) -> some View {
+        if outgoing {
+            content.containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in
+                (width - 2 * theme.space.s4) * 0.85
+            }
+        } else {
+            content
+        }
+    }
+}
+
 extension Transcript {
     func liveCaptions(in rows: [ThreadRow], after orders: [Int: Int64]) -> [Line] {
         let live = liveLineIDs
@@ -115,7 +130,7 @@ private struct LiveCaptionRow: View {
         Group {
             if speaker == .caller {
                 Text(text).modifier(UserBubble())
-                    .padding(.leading, theme.space.s10)
+                    .modifier(OutgoingWidth(outgoing: true))
                     .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 VStack(alignment: .leading, spacing: theme.space.s1_5) {
@@ -160,9 +175,52 @@ private struct CompactRow: View {
     }
 }
 
+private struct MessageFooter: View {
+    @Environment(\.theme) private var theme
+    let text: String
+    let id: String
+    let date: Date?
+    let outgoing: Bool
+
+    var body: some View {
+        HStack(spacing: theme.space.s1) {
+            if !outgoing { copyButton }
+            if let date { Text(timestamp(date)) }
+            if outgoing { copyButton }
+        }
+        .textRole(theme.type.label, theme.weight.medium)
+        .foregroundStyle(theme.color.textSecondary)
+    }
+
+    private func timestamp(_ date: Date) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return time }
+        let style = Date.FormatStyle().month(.defaultDigits).day()
+        let sameYear = calendar.isDate(date, equalTo: .now, toGranularity: .year)
+        return "\(date.formatted(sameYear ? style : style.year())) \(time)"
+    }
+
+    @ViewBuilder private var copyButton: some View {
+        if !text.isEmpty {
+            Button {
+                UIPasteboard.general.string = text
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy")
+            .accessibilityIdentifier("chat.copy.\(id)")
+        }
+    }
+}
+
 struct MessageRow: View {
     @Environment(\.theme) private var theme
     let message: Message
+    var showsFooter = true
     var compacted = false
     var outboxState: Outbox.State?
     var retry: (String) -> Void = { _ in }
@@ -190,7 +248,7 @@ struct MessageRow: View {
             }
         } else if message.role == .user || message.role == .agent || message.role == .host {
             let outgoing = message.role == .user
-            VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1_5) {
+            VStack(alignment: outgoing ? .trailing : .leading, spacing: theme.space.s1) {
                 if outgoing {
                     if !message.text.isEmpty {
                         Text(message.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(message.text)
@@ -199,7 +257,6 @@ struct MessageRow: View {
                     RichCard(card: card)
                         .messageMenu(message.text)
                         .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier(AXID.card(message.id))
                 } else if !message.text.isEmpty {
                     MessageBody(text: message.text, offersMessageActions: true)
                 }
@@ -211,37 +268,42 @@ struct MessageRow: View {
                         AttachmentView(file: file)
                     }
                 }
-                HStack(spacing: theme.space.s2) {
-                    if message.voice == .caller || message.voice == .spoken {
-                        Label("Spoken", systemImage: message.voice == .caller ? "mic" : "speaker.wave.2")
-                    }
-                    ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
-                        Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
-                    }
-                    if message.editedAt != nil { Text("Edited") }
-                    if !outgoing {
-                        Text(Date(timeIntervalSince1970: Double(message.createdAt) / 1000), style: .time)
-                        if !message.text.isEmpty {
-                            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
-                                .labelStyle(.iconOnly)
-                                .accessibilityIdentifier("chat.copy.\(message.id)")
+                if message.voice == .caller || message.voice == .spoken || !message.reactions.isEmpty || message.editedAt != nil {
+                    HStack(spacing: theme.space.s2) {
+                        if message.voice == .caller || message.voice == .spoken {
+                            Label("Spoken", systemImage: message.voice == .caller ? "mic" : "speaker.wave.2")
                         }
+                        ForEach(Array(message.reactions.enumerated()), id: \.offset) { _, reaction in
+                            Text(reaction.emoji).accessibilityLabel("\(reaction.emoji), \(reaction.by.rawValue)")
+                        }
+                        if message.editedAt != nil { Text("Edited") }
                     }
+                    .textRole(theme.type.caption).foregroundStyle(theme.color.textTertiary)
                 }
-                .textRole(theme.type.caption).foregroundStyle(theme.color.textTertiary)
+                if outgoing || message.role == .host || showsFooter {
+                    MessageFooter(text: message.text, id: message.id,
+                                  date: Date(timeIntervalSince1970: Double(message.createdAt) / 1000), outgoing: outgoing)
+                }
                 if outgoing { delivery }
             }
             .textRole(theme.type.body)
             .foregroundStyle(theme.color.textPrimary)
-            .padding(.leading, outgoing ? theme.space.s10 : 0)
+            .modifier(OutgoingWidth(outgoing: outgoing))
+            .padding(.horizontal, message.role == .agent ? theme.space.s1 : 0)
             .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
-            .accessibilityElement(children: !outgoing || message.files.contains(where: { $0.kind == .audio }) ? .contain : .combine)
-            .accessibilityLabel(message.text, isEnabled: !outgoing && !message.text.isEmpty)
-            .accessibilityIdentifier(AXID.message(message.id))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(rowLabel, isEnabled: !rowLabel.isEmpty)
+            .accessibilityIdentifier(visibleCard == nil ? AXID.message(message.id) : AXID.card(message.id))
             .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
                 Button("Send again") { if let id = message.clientId { retry(id) } }
             }
         }
+    }
+
+    private var rowLabel: String {
+        guard message.role == .user else { return message.text }
+        return ([message.text] + message.files.map(\.name) + [message.delivery?.rawValue.capitalized ?? ""])
+            .filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     @ViewBuilder private var delivery: some View {
@@ -249,7 +311,7 @@ struct MessageRow: View {
             Text(outboxState.label).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
         } else if let state = message.delivery {
             switch state {
-            case .stored, .routed, .reached:
+            case .stored, .routed:
                 Text(state.rawValue.capitalized).textRole(theme.type.caption).foregroundStyle(theme.color.textSecondary)
             case .failed, .outcomeUnknown:
                 if let error = message.deliveryError { Text(error.message).foregroundStyle(theme.color.danger) }
@@ -265,7 +327,7 @@ struct MessageRow: View {
                         }
                     }
                 }
-            case .unknown: EmptyView()
+            case .reached, .unknown: EmptyView()
             }
         }
     }
@@ -345,7 +407,7 @@ struct OutboxRow: View {
 
     var body: some View {
         let isCompact = entry.request.text == "/compact" && entry.attachments.isEmpty
-        VStack(alignment: isCompact ? .center : .trailing, spacing: theme.space.s1_5) {
+        VStack(alignment: isCompact ? .center : .trailing, spacing: theme.space.s1) {
             if isCompact { CompactRow() }
             else if !entry.request.text.isEmpty {
                 Text(entry.request.text).textSelection(.enabled).modifier(UserBubble()).messageMenu(entry.request.text)
@@ -356,6 +418,9 @@ struct OutboxRow: View {
                 } else {
                     Text(attachment.name)
                 }
+            }
+            if !isCompact {
+                MessageFooter(text: entry.request.text, id: entry.request.clientId, date: entry.createdAt, outgoing: true)
             }
             if let error = entry.lastServerError { Text(error.message).foregroundStyle(theme.color.danger) }
             HStack(spacing: theme.space.s1) {
@@ -380,9 +445,9 @@ struct OutboxRow: View {
         }
         .textRole(theme.type.body).foregroundStyle(theme.color.textPrimary)
         .tint(theme.color.accentText)
-        .padding(.leading, isCompact ? 0 : theme.space.s10)
+        .modifier(OutgoingWidth(outgoing: !isCompact))
         .frame(maxWidth: .infinity, alignment: isCompact ? .center : .trailing)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.outbox.\(entry.request.clientId)")
         .confirmationDialog("Send again? It may already have been received.", isPresented: $confirmsRetry, titleVisibility: .visible) {
             Button("Send again") { retry(entry.request.clientId) }

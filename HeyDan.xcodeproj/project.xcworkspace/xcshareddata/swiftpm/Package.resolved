@@ -47,15 +47,6 @@
       }
     },
     {
-      "identity" : "markdownview",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/MarkdownView",
-      "state" : {
-        "revision" : "3941f1857005d648f452fd1bfbdbe01d37961fd2",
-        "version" : "4.8.5"
-      }
-    },
-    {
       "identity" : "swift-cmark",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-cmark",

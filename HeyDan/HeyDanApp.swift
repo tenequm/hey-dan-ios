@@ -11,11 +11,16 @@ import ObjectiveC.runtime
 import SwiftUI
 import Security
 
+private let appDisplayName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Hey Dan"
+
 @main
 struct HeyDanApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
     @State private var pairedHost: Pairings.Entry?
+    #if HEYDAN_BETA
+    @State private var pendingPairLink: URL?
+    #endif
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #if DEBUG
     private let uiTest = ProcessInfo.processInfo.environment["HEYDAN_UITEST"] == "1"
@@ -92,6 +97,13 @@ struct HeyDanApp: App {
                         if CallController.shared.openActiveConversation() { pairedHost = nil }
                     }
                 }
+                #if HEYDAN_BETA
+                .onOpenURL { url in
+                    guard !CallController.shared.isCallActive, let link = PairingLink.betaDestination(url) else { return }
+                    pairedHost = nil
+                    pendingPairLink = link
+                }
+                #endif
                 .sensoryFeedback(trigger: CallController.shared.phase) { old, new in
                     Self.callFeedback(from: old, to: new, liveSince: CallController.shared.liveSince)
                 }
@@ -124,6 +136,21 @@ struct HeyDanApp: App {
     #endif
 
     @ViewBuilder private var root: some View {
+        #if HEYDAN_BETA
+        if let pendingPairLink {
+            PairingView(link: pendingPairLink.absoluteString, cancel: { self.pendingPairLink = nil })
+                .id(pendingPairLink)
+                .environment(\.pairingConfirmation, Binding(get: { pairedHost }, set: { paired in
+                    pairedHost = paired
+                    self.pendingPairLink = nil
+                }))
+        } else { home }
+        #else
+        home
+        #endif
+    }
+
+    @ViewBuilder private var home: some View {
         if let pairedHost {
             PairingView(paired: pairedHost)
         } else if showsPairingForChecks {
@@ -564,8 +591,13 @@ private enum AudioFeed {
 /// The backup to Call agent: it always opens Hey Dan (after Face ID on a locked phone) and starts the call there. A
 /// plain intent's start from the background fails CallKit's user-intent check, and one from the app in front passes.
 struct StartConversationIntent: AppIntent {
+    #if HEYDAN_BETA
+    static let title: LocalizedStringResource = "Start conversation (beta)"
+    static let description = IntentDescription("Opens Hey Dan (beta) and calls a NanoClaw agent in its chat.")
+    #else
     static let title: LocalizedStringResource = "Start conversation"
     static let description = IntentDescription("Opens Hey Dan and calls a NanoClaw agent in its chat.")
+    #endif
     static let supportedModes: IntentModes = .foreground(.immediate)
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
@@ -588,6 +620,9 @@ struct StartConversationIntent: AppIntent {
 /// which it does not for a plain intent. The shortcut saves the agent and the call type (Audio), not Ask Each Time.
 @AppIntent(schema: .phone.startCall)
 struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
+    #if HEYDAN_BETA
+    static let title: LocalizedStringResource = "Call agent (beta)"
+    #endif
     static let supportedModes: IntentModes = [.background]
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
@@ -610,8 +645,8 @@ struct CallLineIntent: AudioRecordingIntent, LiveActivityIntent {
 /// Keep the intent alive until CallKit has started the call or the caller can be shown the failure.
 @MainActor
 enum IntentCall {
-    static let backgroundRefused = "iOS did not let Hey Dan start the call from the background. Use Start conversation, "
-        + "or open Hey Dan and call from there."
+    static let backgroundRefused = "iOS did not let \(appDisplayName) start the call from the background. Use Start conversation, "
+        + "or open \(appDisplayName) and call from there."
 
     struct CallNotStarted: Error, CustomLocalizedStringResourceConvertible {
         let message: String
@@ -671,7 +706,7 @@ enum IntentCall {
         #if DEBUG
         if IdentityKeychain.callTestRun != nil { preference = nil }
         #endif
-        guard !Pairings.shared.entries.isEmpty else { throw CallNotStarted(message: "Open Hey Dan and pair a host to call an agent.") }
+        guard !Pairings.shared.entries.isEmpty else { throw CallNotStarted(message: "Open \(appDisplayName) and pair a host to call an agent.") }
         func pick(_ id: UUID?) -> (Pairings.Entry, HeyDanCore.Agent)? {
             guard let id, id != AgentEntity.defaultID else { return nil }
             return entries.lazy.compactMap { entry in
@@ -737,7 +772,7 @@ struct VoiceLineEntity {
     static var defaultAgent: Self { Self(defaultFor: defaultID) }
 
     fileprivate init(defaultFor id: UUID) {
-        self.init(id: id, agent: "Default agent", source: "Hey Dan Settings")
+        self.init(id: id, agent: "Default agent", source: "\(appDisplayName) Settings")
     }
 
     let id: UUID
@@ -788,6 +823,25 @@ extension AgentEntity {
 
 struct HeyDanShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        #if HEYDAN_BETA
+        AppShortcut(
+            intent: StartConversationIntent(),
+            phrases: [
+                "Talk to \(.applicationName)",
+                "Start a conversation with \(.applicationName)",
+                "Call \(\.$line) with \(.applicationName)",
+                "Talk to \(\.$line) with \(.applicationName)",
+            ],
+            shortTitle: "Start conversation (beta)",
+            systemImageName: "waveform"
+        )
+        AppShortcut(
+            intent: CallLineIntent(),
+            phrases: ["Call an agent with \(.applicationName)"],
+            shortTitle: "Call agent (beta)",
+            systemImageName: "phone"
+        )
+        #else
         AppShortcut(
             intent: StartConversationIntent(),
             phrases: [
@@ -805,5 +859,6 @@ struct HeyDanShortcuts: AppShortcutsProvider {
             shortTitle: "Call agent",
             systemImageName: "phone"
         )
+        #endif
     }
 }

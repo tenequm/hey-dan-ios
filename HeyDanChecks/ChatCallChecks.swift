@@ -68,6 +68,71 @@ import XCTest
         XCTAssertTrue(row.waitForExistence(timeout: 5))
     }
 
+    private func openStreamingCall() -> (XCUIApplication, XCUIElement, URL) {
+        let step = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: step) }
+        let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1",
+                                    "HEYDAN_FIXTURE_THREAD": "call-stream", "HEYDAN_FIXTURE_STREAM_STEP": step.path])
+        return (app, call, step)
+    }
+
+    func testFollowStreamingCall() throws {
+        let (app, call, step) = openStreamingCall()
+        let feed = app.scrollViews["chat.thread"]
+        let start = feed.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
+        start.press(forDuration: 0, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 24)),
+                    withVelocity: XCUIGestureVelocity(rawValue: 60), thenHoldForDuration: 0.3)
+        XCTAssertTrue(app.buttons["chat.scrollToEnd"].exists)
+        call.tap()
+        let caption = app.descendants(matching: .any)["chat.call.caption"].firstMatch
+        let reply = app.descendants(matching: .any)["chat.message.msg_stream"].firstMatch
+        let bar = app.buttons["controls.mute"]
+        XCTAssertTrue(caption.waitForExistence(timeout: 5))
+        let gap = bar.frame.minY - caption.frame.maxY
+        XCTAssertGreaterThan(gap, 0)
+        XCTAssertLessThan(gap, 40)
+        let captionHeight = caption.frame.height
+        let left = reply.frame.minX
+        XCTAssertTrue(app.buttons["chat.scrollToEnd"].waitForNonExistence(timeout: 3))
+        var replyHeight = reply.frame.height
+        shot("call-follow-start")
+        for (state, capture) in [("Thinking", "middle"), ("Speaking", "end")] {
+            try state.write(to: step, atomically: true, encoding: .utf8)
+            XCTAssertTrue(app.staticTexts[state].waitForExistence(timeout: 15))
+            XCTAssertEqual(reply.frame.minX, left, accuracy: 0.5)
+            XCTAssertGreaterThan(reply.frame.height, replyHeight)
+            replyHeight = reply.frame.height
+            XCTAssertGreaterThan(caption.frame.height, captionHeight)
+            XCTAssertEqual(bar.frame.minY - caption.frame.maxY, gap, accuracy: 0.5)
+            XCTAssertFalse(app.buttons["chat.scrollToEnd"].exists)
+            shot("call-follow-" + capture)
+        }
+    }
+
+    func testReadHistoryDuringStreamingCall() throws {
+        let (app, call, step) = openStreamingCall()
+        call.tap()
+        let start = app.scrollViews["chat.thread"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 180)),
+                    withVelocity: .slow, thenHoldForDuration: 0.3)
+        let end = app.buttons["chat.scrollToEnd"]
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        let earlier = app.descendants(matching: .any)["chat.card.msg_card"].firstMatch
+        XCTAssertTrue(earlier.isHittable)
+        let y = earlier.frame.minY
+        shot("call-history-start")
+        for state in ["Thinking", "Speaking"] {
+            try state.write(to: step, atomically: true, encoding: .utf8)
+            XCTAssertTrue(app.staticTexts[state].waitForExistence(timeout: 15))
+            XCTAssertTrue(end.isHittable)
+            XCTAssertEqual(earlier.frame.minY, y, accuracy: 0.5)
+        }
+        shot("call-history-end")
+        end.tap()
+        XCTAssertTrue(end.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["chat.call.caption"].firstMatch.isHittable)
+    }
+
     func testCallStaysInThread() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"])
         let feed = app.scrollViews["chat.thread"]

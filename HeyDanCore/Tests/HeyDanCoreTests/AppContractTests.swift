@@ -69,6 +69,15 @@ private struct CheckFailure: Error { let label: String }
     for value in f.values { _ = try fixtureDecode(JSONValue.self, value) }
 }
 
+@Test func pushTokenRequestPreservesDeviceTopic() throws {
+    for topic in ["com.example.HeyDan", "com.example.HeyDan.beta"] {
+        let wire = ["token": "test-token", "environment": "production", "topic": topic]
+        let request = PushTokenRequest(token: "test-token", environment: "production", topic: topic)
+        let encoded = try JSONDecoder().decode([String: String].self, from: JSONEncoder().encode(request))
+        #expect(encoded == wire)
+    }
+}
+
 @Test func signingAndCrossLanguageSignature() throws {
     let f = try coreFixtures(), signing = f["signing"] as! [String: Any]
     let vectors = signing["vectors"] as! [[String: Any]]

@@ -254,9 +254,15 @@ final class CallController: NSObject {
         if fixtureCall {
             let view = FixtureContent.voice
             liveVoice = CallVoiceState(active: view.effective, activeDetails: view.details?.effective)
-            phase = .live(.speaking)
-            speech.showCaption("Check the backup.", at: 0, final: false)
-            editTranscript { $0.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now) }
+            if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"] == "call-stream",
+               let service = target.service as? FixtureAppService {
+                phase = .live(.listening)
+                Task { try? await streamFixtureCall(id, service: service) }
+            } else {
+                phase = .live(.speaking)
+                speech.showCaption("Check the backup.", at: 0, final: false)
+                editTranscript { $0.caption(segment: "sample", text: "Checking the backup.", isFinal: false, fromCaller: false, at: .now) }
+            }
             return id
         }
         #endif
@@ -298,6 +304,34 @@ final class CallController: NSObject {
     }
 
     #if DEBUG && targetEnvironment(simulator)
+    private func streamFixtureCall(_ id: UUID, service: FixtureAppService) async throws {
+        guard call?.id == id else { return }
+        var caption = "Which files changed"
+        editTranscript { $0.caption(segment: "caller", text: caption, isFinal: false, fromCaller: true, at: .now) }
+        try await waitForFixtureStep("Thinking", callID: id)
+        guard call?.id == id else { return }
+        caption += " since the previous backup, and did the new documents pass verification?"
+        editTranscript { $0.caption(segment: "caller", text: caption, isFinal: true, fromCaller: true, at: .now) }
+        try await service.extendStreamedReply("Three documents changed since the previous backup. I checked each copy against the original.")
+        guard call?.id == id else { return }
+        phase = .live(.thinking)
+        try await waitForFixtureStep("Speaking", callID: id)
+        guard call?.id == id else { return }
+        try await service.extendStreamedReply("All three matched. The archive contains the updated documents and the verification report.")
+        guard call?.id == id else { return }
+        phase = .live(.speaking)
+    }
+
+    private func waitForFixtureStep(_ step: String, callID: UUID) async throws {
+        guard let path = ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_STREAM_STEP"] else {
+            try await Task.sleep(for: .seconds(6))
+            return
+        }
+        while call?.id == callID, (try? String(contentsOfFile: path, encoding: .utf8)) != step {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     private var fixtureCall: Bool {
         call?.target.service is FixtureAppService && ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_LIVE_CALL"] == "1"
     }

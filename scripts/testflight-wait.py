@@ -44,8 +44,11 @@ def get(path, **params):
     return body
 
 
-def check_version(current, mode):
+def check_version(current, mode, bundle):
     try:
+        app = get(f"/apps/{APP}", **{"fields[apps]": "bundleId"})
+        if app["data"]["attributes"]["bundleId"] != bundle:
+            sys.exit("The configured App Store Connect record does not match the archived bundle ID")
         builds = get("/builds", **{"filter[app]": APP, "filter[preReleaseVersion.platform]": "IOS",
                                     "sort": "-uploadedDate", "limit": 1, "include": "preReleaseVersion",
                                     "fields[preReleaseVersions]": "version"})
@@ -63,7 +66,7 @@ def check_version(current, mode):
     components[-1] = str(int(components[-1]) + 1)
     next_version = ".".join(components)
     message = (f"MARKETING_VERSION {current} matches the latest TestFlight build. "
-               f"Set MARKETING_VERSION to {next_version} in project.yml or use 'just testflight upload same-version'.")
+               f"Set MARKETING_VERSION to {next_version} in project.yml or rerun this recipe with 'upload same-version'.")
     if mode not in ("dry", "same-version"):
         sys.exit(message)
     print(f"warning: {message}", file=sys.stderr)

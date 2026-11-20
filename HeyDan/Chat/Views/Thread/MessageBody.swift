@@ -6,17 +6,19 @@ struct MessageBody: View {
     var offersMessageActions = false
     @State private var sharing = false
     @Environment(\.theme) private var theme
+    @Environment(\.displayScale) private var displayScale
     @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
     var body: some View {
-        SelectableMarkdown(text: text, theme: markdownTheme, share: offersMessageActions ? { sharing = true } : nil)
+        let markdown = Self.markdownTheme(theme, scale: scale, displayScale: displayScale)
+        SelectableMarkdown(text: text, theme: markdown, share: offersMessageActions ? { sharing = true } : nil)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityLabel(text)
             .sheet(isPresented: $sharing) { ActivitySheet(item: text) }
     }
 
-    private var markdownTheme: MarkdownTheme {
+    static func markdownTheme(_ theme: Tokens, scale: CGFloat, displayScale: CGFloat) -> MarkdownTheme {
         var markdown = MarkdownTheme()
         let size = theme.type.body.size * scale
         let body = UIFont(name: theme.type.face(theme.weight.regular), size: size) ?? .systemFont(ofSize: size)
@@ -24,17 +26,22 @@ struct MessageBody: View {
         markdown.fonts.body = body
         markdown.fonts.bold = bold
         markdown.fonts.italic = UIFont(descriptor: body.fontDescriptor.withSymbolicTraits(.traitItalic) ?? body.fontDescriptor, size: size)
-        markdown.fonts.title = bold.withSize(theme.type.headline.size * scale)
+        markdown.fonts.title = bold
+        markdown.fonts.headingSizes = [21, 19, 17, 15, 15, 15].map { $0 * scale }
+        markdown.sizes.bodyLineHeight = theme.type.body.linePoints * scale
+        markdown.sizes.bullet = 6 * scale
+        markdown.sizes.hairline = 1 / displayScale
         markdown.fonts.largeTitle = bold.withSize(theme.type.title.size * scale)
         markdown.fonts.footnote = body.withSize(theme.type.footnote.size * scale)
-        markdown.fonts.code = UIFont(name: theme.type.face(theme.weight.regular, mono: true), size: theme.type.code.size * scale)
-            ?? .monospacedSystemFont(ofSize: theme.type.code.size * scale, weight: .regular)
+        markdown.fonts.code = UIFont(name: theme.type.face(theme.weight.regular, mono: true), size: size * 0.9)
+            ?? .monospacedSystemFont(ofSize: size * 0.9, weight: .regular)
         markdown.fonts.codeInline = markdown.fonts.code
         markdown.colors.body = UIColor(theme.color.textPrimary)
         markdown.colors.code = UIColor(theme.color.textPrimary)
-        markdown.colors.highlight = UIColor(theme.color.accentText)
+        markdown.colors.highlight = UIColor(theme.color.link)
         markdown.colors.emphasis = UIColor(theme.color.textPrimary)
-        markdown.colors.codeBackground = UIColor(theme.color.codeSurface)
+        markdown.colors.inlineCode = UIColor(theme.color.textSecondary)
+        markdown.colors.codeBlockBorder = UIColor(theme.color.border)
         markdown.colors.codeBlockBackground = UIColor(theme.color.codeSurface)
         markdown.colors.codeBlockBarBackground = UIColor(theme.color.codeSurface)
         markdown.table.headerBackgroundColor = UIColor(theme.color.surfaceCard)
@@ -44,10 +51,11 @@ struct MessageBody: View {
         markdown.syntax.string = UIColor(theme.color.syntaxString)
         markdown.syntax.number = UIColor(theme.color.syntaxNumber)
         markdown.syntax.type = UIColor(theme.color.syntaxType)
-        markdown.syntax.attribute = UIColor(theme.color.syntaxFunction)
+        markdown.syntax.attribute = UIColor(theme.color.syntaxNumber)
         markdown.syntax.meta = UIColor(theme.color.syntaxKeyword)
         markdown.syntax.variable = UIColor(theme.color.textPrimary)
         markdown.spacings.paragraph = theme.space.s2
+        markdown.spacings.list = 0
         markdown.spacings.headingBefore = theme.space.s2
         return markdown
     }

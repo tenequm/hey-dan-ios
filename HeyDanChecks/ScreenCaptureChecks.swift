@@ -87,7 +87,15 @@ import XCTest
             session.openThread(scenario)
             if scenario == "full" {
                 let thread = app.scrollViews["chat.thread"]
-                thread.swipeDown(velocity: .fast)
+                let first = app.descendants(matching: .any)["chat.message.msg_2"].firstMatch
+                let top = app.navigationBars.firstMatch.frame.maxY
+                for _ in 0..<5 {
+                    if first.exists, first.frame.minY >= top { break }
+                    thread.swipeDown(velocity: .fast)
+                }
+                XCTAssertTrue(first.exists && first.frame.minY >= top)
+                XCTAssertTrue(app.buttons["chat.copy.msg_2"].exists)
+                XCTAssertTrue(app.buttons["chat.copy.msg_3"].exists)
             }
             capture(name, showing: app.descendants(matching: .any)[id].firstMatch)
         }

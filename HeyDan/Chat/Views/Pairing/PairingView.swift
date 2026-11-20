@@ -10,10 +10,11 @@ struct PairingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isPresented) private var isPresented
     @Environment(\.pairingConfirmation) private var confirmation
-    @State private var link = ""
+    @State var link = ""
     @State private var working = false
     @State private var message: String?
     var paired: Pairings.Entry? = nil
+    var cancel: (() -> Void)?
 
     private var host: String? { PairingLink(link, allowsLocalNetworking: Pairings.allowsLocalNetworking)?.baseURL.host() }
     private var failure: String? { message ?? Pairings.shared.error?.message }
@@ -23,7 +24,9 @@ struct PairingView: View {
             ZStack {
                 Text(paired == nil ? "Pair a host" : "Paired").textRole(theme.type.headline, theme.weight.semibold)
                 HStack {
-                    if isPresented { GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() } }
+                    if let cancel {
+                        GlassIconButton(title: "Cancel", systemImage: "xmark", action: cancel).disabled(working)
+                    } else if isPresented { GlassIconButton(title: "Back", systemImage: "chevron.left") { dismiss() } }
                     Spacer()
                     if paired == nil {
                         GlassIconButton(title: "Confirm pairing", systemImage: "checkmark", action: submit)
