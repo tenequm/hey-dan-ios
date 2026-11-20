@@ -1,5 +1,5 @@
 {
-  "originHash" : "610f9fec15662fd13301c9c454aa987de510c9190e14fa530221e2a25f7e353a",
+  "originHash" : "7a4ce6d58ef3333545580ca2f87bf0b718d81253da65a320bf86c762ca3cd280",
   "pins" : [
     {
       "identity" : "client-sdk-swift",
@@ -44,15 +44,6 @@
       "state" : {
         "revision" : "f0570e943ea4445d258113ba73f50cb2b7e564ac",
         "version" : "1.3.0"
-      }
-    },
-    {
-      "identity" : "markdownview",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/MarkdownView",
-      "state" : {
-        "revision" : "3941f1857005d648f452fd1bfbdbe01d37961fd2",
-        "version" : "4.8.5"
       }
     },
     {

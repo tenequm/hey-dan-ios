@@ -48,6 +48,7 @@ public struct Outbox: Sendable {
     public struct Entry: Sendable, Equatable, Codable {
         public let host: URL
         public let conversationId: String
+        public let createdAt: Date?
         public let request: SendRequest
         public var state: State
         public var attachments: [Attachment]
@@ -58,6 +59,7 @@ public struct Outbox: Sendable {
         public init(host: URL, conversationId: String, request: SendRequest, state: State = .queued,
                     attachments: [Attachment] = [], attempts: Int = 0, nextAttemptAt: Date? = nil,
                     lastServerError: ErrorBody? = nil, serverSeq: Int64? = nil) {
+            createdAt = .now
             self.host = host; self.conversationId = conversationId; self.request = request; self.state = state
             self.attachments = attachments; self.attempts = attempts; self.nextAttemptAt = nextAttemptAt
             self.lastServerError = lastServerError; self.serverSeq = serverSeq
