@@ -5,6 +5,8 @@ struct PairedCallTarget: Sendable, Equatable {
     let host: URL
     let deviceId: String
     let conversation: Conversation
+
+    var agentHandle: UUID { PairedAgentID.make(host: host, agentId: conversation.agent.id) }
 }
 
 struct CallTarget {
@@ -55,6 +57,8 @@ struct CallTarget {
     }
 
     enum EndReason: String {
+        case agentNotListening = "agent-not-listening"
+        case micUnpublished = "mic-unpublished"
         case noAgent = "no-agent"
         case updating
     }
