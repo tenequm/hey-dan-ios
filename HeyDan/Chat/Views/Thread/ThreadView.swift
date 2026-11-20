@@ -29,65 +29,63 @@ struct ThreadView: View {
     var body: some View {
         let activeTarget = call.isCallActive ? callTarget : nil
         let attemptId = callTarget?.attemptId
-        ThreadContent(
-            rows: chat.rows,
-            agentName: conversation.agent.name,
-            compactedThrough: chat.compactedThrough[conversation.id],
-            status: activeTarget == nil ? chat.statuses[conversation.id] : nil,
-            showsCaptions: activeTarget != nil,
-            outboxStates: chat.outboxStates,
-            hasMoreBefore: chat.hasMoreBefore,
-            errorMessage: answerFailure?.message,
-            errorQuestionID: answerFailure?.questionID,
-            active: scenePhase == .active,
-            answer: { id, value in
-                answerFailure = nil
-                Task { answerFailure = await chat.answer(questionId: id, value: value).map { (id, $0) } }
-            },
-            retry: { id in Task { await chat.retry(clientId: id) } },
-            discard: { id in Task { await chat.discard(clientId: id) } },
-            markRead: { order in Task { await chat.markRead(order: order) } },
-            loadHistory: { await chat.loadHistory(before: $0) }
-        )
+        VStack(spacing: 0) {
+            ThreadContent(
+                rows: chat.rows,
+                agentName: conversation.agent.name,
+                compactedThrough: chat.compactedThrough[conversation.id],
+                status: activeTarget == nil ? chat.statuses[conversation.id] : nil,
+                showsCaptions: activeTarget != nil,
+                outboxStates: chat.outboxStates,
+                hasMoreBefore: chat.hasMoreBefore,
+                errorMessage: answerFailure?.message,
+                errorQuestionID: answerFailure?.questionID,
+                active: scenePhase == .active,
+                answer: { id, value in
+                    answerFailure = nil
+                    Task { answerFailure = await chat.answer(questionId: id, value: value).map { (id, $0) } }
+                },
+                retry: { id in Task { await chat.retry(clientId: id) } },
+                discard: { id in Task { await chat.discard(clientId: id) } },
+                markRead: { order in Task { await chat.markRead(order: order) } },
+                loadHistory: { await chat.loadHistory(before: $0) }
+            )
+            if let activeTarget {
+                ThreadCallBar(target: activeTarget)
+            } else if attemptId != nil, let ending = call.endingNotice, let target {
+                let failed = CallController.isFailure(ending, liveSince: call.liveSince)
+                HStack {
+                    Label(ending.message, systemImage: failed ? "exclamationmark.circle" : "phone.down")
+                    Spacer()
+                    Button("Call again") {
+                        Task { _ = await call.start(target: CallTarget(paired: target, service: chat.service)) }
+                    }
+                    .buttonStyle(CallStartButtonStyle())
+                    .foregroundStyle(theme.color.accent)
+                    .disabled(!live.canCall || !chat.features.contains("calls"))
+                }
+                .textRole(theme.type.footnote, theme.weight.medium)
+                .foregroundStyle(failed ? theme.color.danger : theme.color.textSecondary)
+                .padding(.vertical, theme.space.s3).padding(.horizontal, theme.space.s3_5)
+                .background(failed ? theme.color.dangerSurface : theme.color.surfaceCard, in: RoundedRectangle(cornerRadius: theme.radius.l))
+                .overlay { RoundedRectangle(cornerRadius: theme.radius.l).strokeBorder(failed ? theme.color.dangerBorder : theme.color.border).allowsHitTesting(false) }
+                .padding(.horizontal, theme.space.s3).padding(.bottom, theme.space.s1_5)
+            }
+            // Keep the draft and its staged files alive across a call.
+            ComposerView(features: chat.features, send: { text, attachments in
+                let sent = await chat.send(text: text, attachments: attachments)
+                if sent { call.dismissEndingNotice(attemptId: attemptId) }
+                return sent
+            }, failure: chat.sendFailure, isInCall: activeTarget != nil,
+               agentStatus: supportsStatus ? agentStatus : nil,
+               openSettings: { showsAgentSettings = true },
+               compact: { _ = await compact() })
+            .id(conversation.id)
+        }
         .sensoryFeedback(.error, trigger: chat.outbox.entries) { previous, current in
             current.contains { entry in
                 entry.conversationId == conversation.id && entry.state.canSendAgain &&
                     previous.contains { $0.request.clientId == entry.request.clientId && !$0.state.canSendAgain }
-            }
-        }
-        .safeAreaBar(edge: .bottom) {
-            VStack(spacing: 0) {
-                if let activeTarget {
-                    ThreadCallBar(target: activeTarget)
-                } else if attemptId != nil, let ending = call.endingNotice, let target {
-                    let failed = CallController.isFailure(ending, liveSince: call.liveSince)
-                    HStack {
-                        Label(ending.message, systemImage: failed ? "exclamationmark.circle" : "phone.down")
-                        Spacer()
-                        Button("Call again") {
-                            Task { _ = await call.start(target: CallTarget(paired: target, service: chat.service)) }
-                        }
-                        .buttonStyle(CallStartButtonStyle())
-                        .foregroundStyle(theme.color.accent)
-                        .disabled(!live.canCall || !chat.features.contains("calls"))
-                    }
-                    .textRole(theme.type.footnote, theme.weight.medium)
-                    .foregroundStyle(failed ? theme.color.danger : theme.color.textSecondary)
-                    .padding(.vertical, theme.space.s3).padding(.horizontal, theme.space.s3_5)
-                    .background(failed ? theme.color.dangerSurface : theme.color.surfaceCard, in: RoundedRectangle(cornerRadius: theme.radius.l))
-                    .overlay { RoundedRectangle(cornerRadius: theme.radius.l).strokeBorder(failed ? theme.color.dangerBorder : theme.color.border).allowsHitTesting(false) }
-                    .padding(.horizontal, theme.space.s3).padding(.bottom, theme.space.s1_5)
-                }
-                // Keep the draft and its staged files alive across a call.
-                ComposerView(features: chat.features, send: { text, attachments in
-                    let sent = await chat.send(text: text, attachments: attachments)
-                    if sent { call.dismissEndingNotice(attemptId: attemptId) }
-                    return sent
-                }, failure: chat.sendFailure, isInCall: activeTarget != nil,
-                   agentStatus: supportsStatus ? agentStatus : nil,
-                   openSettings: { showsAgentSettings = true },
-                   compact: { _ = await compact() })
-                .id(conversation.id)
             }
         }
         .safeAreaBar(edge: .top) {
@@ -228,9 +226,40 @@ struct ThreadContent: View {
     var discard: (String) -> Void = { _ in }
     var markRead: (Int64) -> Void = { _ in }
     var loadHistory: (Int64) async -> Void = { _ in }
-    @State private var visibleID: String?
-    @State private var atBottom = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var position = ScrollPosition(idType: String.self, edge: .bottom)
+    @State private var followsEnd = true
+    @State private var geometry = FeedGeometry()
     @State private var loadingHistory = false
+
+    private static let controlSize: CGFloat = 38.5
+    private static let controlSpacing: CGFloat = 14
+    private var showsScrollButton: Bool { position.edge != .bottom && !geometry.atEnd }
+    private var workingStatus: Status? {
+        status.flatMap { $0.state == .working || $0.state == .waiting ? $0 : nil }
+    }
+
+    private struct FeedGeometry: Equatable {
+        struct Layout: Equatable {
+            var contentHeight: CGFloat = 0
+            var viewportHeight: CGFloat = 0
+        }
+
+        var layout = Layout()
+        var atEnd = true
+        var withinReadRange = false
+        var withinFollowRange = true
+
+        init() {}
+
+        init(_ geometry: ScrollGeometry) {
+            layout = Layout(contentHeight: geometry.contentSize.height, viewportHeight: geometry.visibleRect.height)
+            let distance = geometry.contentSize.height - geometry.visibleRect.maxY
+            atEnd = distance <= 1
+            withinReadRange = distance <= 16
+            withinFollowRange = distance <= max(1, layout.viewportHeight * 0.1)
+        }
+    }
 
     private var entities: [ThreadEntity] { rows.compactMap { if case .entity(let entity) = $0 { return entity }; return nil } }
     private var firstOrder: Int64? { entities.compactMap(\.order).min() }
@@ -270,28 +299,75 @@ struct ThreadContent: View {
                     .id(row.presentationID)
                 }
                 if showsCaptions { LiveCaptionRows(rows: rows) }
-                if let status { StatusPill(status: status, style: .capsule) }
             }
             .scrollTargetLayout()
-            .padding(.horizontal, theme.space.s4)
             .padding(.top, theme.space.s3)
+            .padding(.bottom, workingStatus == nil ? 0 : Self.controlSize + 8)
         }
-        .defaultScrollAnchor(.bottom)
-        .scrollPosition(id: $visibleID)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.visibleRect.maxY >= geometry.contentSize.height + geometry.contentInsets.bottom - 16
-        } action: { _, bottom in
-            atBottom = bottom
-            readVisibleBottom()
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        .defaultScrollAnchor(followsEnd ? .bottom : nil, for: .sizeChanges)
+        .scrollPosition($position)
+        .onScrollPhaseChange { previous, current, context in
+            switch current {
+            case .tracking, .interacting: followsEnd = false
+            case .idle where previous != .animating: followsEnd = FeedGeometry(context.geometry).withinFollowRange
+            default: break
+            }
         }
+        .onScrollGeometryChange(for: FeedGeometry.self) { FeedGeometry($0) } action: { _, new in
+            geometry = new
+        }
+        .onChange(of: geometry.layout) {
+            if followsEnd, position.edge != .bottom { position.scrollTo(edge: .bottom) }
+        }
+        .onChange(of: geometry.withinReadRange) { readVisibleBottom() }
         .onChange(of: newestOrder) { readVisibleBottom() }
         .onChange(of: active) { readVisibleBottom() }
+        .padding(.horizontal, theme.space.s4)
         .background(theme.color.surface)
         .accessibilityIdentifier(AXID.thread)
+        .overlay(alignment: .bottom) {
+            GlassEffectContainer(spacing: 12) {
+                HStack(spacing: Self.controlSpacing) {
+                    if let workingStatus {
+                        StatusPill(status: workingStatus, style: .capsule)
+                            .glassEffect(.regular, in: .capsule)
+                    }
+                    if showsScrollButton {
+                        scrollButton
+                            .transition(.offset(x: -(Self.controlSize + Self.controlSpacing) / 2).combined(with: .opacity))
+                    }
+                }
+                .animation(workingStatus == nil || reduceMotion ? nil : .timingCurve(1.0 / 3, 1, 2.0 / 3, 1, duration: 0.24), value: showsScrollButton)
+            }
+            .padding(.bottom, 8)
+        }
+    }
+
+    private var scrollButton: some View {
+        Button(action: scrollToEnd) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 16))
+                .foregroundStyle(theme.color.icon)
+                .frame(width: Self.controlSize, height: Self.controlSize)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0).onEnded { _ in scrollToEnd() })
+        .accessibilityLabel("Scroll to end")
+        .accessibilityIdentifier("chat.scrollToEnd")
+    }
+
+    private func scrollToEnd() {
+        followsEnd = true
+        guard position.edge != .bottom else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
     }
 
     private func readVisibleBottom() {
-        if active, atBottom, let newestOrder { markRead(newestOrder) }
+        if active, geometry.withinReadRange, let newestOrder { markRead(newestOrder) }
     }
 
     private func loadOlder(_ order: Int64) async {
