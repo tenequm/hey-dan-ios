@@ -83,12 +83,11 @@ jobs:
       - run: python3 scripts/sim_tests.py build "Hey Dan iPhone" build com.example.HeyDan
       # tar keeps the modification times the reuse check compares against the key file.
       - run: tar -cf "$RUNNER_TEMP/sim-products.tar" build/Build/Products build/HeyDanSimulatorTests.key
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # The cache hands the products over in seconds; an artifact of the same 80 MB took 3 to 7 minutes to download.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: sim-products
           path: ${{ runner.temp }}/sim-products.tar
-          compression-level: 1
-          retention-days: 1
+          key: sim-products-${{ github.run_id }}-${{ github.run_attempt }}
 
   sim-tests:
     name: ${{ matrix.name }}
@@ -104,14 +103,17 @@ jobs:
           - name: UI checks (calls)
             mode: sim-checks
             checks: ChatCallChecks
-          - name: UI checks (voices, pairing, screens)
+          - name: UI checks (voices, pairing)
             mode: sim-checks
-            checks: PairedVoiceChecks ChatPairingChecks ScreenCaptureChecks
-          - name: UI checks (threads, composer, settings)
+            checks: PairedVoiceChecks ChatPairingChecks
+          - name: UI checks (screens, threads)
+            mode: sim-checks
+            checks: ScreenCaptureChecks ChatThreadChecks
+          - name: UI checks (composer, settings, system)
             mode: sim-checks
             # ChatChecks' other tests need a local nanoclaw stack or a test pairing (secrets); ChatPushChecks needs
             # notification permission, which no CLI grants on a Simulator that never ran the app, and a real bundle ID.
-            checks: ChatThreadChecks ChatComposerChecks ChatAgentSettingsChecks HeyDanChecks ChatChecks/testFixtureUnreadRelaunch
+            checks: ChatComposerChecks ChatAgentSettingsChecks HeyDanChecks ChatChecks/testFixtureUnreadRelaunch
     env:
       HEYDAN_PREBUILT: "1"
       HEYDAN_RETRY: "1"
@@ -126,10 +128,11 @@ jobs:
       - run: |
           udid=$(xcrun simctl list devices available -j | jq -r '.devices[][] | select(.name == "Hey Dan iPhone") | .udid')
           xcrun simctl boot "$udid"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: sim-products
-          path: ${{ runner.temp }}
+          path: ${{ runner.temp }}/sim-products.tar
+          key: sim-products-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
       - run: tar -xpf "$RUNNER_TEMP/sim-products.tar"
       - run: python3 scripts/sim_tests.py "${{ matrix.mode }}" "Hey Dan iPhone" build com.example.HeyDan "${{ matrix.checks }}"
       - if: failure() && matrix.mode == 'sim-checks'

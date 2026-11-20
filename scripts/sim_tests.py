@@ -141,8 +141,11 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
             count = 1
             # Enumerating starts its own test session, which outran its 3-minute limit on a fresh CI Simulator; the app tests are
             # quick, so one test's allowance plus the startup margin covers them without it.
-            if mode != 'app-test' and selector.count('/') < 2:
-                inventory = Path(results) / 'tests.txt'
+            # CI skips it: its session outran the limit there too, and the job's own timeout bounds the run.
+            if os.environ.get('HEYDAN_PREBUILT') == '1':
+                count = 20
+            elif mode != 'app-test' and selector.count('/') < 2:
+                inventory = Path(results) / (selector.replace('/', '-') + '.txt')
                 subprocess.run(['timeout', '180', *command, '-enumerate-tests', '-test-enumeration-style', 'flat',
                                 '-test-enumeration-format', 'text', '-test-enumeration-output-path', inventory],
                                check=True, env=runner, stdout=subprocess.DEVNULL)
@@ -160,6 +163,9 @@ def main(mode, name, folder, bundle, check=None, capture_dir=None):
                     outcomes.setdefault(case[1], set()).add(case[2])
                 if re.match(r"^(check:|Test Case '.*' (passed|failed|skipped)|\s*Executed \d+ tests?|.*Test run with \d+ tests|\*\* TEST)", line):
                     print(line)
+                elif 'error:' in line and os.environ.get('HEYDAN_PREBUILT') == '1':
+                    # On a hosted runner the app shows only fixtures, so the assertion text is safe to print.
+                    print(re.sub(r'^.*/', '', line))
                 elif 'error:' in line:
                     print(re.search(r'[^ /]+\.swift:\d+: error:', line)[0] if re.search(r'[^ /]+\.swift:\d+: error:', line)
                           else 'xcodebuild reported an error')
