@@ -167,14 +167,7 @@ final class CallController: NSObject {
     @ObservationIgnored private var call: ActiveCall?
     /// The last call that ended, and how: what an intent that started it reports.
     @ObservationIgnored private var lastEnded: (id: UUID, ending: Ending)?
-    @ObservationIgnored private lazy var manager: ConversationManager = {
-        let configuration = ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil,
-            maximumConversationGroups: 1, maximumConversationsPerConversationGroup: 1,
-            includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
-        let manager = ConversationManager(configuration: configuration)
-        manager.delegate = self
-        return manager
-    }()
+    @ObservationIgnored private let manager: ConversationManager
     @ObservationIgnored private let startImpact = UIImpactFeedbackGenerator(style: .light)
 
     /// DTX off on every publish, a republish after a full reconnect included: the worker times the caller's turn by
@@ -184,7 +177,12 @@ final class CallController: NSObject {
     static let setupBound = VoiceProtocol.agentJoinTimeout + .seconds(20)
 
     override private init() {
+        let configuration = ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil,
+            maximumConversationGroups: 1, maximumConversationsPerConversationGroup: 1,
+            includesConversationInRecents: true, supportsVideo: false, supportedHandleTypes: [.generic])
+        manager = ConversationManager(configuration: configuration)
         super.init()
+        manager.delegate = self
         CallActivity.follow(self)
         // iOS activates the audio session; LiveKit's engine runs only between didActivate and didDeactivate.
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
