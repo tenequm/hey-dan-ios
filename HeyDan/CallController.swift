@@ -244,6 +244,8 @@ final class CallController: NSObject {
         guard call?.id == id else { return id }
         #if DEBUG && targetEnvironment(simulator)
         if fixtureCall {
+            call?.micPublished = true
+            if let call { refreshCommands(version: "3", for: call) }
             let view = FixtureContent.voice
             liveVoice = CallVoiceState(active: view.effective, activeDetails: view.details?.effective)
             if ProcessInfo.processInfo.environment["HEYDAN_FIXTURE_THREAD"] == "call-stream",
@@ -353,13 +355,19 @@ final class CallController: NSObject {
 
     /// During a call the worker must accept the change before it is kept for the next call.
     @discardableResult
-    func updateSettings(typing: Bool) async -> Bool {
-        var picks = commands.map { SettingsPicks(wake: $0.wake, pauseSends: $0.pauseSends, typing: $0.typing) } ?? settingsPicks
-        picks.typing = typing
+    func updateSettings(typing: Bool? = nil, listenUntilOver: Bool? = nil) async -> Bool {
+        var picks = settingsPicks
+        if let commands {
+            picks.wake = commands.wake
+            picks.pauseSends = commands.pauseSends
+            picks.typing = commands.typing
+        }
+        if let typing { picks.typing = typing }
         guard let id = call?.id, commands != nil else {
             keepPicks(picks)
             return true
         }
+        if let listenUntilOver { picks.listenUntilOver = listenUntilOver }
         return await requestSettings(picks, for: id)
     }
 
@@ -599,7 +607,7 @@ final class CallController: NSObject {
         if agent != nil {
             refreshVoice(attributes, names: names, for: current.id)
             refreshCommandWords(attributes, names: names, for: current.id)
-            refreshCommands(attributes, names: names, for: current)
+            refreshCommands(version: attributes[names.commandsAttribute], for: current)
         }
         if current.reportedConnected {
             if room.connectionState == .reconnecting { phase = .reconnecting }
@@ -916,8 +924,8 @@ extension CallController {
 
     /// Commands appear once the worker says it speaks this app's vocabulary, and the caller's picks go to it once
     /// per call right then: the worker holds its first cue until they come.
-    private func refreshCommands(_ attributes: [String: String], names: VoiceProtocol.Names, for call: ActiveCall) {
-        guard let version = attributes[names.commandsAttribute], VoiceProtocol.commandsVersions.contains(version) else {
+    private func refreshCommands(version: String?, for call: ActiveCall) {
+        guard let version, VoiceProtocol.commandsVersions.contains(version) else {
             if commands != nil { commands = nil }
             return
         }
@@ -957,7 +965,11 @@ extension CallController {
         }
         let taken = reply?.ok == true
         guard call?.id == id, call?.settingsRequest == request else { return taken }
-        if taken {
+        if let reply, reply.ok {
+            var picks = picks
+            commands?.listenUntilOver = reply.listenUntilOver
+            commands?.overWords = reply.overWords ?? []
+            picks.listenUntilOver = reply.listenUntilOver ?? settingsPicks.listenUntilOver
             call?.takenPicks = picks
             commands?.cues = true
             commands?.typing = picks.typing
@@ -977,11 +989,18 @@ extension CallController {
 
     /// The worker's answer to one settings request; nil when it did not answer or the call is over.
     private func settingsRPC(_ picks: SettingsPicks, for id: UUID) async -> WorkerReply? {
-        guard let method = call?.names?.settingsMethod, let gen = nextRPCGen(for: id) else { return nil }
+        guard let gen = nextRPCGen(for: id) else { return nil }
+        let request = SettingsRequest(gen: gen, picks: picks)
+        #if DEBUG && targetEnvironment(simulator)
+        if fixtureCall {
+            return FixtureContent.settingsReply(request)
+        }
+        #endif
+        guard let method = call?.names?.settingsMethod else { return nil }
         call?.settingsSends += 1
         let ackTimeout = VoiceProtocol.settingsAckTimeout(send: call?.settingsSends ?? 0)
         return await workerRPC(
-            method, payload: SettingsRequest(gen: gen, picks: picks).payload, ackTimeout: ackTimeout, for: id
+            method, payload: request.payload, ackTimeout: ackTimeout, for: id
         )
     }
 

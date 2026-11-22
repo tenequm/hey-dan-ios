@@ -133,6 +133,58 @@ import XCTest
         XCTAssertTrue(app.descendants(matching: .any)["chat.call.caption"].firstMatch.isHittable)
     }
 
+    func testListenUntilOverPersistsAcrossFixtureCalls() {
+        let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"])
+        let options = app.buttons["controls.options"]
+        let toggle = app.switches["options.listenUntilOver"].firstMatch
+        let listening = app.staticTexts["Listening until «прийом»"]
+        let end = app.buttons["keys.call"]
+        call.tap()
+        options.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertTrue(toggle.label.contains("Listen until «прийом»"))
+        if toggle.value as? String == "1" {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        shot("listen-until-over-options")
+        app.buttons["Close"].tap()
+        XCTAssertTrue(listening.waitForExistence(timeout: 5))
+        shot("listen-until-over-bar")
+        end.tap()
+        XCTAssertTrue(call.waitForExistence(timeout: 5))
+        app.terminate()
+        let (_, legacyCall) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1",
+                                       "HEYDAN_FIXTURE_LEGACY_SETTINGS": "1"])
+        legacyCall.tap()
+        XCTAssertTrue(app.staticTexts["Speaking"].waitForExistence(timeout: 5))
+        options.tap()
+        let typing = app.switches["options.typing"].firstMatch
+        XCTAssertTrue(typing.waitForExistence(timeout: 5))
+        XCTAssertFalse(toggle.exists)
+        let previousTyping = typing.value as? String
+        typing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertNotEqual(typing.value as? String, previousTyping)
+        XCTAssertFalse(toggle.exists)
+        app.buttons["Close"].tap()
+        end.tap()
+        XCTAssertTrue(call.waitForExistence(timeout: 5))
+        app.terminate()
+        let (_, nextCall) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"])
+        nextCall.tap()
+        XCTAssertTrue(listening.waitForExistence(timeout: 5))
+        options.tap()
+        typing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(typing.value as? String, previousTyping)
+        XCTAssertEqual(toggle.value as? String, "1")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.staticTexts["Speaking"].waitForExistence(timeout: 5))
+        end.tap()
+    }
+
     func testCallStaysInThread() {
         let (app, call) = openCall(["HEYDAN_FIXTURE_CHAT": "1", "HEYDAN_FIXTURE_LIVE_CALL": "1"])
         let feed = app.scrollViews["chat.thread"]

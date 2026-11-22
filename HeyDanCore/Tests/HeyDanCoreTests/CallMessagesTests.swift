@@ -86,7 +86,7 @@ struct WorkerTurnStateTests {
 struct SettingsTests {
     @Test func requestCarriesTheGenAndEverySwitch() throws {
         let request = SettingsRequest(gen: 4, picks: SettingsPicks(wake: false, pauseSends: true, typing: false))
-        #expect(request.payload == #"{"cues":true,"gen":4,"pauseSends":true,"typing":false,"wake":false}"#)
+        #expect(request.payload == #"{"cues":true,"gen":4,"listenUntilOver":false,"pauseSends":true,"typing":false,"wake":false}"#)
     }
 
     @Test func decodesReplies() {
@@ -96,6 +96,30 @@ struct SettingsTests {
         #expect(refused?.error == "closed")
         #expect(WorkerReply(payload: #"{"ok":true}"#) == nil)
         #expect(WorkerReply(payload: "") == nil)
+    }
+
+    @Test func listenModeUsesTheWorkersEchoAndMarkers() throws {
+        #expect(VoiceProtocol.commandsVersions == ["2", "3"])
+        let old = try #require(WorkerReply(payload: #"{"gen":1,"ok":true,"seq":0}"#))
+        #expect(old.listenUntilOver == nil)
+        let reply = try #require(WorkerReply(payload:
+            #"{"gen":2,"ok":true,"seq":0,"listenUntilOver":false,"overWords":["прийом","зулу","овер"]}"#))
+        #expect(reply.listenUntilOver == false)
+        #expect(reply.overWords == ["прийом", "зулу", "овер"])
+    }
+
+    @Test func rememberedListenModePreservesEarlierCallPreferences() throws {
+        let legacy = Data(#"{"wake":false,"pauseSends":true,"typing":false}"#.utf8)
+        var picks = try JSONDecoder().decode(SettingsPicks.self, from: legacy)
+        #expect(!picks.wake && picks.pauseSends && !picks.typing)
+        #expect(picks.listenUntilOver == nil)
+        for enabled in [true, false] {
+            picks.listenUntilOver = enabled
+            let stored = try JSONEncoder().encode(picks)
+            let restored = try JSONDecoder().decode(SettingsPicks.self, from: stored)
+            #expect(restored == picks)
+            #expect(SettingsRequest(gen: 3, picks: restored).payload.contains("\"listenUntilOver\":\(enabled)"))
+        }
     }
 
     @Test func onlyTheCallsFirstSettingsSendIsCutShort() {

@@ -366,6 +366,7 @@ public struct SettingsRequest: Encodable, Sendable, Equatable {
     public let pauseSends: Bool
     public let cues: Bool
     public let typing: Bool
+    public let listenUntilOver: Bool
 
     public init(gen: Int, picks: SettingsPicks, cues: Bool = true) {
         self.gen = gen
@@ -373,6 +374,7 @@ public struct SettingsRequest: Encodable, Sendable, Equatable {
         pauseSends = picks.pauseSends
         self.cues = cues
         typing = picks.typing
+        listenUntilOver = picks.listenUntilOver ?? false
     }
 
     public var payload: String { rpcPayload(self) }
@@ -392,6 +394,9 @@ public struct WorkerReply: Decodable, Sendable, Equatable {
     public let seq: Int
     public let error: String?
 
+    public let listenUntilOver: Bool?
+    public let overWords: [String]?
+
     /// Nil when the payload is not a reply.
     public init?(payload: String) {
         guard let reply = try? JSONDecoder().decode(Self.self, from: Data(payload.utf8)) else { return nil }
@@ -404,6 +409,9 @@ public struct SettingsPicks: Codable, Sendable, Equatable {
     public var wake: Bool
     public var pauseSends: Bool
     public var typing: Bool
+
+    /// Absent in preferences saved before the worker supported this mode.
+    public var listenUntilOver: Bool?
 
     /// A caller with nothing remembered, and what a worker runs before it is told: wake switch and typing on.
     public static let defaults = SettingsPicks(wake: true, pauseSends: false, typing: true)
@@ -427,6 +435,10 @@ public struct CommandSettings: Sendable, Equatable {
     public var phrase: String?
     public var cues: Bool
     public var typing: Bool
+
+    /// Only an echo from a supporting worker makes this switch available.
+    public var listenUntilOver: Bool?
+    public var overWords: [String] = []
 
     public init(picks: SettingsPicks, cues: Bool = true) {
         wake = picks.wake
