@@ -143,8 +143,8 @@ One-time setup:
 
 The beta recipe builds the same Release scheme with [Beta.xcconfig](Beta.xcconfig). The installed app has a marked
 icon, its own pairing keys, chats, badge and notification settings. Pair the beta independently. In Shortcuts or
-Control Center choose the beta entry for the Action Button. Siri uses each app's display name. CallKit uses the app
-name and both builds disable Recents.
+Control Center choose the beta entry for the Action Button. Siri uses each app's display name. The system call UI shows
+each app's name, and both builds add calls to Phone Recents.
 
 1. Keep the normal bundle ID and team in `Local.xcconfig`. With the team signed into Xcode, run `just gen`, then
    `xcodebuild -project HeyDan.xcodeproj -scheme HeyDan -configuration Release -xcconfig Beta.xcconfig -destination 'generic/platform=iOS' -allowProvisioningUpdates build`
